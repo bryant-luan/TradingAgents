@@ -14,12 +14,12 @@ REGIME_VETO = 1.0               # no longs below -1.0, no shorts above +1.0
 MAX_SIGNAL_AGE_MIN = 240
 ENTRY_R_WINDOW = (-0.30, 0.50)  # current price must sit within this R band of the signal entry
 MIN_SCORE = 50
-RISK_PCT = 0.01                 # equity risked per trade at the stop
-MAX_MIN_SIZE_RISK_PCT = 0.015   # allow exchange-minimum size only up to this risk
-MAX_LEVERAGE = 10
+RISK_PCT = 0.02                 # equity risked per trade at the stop
+MAX_MIN_SIZE_RISK_PCT = 0.03    # allow exchange-minimum size only up to this risk
+MAX_LEVERAGE = 20
 MAX_POSITIONS = 3
-MAX_TOTAL_MARGIN_PCT = 0.60
-MARGIN_PER_TRADE_PCT = 0.20
+MAX_TOTAL_MARGIN_PCT = 0.70
+MARGIN_PER_TRADE_PCT = 0.10
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
 

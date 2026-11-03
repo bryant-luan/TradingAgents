@@ -28,7 +28,7 @@ LEARN_FILE = ROOT / "logs" / "learned_params.json"
 INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 LOOP_SECONDS = 30
-DAILY_LOSS_PCT = 0.03
+DAILY_LOSS_PCT = 0.06
 FEE_BUFFER = 0.0012
 
 
