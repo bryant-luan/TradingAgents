@@ -29,7 +29,10 @@ INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 LOOP_SECONDS = 30
 DAILY_LOSS_PCT = 0.06
-FEE_BUFFER = 0.0012
+SLIPPAGE_BUFFER = 0.0003
+MAKER_TRIES = 4
+MAKER_WAIT_S = 30
+FINAL_STATUS = {"FILLED", "REJECTED", "CANCELED", "PARTIALLY_CANCELED"}
 
 
 def now_iso():
@@ -104,7 +107,9 @@ class Bot:
                 self.finish(tid, tr)
                 continue
 
-            open_ids = {str(o["orderId"]) for o in self.tb.open_orders(sym, "STOP")}
+            open_ids = set()
+            for kind in {tp.get("kind", "STOP") for tp in tr["tps"] if not tp["filled"]}:
+                open_ids |= {str(o["orderId"]) for o in self.tb.open_orders(sym, kind)}
             newly = [tp for tp in tr["tps"] if not tp["filled"] and tp.get("order_id") and str(tp["order_id"]) not in open_ids]
             for tp in newly:
                 tp["filled"] = True
@@ -115,7 +120,8 @@ class Bot:
                 filled = [i for i, tp in enumerate(tr["tps"]) if tp["filled"]]
                 k = max(filled)
                 if k == 0:
-                    target = tr["entry"] * (1 + FEE_BUFFER if side == "LONG" else 1 - FEE_BUFFER)
+                    buf = tr.get("be_buffer", 0.0012)
+                    target = tr["entry"] * (1 + buf if side == "LONG" else 1 - buf)
                     why = "TP1 達成，止損移至保本(含手續費)"
                 else:
                     target = tr["tps"][k - 1]["price"]
@@ -147,7 +153,7 @@ class Bot:
         sym, side = tr["tsym"], tr["side"]
         for tp in tr["tps"]:
             if not tp["filled"] and tp.get("order_id"):
-                self.cancel_quiet(tp["order_id"])
+                self.cancel_quiet(tp["order_id"], tp.get("kind", "STOP"))
         pnl, close_px = None, None
         try:
             for h in self.tb.history_positions(sym, 10):
@@ -156,6 +162,7 @@ class Bot:
                     close_px = h.get("closeAvgPrice")
         except ToobitError as e:
             log_event("ERROR", trade_id=tid, where="history_positions", error=str(e))
+        fees = self.trade_fees(sym, tr["opened_ts"])
         filled = [tp["label"] for tp in tr["tps"] if tp["filled"]]
         if tr.get("exit_reason"):
             reason = tr["exit_reason"]
@@ -168,7 +175,8 @@ class Bot:
         r_result = round(pnl / tr["risk_usdt"], 3) if pnl is not None and tr["risk_usdt"] else None
         log_event("EXIT", trade_id=tid, symbol=sym, side=side, reason=reason, tps_filled=filled,
                   entry=tr["entry"], close_avg=close_px, realized_pnl_usdt=pnl, r_result=r_result,
-                  path=tr.get("path"), held_min=round((time.time() - tr["opened_ts"]) / 60, 1))
+                  path=tr.get("path"), held_min=round((time.time() - tr["opened_ts"]) / 60, 1),
+                  fees=fees, fee_r=round(fees["fee_usdt"] / tr["risk_usdt"], 3) if fees and tr["risk_usdt"] else None)
         self.st["closed"].append({"id": tid, "symbol": sym, "side": side, "path": tr.get("path"),
                                   "pnl": pnl, "r_result": r_result, "closed_at": now_iso(), "reason": reason})
         del self.st["trades"][tid]
@@ -204,25 +212,21 @@ class Bot:
 
         self.tb.set_isolated(sym)
         self.tb.set_leverage(sym, sz["leverage"])
-        order = self.tb.market_open(sym, side, sz["contracts"], self.tb.fmt_price(sym, stop))
-        time.sleep(1.5)
+        self.st["traded_ids"].append(sig["id"])
+        fill = self.maker_entry(sym, side, sz["contracts"], stop, sig, spec)
         pos = next((p for p in self.tb.positions(sym) if p.get("side") == side), None)
         if not pos:
-            log_event("ERROR", where="open", symbol=sym, order=order, error="下單後查無持倉")
-            self.st["traded_ids"].append(sig["id"])
+            log_event("SKIP" if not fill["filled"] else "ERROR", signal_id=sig["id"], symbol=sym, side=side,
+                      reason=fill.get("note") or "下單後查無持倉", fill=fill)
             return False
         entry = float(pos.get("avgPrice") or price)
-        tps = []
-        for tp in plan:
-            beyond = tp["price"] <= entry if side == "LONG" else tp["price"] >= entry
-            if beyond:
-                continue
-            try:
-                o = self.tb.close_trigger(sym, side, tp["qty"], self.tb.fmt_price(sym, tp["price"]), tp["label"].lower())
-                tps.append({**tp, "order_id": str(o.get("orderId")), "filled": False})
-            except ToobitError as e:
-                log_event("ERROR", where="tp_order", symbol=sym, label=tp["label"], error=str(e))
-                tps.append({**tp, "order_id": None, "filled": False})
+        contracts = fill["filled"] or sz["contracts"]
+        if contracts != sz["contracts"]:
+            plan = S.tp_plan(sig, contracts, spec["min_contracts"], self.learner.p.get("tp_split"))
+        tps = self.place_tps(sym, side, entry, plan)
+        sz = {**sz, "contracts": contracts}
+        entry_fee = S.MAKER_FEE if fill["maker"] >= fill["taker"] else S.TAKER_FEE
+        order = {"orderId": fill.get("order_ids")}
         tid = f"{sym}:{side}:{int(time.time())}"
         mult = float(spec["multiplier"])
         self.st["trades"][tid] = {
@@ -230,12 +234,118 @@ class Bot:
             "contracts": sz["contracts"], "entry": entry, "stop": stop, "tps": tps,
             "risk_usdt": round(sz["contracts"] * mult * abs(entry - stop), 4), "margin": sz["margin"],
             "leverage": sz["leverage"], "path": sig.get("signal_path"), "opened_ts": time.time(),
+            "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
-        self.st["traded_ids"].append(sig["id"])
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=order.get("orderId"),
                   tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **entry_info)
         return True
+
+    def _entry_ok(self, px: float, sig: dict, stop: float) -> bool:
+        side, entry = sig["side"], float(sig["entry_price"])
+        risk = abs(entry - stop)
+        cur_r = (px - entry) / risk * (1 if side == "LONG" else -1) if risk else 0
+        away = px > stop * 1.001 if side == "LONG" else px < stop * 0.999
+        return away and cur_r <= self.learner.p["entry_r_window"][1]
+
+    def maker_entry(self, sym: str, side: str, contracts: int, stop: float, sig: dict, spec: dict) -> dict:
+        """Work the entry as post-only (maker) at the touch; fall back to market only while still in the entry band."""
+        open_side = "BUY_OPEN" if side == "LONG" else "SELL_OPEN"
+        res = {"filled": 0, "maker": 0, "taker": 0, "order_ids": [], "note": None}
+        stop_px = self.tb.fmt_price(sym, stop)
+        stop_set = False
+        for _ in range(MAKER_TRIES):
+            left = contracts - res["filled"]
+            if left < spec["min_contracts"]:
+                break
+            bid, ask = self.tb.book(sym)
+            tick = float(spec["tick"])
+            if ask - bid > tick * 1.5:
+                px = bid + tick if side == "LONG" else ask - tick
+            else:
+                px = bid if side == "LONG" else ask
+            if not self._entry_ok(px, sig, stop):
+                res["note"] = f"掛單期間價格 {px} 已離開進場區間，不追價"
+                break
+            try:
+                o = self.tb.post_only(sym, open_side, left, self.tb.fmt_price(sym, px), "mo")
+            except ToobitError as e:
+                log_event("ERROR", where="post_only_entry", symbol=sym, error=str(e))
+                continue
+            oid = str(o["orderId"])
+            res["order_ids"].append(oid)
+            q, deadline = o, time.time() + MAKER_WAIT_S
+            while time.time() < deadline:
+                time.sleep(3)
+                q = self.tb.order(oid)
+                if q.get("status") in FINAL_STATUS:
+                    break
+            if q.get("status") not in FINAL_STATUS:
+                self.cancel_quiet(oid, "LIMIT")
+                time.sleep(0.5)
+                q = self.tb.order(oid)
+            ex = int(float(q.get("executedQty") or 0))
+            if ex:
+                res["filled"] += ex
+                res["maker"] += ex
+                if not stop_set:
+                    self.tb.set_position_stop(sym, side, stop_px)
+                    stop_set = True
+            if res["filled"] >= contracts:
+                break
+        left = contracts - res["filled"]
+        if left >= spec["min_contracts"] and res["note"] is None:
+            px = self.tb.price(sym)
+            if self._entry_ok(px, sig, stop):
+                if stop_set:
+                    o = self.tb.market(sym, open_side, left)
+                else:
+                    o = self.tb.market_open(sym, side, left, stop_px)
+                    stop_set = True
+                res["order_ids"].append(str(o.get("orderId")))
+                res["filled"] += left
+                res["taker"] += left
+                time.sleep(1.5)
+            else:
+                res["note"] = f"Maker 未成交且價格 {px} 已離開進場區間，放棄剩餘 {left} 張"
+        if res["filled"] and not stop_set:
+            self.tb.set_position_stop(sym, side, stop_px)
+        log_event("ENTRY_FILL", symbol=sym, side=side, **res,
+                  maker_ratio=round(res["maker"] / res["filled"], 3) if res["filled"] else None)
+        return res
+
+    def place_tps(self, sym: str, side: str, entry: float, plan: list) -> list:
+        """TPs as post-only limit closes (maker fee); a TP that would cross falls back to a trigger order."""
+        close_side = "SELL_CLOSE" if side == "LONG" else "BUY_CLOSE"
+        tps = []
+        for tp in plan:
+            if (tp["price"] <= entry) if side == "LONG" else (tp["price"] >= entry):
+                continue
+            px = self.tb.fmt_price(sym, tp["price"])
+            rec = {**tp, "order_id": None, "kind": "LIMIT", "filled": False}
+            try:
+                o = self.tb.post_only(sym, close_side, tp["qty"], px, tp["label"].lower())
+                time.sleep(0.6)
+                if self.tb.order(o["orderId"]).get("status") == "REJECTED":
+                    raise ToobitError("post-only rejected")
+                rec["order_id"] = str(o["orderId"])
+            except ToobitError:
+                try:
+                    o = self.tb.close_trigger(sym, side, tp["qty"], px, tp["label"].lower())
+                    rec.update(order_id=str(o.get("orderId")), kind="STOP")
+                except ToobitError as e:
+                    log_event("ERROR", where="tp_order", symbol=sym, label=tp["label"], error=str(e))
+            tps.append(rec)
+        return tps
+
+    def trade_fees(self, sym: str, opened_ts: float) -> dict | None:
+        try:
+            rows = [t for t in self.tb.user_trades(sym, 200) if int(t["time"]) >= opened_ts * 1000 - 120000]
+        except ToobitError:
+            return None
+        fee = sum(float(t.get("commission") or 0) for t in rows)
+        maker = sum(1 for t in rows if t.get("isMaker"))
+        return {"fee_usdt": round(fee, 5), "fills": len(rows), "maker_fills": maker}
 
     def note_skip(self, sig: dict, why: str):
         key = sig["id"]

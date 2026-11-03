@@ -22,6 +22,8 @@ MAX_TOTAL_MARGIN_PCT = 0.70
 MARGIN_PER_TRADE_PCT = 0.10
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
+MAKER_FEE, TAKER_FEE = 0.0002, 0.0006
+MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more than this fraction of 1R
 
 
 class SeeOne:
@@ -152,6 +154,8 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         skip = "已打到 TP，不追價"
     elif not (r_lo <= cur_r <= r_hi):
         skip = f"現價偏離進場 {cur_r:+.2f}R (允許 {r_lo}~{r_hi}R)"
+    elif (MAKER_FEE + TAKER_FEE) / (risk / cur) > MAX_FEE_R:
+        skip = f"止損僅 {risk / cur:.2%}，手續費約佔 {(MAKER_FEE + TAKER_FEE) / (risk / cur):.2f}R (> {MAX_FEE_R}R)"
     elif risk / cur > MAX_STOP_PCT:
         skip = f"止損距離 {risk / cur:.0%} 過寬 (> {MAX_STOP_PCT:.0%})，TP 難以到達"
     elif side == "LONG" and regime_score < -REGIME_VETO:

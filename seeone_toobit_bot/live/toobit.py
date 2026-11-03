@@ -61,6 +61,20 @@ class Toobit:
         r = requests.get(f"{BASE}/quote/v1/ticker/price", params={"symbol": symbol}, timeout=10).json()
         return float(r[0]["p"])
 
+    def book(self, symbol: str) -> tuple[float, float]:
+        r = requests.get(f"{BASE}/quote/v1/ticker/bookTicker", params={"symbol": symbol}, timeout=10).json()
+        return float(r[0]["b"]), float(r[0]["a"])
+
+    def fee_rates(self, symbol: str) -> dict:
+        r = self._request("GET", "/api/v1/futures/commissionRate", {"symbol": symbol})
+        return {"maker": float(r["openMakerFee"]), "taker": float(r["openTakerFee"])}
+
+    def user_trades(self, symbol: str, limit: int = 100) -> list:
+        return self._request("GET", "/api/v1/futures/userTrades", {"symbol": symbol, "limit": limit})
+
+    def order(self, order_id: str) -> dict:
+        return self._request("GET", "/api/v1/futures/order", {"orderId": order_id})
+
     def fmt_price(self, symbol: str, price: float) -> str:
         tick = self.specs()[symbol]["tick"]
         return str((Decimal(str(price)) / tick).quantize(Decimal(1), rounding=ROUND_DOWN) * tick)
@@ -97,6 +111,24 @@ class Toobit:
             "stopLoss": stop_loss,
             "slTriggerBy": "CONTRACT_PRICE",
             "slOrderType": "MARKET",
+        })
+
+    def post_only(self, symbol: str, side: str, contracts: int, price: str, tag: str) -> dict:
+        """Maker-only limit order (rejected instead of filling as taker). side: BUY_OPEN/SELL_OPEN/BUY_CLOSE/SELL_CLOSE."""
+        return self._request("POST", "/api/v1/futures/order", {
+            "symbol": symbol,
+            "side": side,
+            "type": "LIMIT",
+            "price": price,
+            "quantity": contracts,
+            "timeInForce": "LIMIT_MAKER",
+            "newClientOrderId": f"{tag}{uuid.uuid4().hex[:14]}",
+        })
+
+    def market(self, symbol: str, side: str, contracts: int) -> dict:
+        return self._request("POST", "/api/v1/futures/order", {
+            "symbol": symbol, "side": side, "type": "LIMIT", "priceType": "MARKET",
+            "quantity": contracts, "newClientOrderId": f"mk{uuid.uuid4().hex[:16]}",
         })
 
     def close_trigger(self, symbol: str, direction: str, contracts: int, trigger: str, tag: str) -> dict:
