@@ -34,8 +34,11 @@ SELF_SOURCE = "自選驗算"
 LOOP_SECONDS = 30
 DAILY_LOSS_PCT = 0.06
 SLIPPAGE_BUFFER = 0.0003
-MAKER_TRIES = 4
+MAKER_TRIES = 6
 MAKER_WAIT_S = 30
+MARKET_ENTRY_FALLBACK = False
+MAKER_CLOSE_TRIES = 6
+MAKER_CLOSE_WAIT_S = 30
 FINAL_STATUS = {"FILLED", "REJECTED", "CANCELED", "PARTIALLY_CANCELED"}
 
 
@@ -113,10 +116,13 @@ class Bot:
                 self.finish(tid, tr)
                 continue
 
+            if not tr.get("tp_migrated") and not tr.get("exit_reason"):
+                self.migrate_tps(tr)
             open_ids = set()
             for kind in {tp.get("kind", "STOP") for tp in tr["tps"] if not tp["filled"]}:
                 open_ids |= {str(o["orderId"]) for o in self.tb.open_orders(sym, kind)}
-            newly = [tp for tp in tr["tps"] if not tp["filled"] and tp.get("order_id") and str(tp["order_id"]) not in open_ids]
+            newly = [tp for tp in tr["tps"] if not tp["filled"] and not tp.get("cancelled") and tp.get("order_id")
+                     and str(tp["order_id"]) not in open_ids]
             for tp in newly:
                 tp["filled"] = True
                 tp["filled_at"] = now_iso()
@@ -145,27 +151,18 @@ class Bot:
                     tr["exit_reason"] = why
                     log_event("SELF_EXIT_DECISION", trade_id=tid, symbol=sym, side=side, reason=why,
                               rechecks=tr.get("rechecks", [])[-3:])
-                    try:
-                        self.tb.flash_close(sym, side)
-                    except ToobitError as e:
-                        log_event("ERROR", trade_id=tid, where="flash_close", error=str(e))
+                    self.maker_close(tr)
                 continue
 
             sig = sigmap.get(tr["signal_id"])
             if sig and sig.get("status") == "CLOSED" and not tr.get("exit_reason"):
                 tr["exit_reason"] = f"See One 訊號結束: {sig.get('exit_reason') or 'CLOSED'}"
                 log_event("SIGNAL_CLOSED", trade_id=tid, symbol=sym, side=side, seeone_exit=sig.get("exit_reason"),
-                          seeone_realized_r=sig.get("realized_r"), action="市價平倉剩餘部位")
-                try:
-                    self.tb.flash_close(sym, side)
-                except ToobitError as e:
-                    log_event("ERROR", trade_id=tid, where="flash_close", error=str(e))
+                          seeone_realized_r=sig.get("realized_r"), action="Maker 掛單平倉剩餘部位")
+                self.maker_close(tr)
             elif not sig and tr.get("source") == "官方訊號" and time.time() - tr["opened_ts"] > 48 * 3600:
                 tr["exit_reason"] = "超過 48 小時且已不在 See One 訊號列表，時間止損"
-                try:
-                    self.tb.flash_close(sym, side)
-                except ToobitError as e:
-                    log_event("ERROR", trade_id=tid, where="flash_close", error=str(e))
+                self.maker_close(tr)
 
     def finish(self, tid: str, tr: dict):
         sym, side = tr["tsym"], tr["side"]
@@ -316,7 +313,10 @@ class Bot:
             if res["filled"] >= contracts:
                 break
         left = contracts - res["filled"]
-        if left >= spec["min_contracts"] and res["note"] is None:
+        if left >= spec["min_contracts"] and res["note"] is None and not MARKET_ENTRY_FALLBACK:
+            res["note"] = (f"Maker 掛單 {MAKER_TRIES} 次未完全成交，剩餘 {left} 張不以市價補單"
+                           + ("，保留已成交部位" if res["filled"] else "，放棄此訊號"))
+        elif left >= spec["min_contracts"] and res["note"] is None:
             px = self.tb.price(sym)
             if self._entry_ok(px, sig, stop):
                 if stop_set:
@@ -335,6 +335,82 @@ class Bot:
         log_event("ENTRY_FILL", symbol=sym, side=side, **res,
                   maker_ratio=round(res["maker"] / res["filled"], 3) if res["filled"] else None)
         return res
+
+    def _maker_px(self, sym: str, buy: bool) -> str:
+        bid, ask = self.tb.book(sym)
+        tick = float(self.tb.specs()[sym]["tick"])
+        wide = ask - bid > tick * 1.5
+        px = (bid + tick if wide else bid) if buy else (ask - tick if wide else ask)
+        return self.tb.fmt_price(sym, px)
+
+    def maker_close(self, tr: dict):
+        """Exit a whole position with post-only orders at the touch; market only for whatever is left after the retries.
+        The exchange-side stop stays in place the whole time."""
+        sym, side = tr["tsym"], tr["side"]
+        for tp in tr["tps"]:
+            if not tp["filled"] and tp.get("order_id"):
+                self.cancel_quiet(tp["order_id"], tp.get("kind", "STOP"))
+                tp["cancelled"] = True
+        close_side = "SELL_CLOSE" if side == "LONG" else "BUY_CLOSE"
+        maker = taker = 0
+        for _ in range(MAKER_CLOSE_TRIES):
+            pos = next((p for p in self.tb.positions(sym) if p.get("side") == side), None)
+            if not pos:
+                break
+            qty = int(float(pos["position"]))
+            try:
+                o = self.tb.post_only(sym, close_side, qty, self._maker_px(sym, buy=side == "SHORT"), "mc")
+            except ToobitError as e:
+                log_event("ERROR", where="maker_close", symbol=sym, error=str(e))
+                continue
+            q, deadline = o, time.time() + MAKER_CLOSE_WAIT_S
+            while time.time() < deadline:
+                time.sleep(2)
+                q = self.tb.order(o["orderId"])
+                if q.get("status") in FINAL_STATUS:
+                    break
+            if q.get("status") not in FINAL_STATUS:
+                self.cancel_quiet(o["orderId"], "LIMIT")
+                time.sleep(0.5)
+                q = self.tb.order(o["orderId"])
+            maker += int(float(q.get("executedQty") or 0))
+        pos = next((p for p in self.tb.positions(sym) if p.get("side") == side), None)
+        if pos:
+            taker = int(float(pos["position"]))
+            try:
+                self.tb.flash_close(sym, side)
+            except ToobitError as e:
+                log_event("ERROR", trade_id=tr["id"], where="flash_close", error=str(e))
+        log_event("EXIT_FILL", trade_id=tr["id"], symbol=sym, side=side, maker_contracts=maker, taker_contracts=taker,
+                  reason=tr.get("exit_reason"))
+
+    def migrate_tps(self, tr: dict):
+        """Swap trigger-market TPs (taker) for post-only limit TPs (maker) on trades opened before maker TPs existed."""
+        tr["tp_migrated"] = True
+        sym, side = tr["tsym"], tr["side"]
+        close_side = "SELL_CLOSE" if side == "LONG" else "BUY_CLOSE"
+        moved = []
+        for tp in tr["tps"]:
+            if tp["filled"] or tp.get("kind", "STOP") != "STOP" or not tp.get("order_id"):
+                continue
+            try:
+                self.tb.cancel_order(tp["order_id"], "STOP")
+            except ToobitError:
+                continue
+            px = self.tb.fmt_price(sym, tp["price"])
+            try:
+                o = self.tb.post_only(sym, close_side, tp["qty"], px, tp["label"].lower())
+                time.sleep(0.6)
+                if self.tb.order(o["orderId"]).get("status") == "REJECTED":
+                    raise ToobitError("post-only rejected")
+                tp.update(order_id=str(o["orderId"]), kind="LIMIT")
+                moved.append(tp["label"])
+            except ToobitError:
+                o = self.tb.close_trigger(sym, side, tp["qty"], px, tp["label"].lower())
+                tp.update(order_id=str(o.get("orderId")), kind="STOP")
+        if moved:
+            log_event("TP_MIGRATE", trade_id=tr["id"], symbol=sym, moved_to_maker=moved,
+                      reason="觸發市價止盈改為 Maker 限價止盈，降低手續費")
 
     def place_tps(self, sym: str, side: str, entry: float, plan: list) -> list:
         """TPs as post-only limit closes (maker fee); a TP that would cross falls back to a trigger order."""
