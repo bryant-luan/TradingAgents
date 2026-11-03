@@ -101,6 +101,18 @@ def path_expectancy(signals: list, own_trades: list) -> dict:
     }
 
 
+def intrinsic_tags(sig: dict) -> list:
+    """Traits known at signal time, independent of market context; used by the shadow optimizer."""
+    snap = sig.get("scanner_snapshot") or {}
+    sc = float(sig.get("scanner_score") or 0)
+    rd, rk = snap.get("readiness"), snap.get("rank")
+    tags = [f"side:{sig['side']}", f"tf:{sig.get('timeframe')}", f"subtype:{sig.get('path_subtype') or 'NONE'}",
+            f"scanner:{int(sc // 5 * 5)}", "rank:top5" if rk and rk <= 5 else "rank:top10" if rk and rk <= 10 else "rank:other"]
+    if rd is not None:
+        tags.append(f"ready:{int(float(rd) // 10 * 10)}")
+    return tags
+
+
 def _age_min(ts: str) -> float:
     t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     return (datetime.now(timezone.utc) - t).total_seconds() / 60
@@ -119,7 +131,7 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
     age = _age_min(sig["entry_at"])
     tp_hit = any(l.get("hit") for l in sig.get("levels", []) if l.get("kind") == "TP" or str(l.get("label", "")).startswith("TP"))
     r_lo, r_hi = learned.get("entry_r_window", ENTRY_R_WINDOW)
-    min_score = learned.get("min_score", MIN_SCORE)
+    min_score = learned.get("effective_min_score", learned.get("min_score", MIN_SCORE))
     cooldown_until = learned.get("symbol_cooldown", {}).get(sig["symbol"], 0)
 
     if cooldown_until > datetime.now(timezone.utc).timestamp():
@@ -176,14 +188,16 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         add(f"path:{path}", max(-20.0, min(15.0, exp * 30)), f"路徑 {path} See One 近期期望值 {exp:+.3f}R (n={n})")
     else:
         factors[f"path:{path}"] = 0.0
-    factors[f"side:{side}"] = 0.0
-    factors[f"tf:{sig.get('timeframe')}"] = 0.0
+    for tag in intrinsic_tags(sig):
+        factors.setdefault(tag, 0.0)
 
-    adj = learned.get("factor_adj", {})
+    own_adj, sh_adj = learned.get("factor_adj", {}), learned.get("shadow_adj", {})
     for tag in list(factors):
-        if adj.get(tag):
-            reasons.append(f"自動優化權重 [{tag}] {adj[tag]:+.1f}")
-    score = round(sum(factors.values()) + sum(adj.get(t, 0.0) for t in factors), 1)
+        if own_adj.get(tag):
+            reasons.append(f"實單優化權重 [{tag}] {own_adj[tag]:+.1f}")
+        if sh_adj.get(tag):
+            reasons.append(f"See One 全訊號優化權重 [{tag}] {sh_adj[tag]:+.1f}")
+    score = round(sum(factors.values()) + sum(own_adj.get(t, 0.0) + sh_adj.get(t, 0.0) for t in factors), 1)
 
     reasons.append(f"訊號年齡 {age:.0f}m，現價位於 {cur_r:+.2f}R")
     if not skip and score < min_score:
@@ -226,13 +240,14 @@ def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct
     }
 
 
-def tp_plan(sig: dict, contracts: int, min_contracts: int) -> list:
+def tp_plan(sig: dict, contracts: int, min_contracts: int, split: list | None = None) -> list:
     """Split contracts over the signal's TP1..TP5; fold undersized slices into the previous one."""
     levels = sorted((l for l in sig.get("levels", []) if str(l.get("label", "")).startswith("TP")),
                     key=lambda l: l.get("sequence", int(l["label"][2:])))
+    split = split or TP_SPLIT
     plan, left = [], contracts
     for i, lvl in enumerate(levels[:5]):
-        qty = left if i == len(levels[:5]) - 1 else int(contracts * TP_SPLIT[i])
+        qty = left if i == len(levels[:5]) - 1 else int(contracts * split[i])
         qty = min(qty, left)
         if qty < min_contracts:
             if plan:

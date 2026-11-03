@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from . import strategy as S
 from .learner import Learner
+from .shadow import Shadow
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +26,7 @@ STATE_FILE = ROOT / "logs" / "live_state.json"
 PAUSE_FILE = ROOT / "logs" / "PAUSE"
 LEARN_FILE = ROOT / "logs" / "learned_params.json"
 INSIGHT_LOG = LOG_DIR / "insights.jsonl"
+SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 LOOP_SECONDS = 30
 DAILY_LOSS_PCT = 0.03
 FEE_BUFFER = 0.0012
@@ -66,6 +68,7 @@ class Bot:
         self.so = S.SeeOne(os.environ["SEEONE_RT_SESSION"])
         self.st = load_state()
         self.learner = Learner(LEARN_FILE, INSIGHT_LOG, log_event)
+        self.shadow = Shadow(SHADOW_FILE, self.learner, log_event)
 
     # ------------------------------------------------------------------ helpers
     def equity(self) -> tuple[float, float]:
@@ -189,7 +192,7 @@ class Bot:
         if used + sz["margin"] > equity * S.MAX_TOTAL_MARGIN_PCT:
             self.note_skip(sig, f"總保證金將超過 {S.MAX_TOTAL_MARGIN_PCT:.0%} 權益")
             return False
-        plan = S.tp_plan(sig, sz["contracts"], spec["min_contracts"])
+        plan = S.tp_plan(sig, sz["contracts"], spec["min_contracts"], self.learner.p.get("tp_split"))
         entry_info = dict(signal_id=sig["id"], source=source, symbol=sym, side=side, price=price,
                           stop=stop, sizing=sz, tp_plan=plan, score=ev["score"], regime=regime,
                           path=sig.get("signal_path"), subtype=sig.get("path_subtype"),
@@ -244,6 +247,8 @@ class Bot:
     def cycle(self):
         signals = self.so.signals()
         sigmap = {s["id"]: s for s in signals}
+        self.shadow.ingest(signals)
+        self.shadow.optimize()
         positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
 
         if not self.dry:
@@ -289,6 +294,8 @@ class Bot:
                 self.note_skip(sig, "該幣已有持倉")
                 continue
             ev = S.evaluate(sig, src, reg[0], reg[1], board, rhits, pexp, self.learner.p)
+            if src == "官方訊號":
+                self.shadow.snapshot(sig, ev, S._age_min(sig["entry_at"]))
             if not ev["ok"]:
                 self.note_skip(sig, ev["skip"])
                 continue
@@ -312,6 +319,8 @@ class Bot:
 
     def run(self, once: bool):
         me = self.so.me()
+        self.shadow.ingest(self.so.signals())
+        self.shadow.optimize(force=True)
         log_event("START", dry_run=self.dry, seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
                   daily_loss_pct=DAILY_LOSS_PCT, learned=self.learner.summary())
@@ -326,6 +335,7 @@ class Bot:
                     self.st["skips"] = dict(list(self.st["skips"].items())[-300:])
                 if not self.dry:
                     save_state(self.st)
+                    self.shadow.save()
             if once:
                 return
             time.sleep(LOOP_SECONDS)

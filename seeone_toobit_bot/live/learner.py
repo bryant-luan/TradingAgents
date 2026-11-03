@@ -23,6 +23,10 @@ DEFAULTS = {
     "symbol_cooldown": {},
     "consec_losses": 0,
     "chased_losses": 0,
+    "shadow_adj": {},
+    "calibrated_min_score": None,
+    "effective_min_score": S.MIN_SCORE,
+    "tp_split": None,
     "trades": 0, "wins": 0, "losses": 0, "sum_r": 0.0, "sum_pnl": 0.0,
 }
 
@@ -33,6 +37,12 @@ class Learner:
         self.p = {**json.loads(json.dumps(DEFAULTS))}
         if path.exists():
             self.p.update(json.loads(path.read_text()))
+
+    def refresh_effective(self):
+        cal = self.p.get("calibrated_min_score")
+        own = self.p["min_score"]
+        eff = own if cal is None else round((own + cal) / 2)
+        self.p["effective_min_score"] = max(MIN_SCORE_FLOOR, min(MIN_SCORE_CAP, eff))
 
     def save(self):
         now = time.time()
@@ -144,11 +154,13 @@ class Learner:
             rec = {**base, "type": "FLAT", "note": "接近保本出場 (多為 TP1 後保本止損)", "changes": changes}
             self.log("FLAT", **rec)
 
+        self.refresh_effective()
         p["last_update"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self._insight(rec)
         self.save()
 
     def summary(self) -> dict:
         p = self.p
-        return {k: p[k] for k in ("trades", "wins", "losses", "sum_r", "sum_pnl", "min_score", "risk_pct",
-                                  "entry_r_window", "consec_losses")} | {"factor_adj": p["factor_adj"]}
+        return {k: p.get(k) for k in ("trades", "wins", "losses", "sum_r", "sum_pnl", "min_score",
+                                      "calibrated_min_score", "effective_min_score", "risk_pct",
+                                      "entry_r_window", "consec_losses", "tp_split", "factor_adj", "shadow_adj")}
