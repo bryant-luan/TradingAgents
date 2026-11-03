@@ -145,6 +145,14 @@ class Bot:
                     except ToobitError as e:
                         log_event("ERROR", trade_id=tid, where="replace_stop", error=str(e))
 
+            if not tr.get("exit_reason"):
+                try:
+                    self.protect(tr)
+                except ToobitError as e:
+                    log_event("ERROR", trade_id=tid, where="protect", error=str(e))
+                if tr.get("exit_reason"):
+                    continue
+
             if tr.get("source") == SELF_SOURCE and not tr.get("exit_reason"):
                 close, why = self.selfscan.recheck(tr)
                 if close:
@@ -163,6 +171,41 @@ class Bot:
             elif not sig and tr.get("source") == "官方訊號" and time.time() - tr["opened_ts"] > 48 * 3600:
                 tr["exit_reason"] = "超過 48 小時且已不在 See One 訊號列表，時間止損"
                 self.maker_close(tr)
+
+    def protect(self, tr: dict):
+        """Ratchet the exchange stop from the best price reached: break-even first, then lock part of the open profit."""
+        sym, side = tr["tsym"], tr["side"]
+        sgn = 1 if side == "LONG" else -1
+        if not tr.get("init_dist"):
+            mult = float(self.tb.specs()[sym]["multiplier"])
+            tr["init_dist"] = tr["risk_usdt"] / (tr["contracts"] * mult) if tr["contracts"] else abs(tr["entry"] - tr["stop"])
+        dist, entry = tr["init_dist"], tr["entry"]
+        if not dist:
+            return
+        px = self.tb.price(sym)
+        cur_r = (px - entry) * sgn / dist
+        if cur_r > tr.get("mfe_r", 0.0):
+            tr["mfe_r"] = round(cur_r, 3)
+        lk = S.lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
+        if lk is None or lk <= tr.get("lock_r", -1):
+            return
+        buf = tr.get("be_buffer", 0.0012)
+        target = entry * (1 + sgn * buf) + sgn * lk * dist
+        if (target - tr["stop"]) * sgn <= 0:
+            tr["lock_r"] = lk
+            return
+        label = "保本(含手續費)" if lk == 0 else f"鎖利 +{lk}R"
+        why = f"最高浮盈 {tr['mfe_r']:+.2f}R，止損上移至{label}"
+        if (px - target) * sgn <= px * 0.0015:
+            tr["exit_reason"] = f"{why}，但現價 {px} 已回落至鎖利線附近，直接 Maker 平倉鎖住利潤"
+            log_event("LOCK_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, lock_r=lk,
+                      mfe_r=tr["mfe_r"], reason=tr["exit_reason"])
+            self.maker_close(tr)
+            return
+        self.replace_stop(tr, target, why)
+        tr["lock_r"] = lk
+        log_event("PROFIT_LOCK", trade_id=tr["id"], symbol=sym, side=side, mfe_r=tr["mfe_r"], lock_r=lk,
+                  stop=tr["stop"], reason=why)
 
     def finish(self, tid: str, tr: dict):
         sym, side = tr["tsym"], tr["side"]
@@ -183,6 +226,9 @@ class Bot:
             reason = tr["exit_reason"]
         elif len(filled) == len(tr["tps"]):
             reason = f"全部止盈完成 ({', '.join(filled)})"
+        elif tr.get("lock_r") is not None:
+            reason = (f"最高浮盈 {tr.get('mfe_r', 0):+.2f}R 後鎖利止損 {tr['stop']} 觸發 (鎖 +{tr['lock_r']}R)"
+                      + (f"，已達 {filled[-1]}" if filled else ""))
         elif filled:
             reason = f"已達 {filled[-1]} 後，移動止損 {tr['stop']} 觸發"
         else:
@@ -210,7 +256,8 @@ class Bot:
         risk_pct = self.learner.p["risk_pct"]
         margin_cap = S.MARGIN_PER_TRADE_PCT * 1.5
         high_open = sum(1 for t in self.st["trades"].values() if t.get("tier") == "HIGH")
-        tier = "HIGH" if ev.get("tier") == "HIGH" and high_open < S.MAX_HIGH_POSITIONS else "NORMAL"
+        tier = ("HIGH" if ev.get("tier") == "HIGH" and high_open < S.MAX_HIGH_POSITIONS
+                and not self.st.get("day_lock_armed") else "NORMAL")
         if tier == "HIGH":
             risk_pct = S.HIGH_RISK_PCT * (0.5 if self.learner.p["consec_losses"] >= 3 else 1)
             margin_cap = S.HIGH_MARGIN_CAP_PCT
@@ -492,7 +539,25 @@ class Bot:
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if self.st["day"] != day:
             self.st["day"], self.st["day_start_equity"] = day, equity
-            self.st.pop("halted", None)
+            self.st["day_peak_equity"] = equity
+            for k in ("halted", "day_lock_armed", "day_lock_hit"):
+                self.st.pop(k, None)
+        self.st.setdefault("principal", equity)
+        start = self.st["day_start_equity"]
+        peak = self.st["day_peak_equity"] = max(self.st.get("day_peak_equity") or equity, equity)
+        if peak - start >= start * S.DAY_LOCK_TRIGGER_PCT and not self.st.get("day_lock_armed"):
+            self.st["day_lock_armed"] = True
+            log_event("DAY_LOCK_ARMED", day_start_equity=round(start, 2), equity=round(equity, 2),
+                      reason=f"當日獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，今日停用高信心放大單；"
+                             f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高獲利則停止開新倉")
+        floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
+        if self.st.get("day_lock_armed") and equity < floor:
+            if not self.st.get("day_lock_hit"):
+                self.st["day_lock_hit"] = True
+                log_event("DAY_LOCK_HIT", day_start_equity=round(start, 2), day_peak_equity=round(peak, 2),
+                          equity=round(equity, 2), floor=round(floor, 2),
+                          reason="當日獲利回吐過半，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
+            return
         if equity < self.st["day_start_equity"] * (1 - DAILY_LOSS_PCT):
             if not self.st.get("halted"):
                 self.st["halted"] = True
@@ -548,11 +613,13 @@ class Bot:
                               "recipe_hits": rhits, "path_expectancy": pexp["seeone"],
                               "learned": self.learner.summary()}, ensure_ascii=False), flush=True)
 
+        principal = self.st["principal"]
+        size_eq = equity - S.PROFIT_RESERVE * max(0.0, equity - principal)
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
                 break
             try:
-                self.open_trade(sig, ev, src, reg, equity)
+                self.open_trade(sig, ev, src, reg, size_eq)
             except ToobitError as e:
                 self.st["traded_ids"].append(sig["id"])
                 log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
@@ -565,7 +632,9 @@ class Bot:
         self.shadow.optimize(force=True)
         log_event("START", dry_run=self.dry, seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
-                  daily_loss_pct=DAILY_LOSS_PCT, learned=self.learner.summary())
+                  daily_loss_pct=DAILY_LOSS_PCT, lock_ladder=S.LOCK_LADDER, trail_gap_r=S.TRAIL_GAP_R,
+                  day_lock=[S.DAY_LOCK_TRIGGER_PCT, S.DAY_LOCK_GIVEBACK], profit_reserve=S.PROFIT_RESERVE,
+                  principal=self.st.get("principal"), learned=self.learner.summary())
         while True:
             try:
                 self.cycle()

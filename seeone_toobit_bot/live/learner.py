@@ -154,7 +154,7 @@ class Learner:
             if tps_filled:
                 why.append(f"打到 {', '.join(tps_filled)}，分批止盈" + ("並移動止損鎖利" if len(tps_filled) < 5 else "全部完成"))
             else:
-                why.append("未打到 TP，因 See One 訊號結束提前獲利出場")
+                why.append(f"未打到 TP，提前獲利出場: {reason}")
             why.append(f"持倉 {held_min:.0f} 分鐘，路徑 {tr.get('path')}，來源 {tr.get('source')}，綜合分數 {tr.get('score')}")
             rec = {**base, "type": "WIN_ANALYSIS", "why_profitable": why, "changes": changes}
             self.log("WIN_ANALYSIS", **rec)

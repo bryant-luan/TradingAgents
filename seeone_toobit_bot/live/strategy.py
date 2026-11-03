@@ -28,6 +28,33 @@ MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this f
 MAKER_FEE, TAKER_FEE = 0.0002, 0.0006
 MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more than this fraction of 1R
 
+# Break-even / profit lock, driven by the best price reached (MFE) rather than by TP fills.
+# (MFE in R reached, R locked by the stop); 0.0 = break-even plus round-trip fees.
+LOCK_LADDER = ((0.8, 0.0), (1.3, 0.3), (2.0, 0.8), (3.0, 1.6))
+HIGH_BE_TRIGGER_R = 0.6         # high-conviction trades risk 10%, so they go risk-free earlier
+DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
+TRAIL_GAP_R = 1.2               # beyond the ladder, trail the stop this far behind the best price
+TRAIL_STEP_R = 0.25
+DAY_LOCK_TRIGGER_PCT = 0.05     # day gain at which the daily profit lock arms
+DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
+PROFIT_RESERVE = 0.5            # share of gains above principal kept out of position sizing
+
+
+def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:
+    ladder = list(LOCK_LADDER)
+    if high:
+        ladder[0] = (HIGH_BE_TRIGGER_R, 0.0)
+    if day_locked:
+        ladder[0] = (DAY_LOCK_BE_TRIGGER_R, 0.0)
+    best = None
+    for trig, lk in ladder:
+        if mfe_r >= trig:
+            best = lk
+    if mfe_r >= ladder[-1][0]:
+        trail = math.floor((mfe_r - TRAIL_GAP_R) / TRAIL_STEP_R) * TRAIL_STEP_R
+        best = max(best, round(trail, 2))
+    return best
+
 
 class SeeOne:
     def __init__(self, rt_session: str):
