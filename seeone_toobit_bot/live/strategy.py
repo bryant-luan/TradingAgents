@@ -55,6 +55,9 @@ class SeeOne:
     def signals(self) -> list:
         return self._get("/api/signals")
 
+    def history(self, limit: int = 500) -> list:
+        return self._get("/api/history/signals", limit=limit)
+
     def strength_board(self) -> list:
         return self._get("/api/turtle-active")
 

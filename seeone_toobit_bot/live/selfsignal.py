@@ -1,0 +1,335 @@
+"""Self-sourced signals: pick coins from See One boards, plan the trade, verify it with See One 分析驗算.
+
+Flow per scan:
+  1. Universe = potential board (scanner) + strength board + customized-recipe hits + majors.
+  2. Direction = board / recipe / scanner hint, else the market regime.
+  3. Geometry from Toobit 15m candles: stop = max(1.5 x ATR14, fee floor), capped; TPs at fixed R multiples.
+  4. POST /api/analysis-review (15M) -> per-target hit probabilities, trade quality, factor breakdown.
+     Survivors are confirmed on 1H.
+  5. Expected value in R from the per-target probabilities and the bot's TP split; trade if above threshold.
+Every review is also stored and later resolved against Toobit candles (TP1 or SL first) to calibrate the
+probability threshold, so the filter tightens or loosens based on how well 分析驗算 actually predicts.
+"""
+import json
+import math
+import time
+from pathlib import Path
+
+import requests
+
+from . import strategy as S
+
+SCAN_EVERY_S = 300
+MAJORS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
+MAX_CANDIDATES = 30
+ATR_MULT = 1.5
+MIN_STOP_PCT = 0.008
+MAX_STOP_PCT = 0.06
+TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
+DEFAULT_MIN_PROB = 60.0          # de-biased probability of TP1 before SL
+MIN_EDGE = 25.0                  # raw prob(side) - prob(opposite side), percentage points
+MAX_PER_SCAN = 3
+MIN_QUALITY = 60.0
+MIN_EV_R = 0.20
+CONFIRM_MIN_PROB = 50.0
+REVIEW_COOLDOWN_S = 900
+RECHECK_OPEN_S = 900
+EXIT_PROB_BELOW = 40.0
+MAX_HOLD_H = 24
+CAL_BUCKETS = [(50, 60), (60, 70), (70, 80), (80, 101)]
+CAL_MIN_N = 15
+CAL_MIN_HIT = 0.55
+CAL_RESOLVE_MAX_H = 24
+
+
+def atr(symbol: str, n: int = 14) -> tuple[float, list] | None:
+    rows = requests.get("https://api.toobit.com/quote/v1/klines",
+                        params={"symbol": symbol, "interval": "15m", "limit": n + 1}, timeout=10).json()
+    if len(rows) < n + 1:
+        return None
+    trs = []
+    for prev, cur in zip(rows, rows[1:]):
+        h, l, pc = float(cur[2]), float(cur[3]), float(prev[4])
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    return sum(trs) / len(trs), rows
+
+
+class SelfScanner:
+    def __init__(self, so, tb, learner, calib_path: Path, log_event):
+        self.so, self.tb, self.learner, self.log = so, tb, learner, log_event
+        self.path = calib_path
+        self.d = {"pending": [], "resolved": [], "last_review": {}}
+        if calib_path.exists():
+            self.d.update(json.loads(calib_path.read_text()))
+        self.last_scan = 0.0
+
+    def save(self):
+        self.d["resolved"] = self.d["resolved"][-2000:]
+        cutoff = time.time() - 86400
+        self.d["last_review"] = {k: v for k, v in self.d["last_review"].items() if v > cutoff}
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.d, ensure_ascii=False))
+        tmp.replace(self.path)
+
+    # ------------------------------------------------------------------ See One 分析驗算
+    def review(self, symbol: str, side: str, stop: float, tps: list, tf: str = "15M") -> dict:
+        body = {"symbol": symbol, "side": side, "timeframe": tf, "entry_mode": "MARKET", "entry_price": None,
+                "take_profit_prices": [float(f"{p:.8g}") for p in tps], "stop_price": float(f"{stop:.8g}"),
+                "language": "zh-TW"}
+        for attempt in range(2):
+            try:
+                r = self.so.http.post(S.SEEONE + "/api/analysis-review", json=body, timeout=45)
+                r.raise_for_status()
+                return r.json()
+            except requests.RequestException:
+                if attempt:
+                    raise
+                time.sleep(2)
+
+    # ------------------------------------------------------------------ calibration of 分析驗算 probabilities
+    def calibrated(self) -> bool:
+        return bool(self.learner.p.get("self_calibrated"))
+
+    def min_prob(self) -> float:
+        return self.learner.p.get("self_min_prob", DEFAULT_MIN_PROB)
+
+    def record(self, symbol: str, tsym: str, side: str, entry: float, stop: float, tp1: float, prob: float):
+        self.d["pending"].append({"symbol": symbol, "tsym": tsym, "side": side, "entry": entry, "stop": stop,
+                                  "tp1": tp1, "prob": prob, "ts": time.time()})
+
+    def resolve(self):
+        still, new = [], 0
+        for p in self.d["pending"]:
+            age_h = (time.time() - p["ts"]) / 3600
+            if age_h < 0.25:
+                still.append(p)
+                continue
+            try:
+                rows = requests.get("https://api.toobit.com/quote/v1/klines",
+                                    params={"symbol": p["tsym"], "interval": "15m", "limit": 100}, timeout=10).json()
+            except requests.RequestException:
+                still.append(p)
+                continue
+            outcome = None
+            for k in rows:
+                if int(k[0]) < p["ts"] * 1000 - 900_000:
+                    continue
+                hi, lo = float(k[2]), float(k[3])
+                hit_tp = hi >= p["tp1"] if p["side"] == "LONG" else lo <= p["tp1"]
+                hit_sl = lo <= p["stop"] if p["side"] == "LONG" else hi >= p["stop"]
+                if hit_sl:
+                    outcome = 0
+                    break
+                if hit_tp:
+                    outcome = 1
+                    break
+            if outcome is None and age_h < CAL_RESOLVE_MAX_H:
+                still.append(p)
+                continue
+            if outcome is not None:
+                self.d["resolved"].append({**p, "hit": outcome, "resolved_ts": time.time()})
+                new += 1
+        self.d["pending"] = still
+        if new:
+            self.calibrate()
+
+    def calibrate(self):
+        rows = self.d["resolved"][-600:]
+        table, chosen = [], None
+        for lo, hi in CAL_BUCKETS:
+            b = [r["hit"] for r in rows if lo <= r["prob"] < hi]
+            rate = sum(b) / len(b) if b else None
+            table.append((lo, hi, len(b), round(rate, 3) if rate is not None else None))
+        for lo, hi, n, rate in table:
+            if n >= CAL_MIN_N and rate is not None and rate >= CAL_MIN_HIT:
+                chosen = float(lo)
+                break
+        if chosen is None and all(n >= CAL_MIN_N for _, _, n, _ in table):
+            chosen = 80.0
+        old = self.min_prob()
+        if chosen is not None:
+            self.learner.p["self_min_prob"] = chosen
+            self.learner.p["self_calibrated"] = chosen < 80.0
+            self.learner.save()
+        self.log("SELF_CALIBRATE", buckets=[{"prob": f"{lo}-{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
+                 min_prob_old=old, min_prob_new=self.min_prob(),
+                 note="分析驗算預估機率 vs 實際先到 TP1 的比例；樣本足夠時自動調整最低機率門檻")
+
+    # ------------------------------------------------------------------ scanning
+    def universe(self, regime_label: str, rhits: dict) -> list:
+        boards = self.so._get("/api/dashboard/boards")
+        cands: dict[str, dict] = {}
+        for t in boards.get("turtleActive", []):
+            cands.setdefault(t["symbol"], {"side": t["side"], "tags": []})["tags"].append(f"強勢榜#{t.get('rank')}")
+        for x in boards.get("scanner", []):
+            hint = (x.get("raw_features") or {}).get("directionHint")
+            c = cands.setdefault(x["symbol"], {"side": hint, "tags": []})
+            c["side"] = c["side"] or hint
+            c["tags"].append(f"潛力榜#{x['rank']}({x.get('state')})")
+        for base, hits in rhits.items():
+            for name, d in hits:
+                c = cands.setdefault(base + "USDT", {"side": d, "tags": []})
+                c["side"] = c["side"] or d
+                c["tags"].append(f"客製化:{name}")
+        default = "LONG" if regime_label == "BULL" else "SHORT" if regime_label == "BEAR" else None
+        for m in MAJORS:
+            cands.setdefault(m, {"side": default, "tags": ["主流幣"]})
+        out = []
+        for sym, c in cands.items():
+            sides = [c["side"]] if c["side"] else ["LONG", "SHORT"]
+            for sd in sides:
+                out.append({"symbol": sym, "side": sd, "tags": c["tags"]})
+        return out[:MAX_CANDIDATES * 2]
+
+    def plan(self, tsym: str, side: str) -> dict | None:
+        a = atr(tsym)
+        if not a:
+            return None
+        atr_v, rows = a
+        price = self.tb.price(tsym)
+        dist = max(ATR_MULT * atr_v, MIN_STOP_PCT * price)
+        if dist / price > MAX_STOP_PCT:
+            return None
+        sgn = 1 if side == "LONG" else -1
+        return {"price": price, "atr": atr_v, "stop": price - sgn * dist,
+                "tps": [price + sgn * dist * r for r in TP_R], "dist": dist}
+
+    def expected_r(self, rv: dict, split: list, sl_pct: float, bias: float = 0.0) -> float:
+        probs = [max(0.0, t["estimatedHitProbability"] - bias) / 100 for t in rv["geometry"]["targets"]]
+        p1 = probs[0]
+        ev = sum(w * p * r for w, p, r in zip(split, probs, TP_R)) - (1 - p1)
+        fee_r = (S.MAKER_FEE * (1 + p1) + S.TAKER_FEE * (1 - p1)) / sl_pct
+        return round(ev - fee_r, 3)
+
+    def scan(self, regime: tuple, rhits: dict, held: set, specs: dict) -> list:
+        """Review every candidate both LONG and SHORT on mirrored geometry. 分析驗算 is direction-biased
+        (mirrored 1R probabilities sum to well over 100%), so each side is de-biased by half the excess and
+        a trade needs a clear edge over the opposite side, not just a high raw probability."""
+        if time.time() - self.last_scan < SCAN_EVERY_S:
+            return []
+        self.last_scan = time.time()
+        self.resolve()
+        split = self.learner.p.get("tp_split") or S.TP_SPLIT
+        min_prob = self.min_prob()
+        found, reviewed, by_symbol = [], 0, {}
+        for c in self.universe(regime[1], rhits):
+            by_symbol.setdefault(c["symbol"], c)
+        for sym, c in by_symbol.items():
+            tsym = S.to_toobit(sym)
+            if tsym not in specs or tsym in held:
+                continue
+            if time.time() - self.d["last_review"].get(sym, 0) < REVIEW_COOLDOWN_S:
+                continue
+            try:
+                pl_long = self.plan(tsym, "LONG")
+                if not pl_long:
+                    continue
+                d, px = pl_long["dist"], pl_long["price"]
+                pl_short = {**pl_long, "stop": px + d, "tps": [px - d * r for r in TP_R]}
+                rv = {"LONG": self.review(sym, "LONG", pl_long["stop"], pl_long["tps"]),
+                      "SHORT": self.review(sym, "SHORT", pl_short["stop"], pl_short["tps"])}
+            except Exception as e:
+                self.log("ERROR", where="self_review", symbol=sym, error=repr(e)[:300])
+                continue
+            reviewed += 1
+            self.d["last_review"][sym] = time.time()
+            if any(len((r.get("geometry") or {}).get("targets") or []) != len(TP_R) for r in rv.values()):
+                continue
+            raw = {sd: float(r.get("probability") or 0) for sd, r in rv.items()}
+            bias = (raw["LONG"] + raw["SHORT"] - 100) / 2
+            side = max(raw, key=raw.get)
+            other = "SHORT" if side == "LONG" else "LONG"
+            pl = pl_long if side == "LONG" else pl_short
+            prob = round(raw[side] - bias, 1)
+            edge = round(raw[side] - raw[other], 1)
+            for sd, plx in (("LONG", pl_long), ("SHORT", pl_short)):
+                self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1))
+            if side == "LONG" and regime[0] < -S.REGIME_VETO or side == "SHORT" and regime[0] > S.REGIME_VETO:
+                continue
+            r = rv[side]
+            quality = float(r.get("tradeQuality") or 0)
+            ev = self.expected_r(r, split, d / px, bias)
+            if prob < min_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < MIN_EV_R:
+                continue
+            try:
+                p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H").get("probability") or 0) - bias
+            except Exception:
+                p1h = 0.0
+            if p1h < CONFIRM_MIN_PROB:
+                self.log("SELF_REJECT", symbol=sym, side=side, prob_15m=prob, prob_1h=round(p1h, 1),
+                         reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {CONFIRM_MIN_PROB}%，週期不一致")
+                continue
+            found.append(self.to_signal({**c, "side": side}, r, pl, prob, round(p1h, 1), quality, ev, regime,
+                                        raw, bias, edge))
+            time.sleep(0.3)
+        found.sort(key=lambda f: -f["ev"]["score"])
+        self.save()
+        self.log("SELF_SCAN", reviewed_symbols=reviewed,
+                 qualified=[(f["sig"]["symbol"], f["sig"]["side"], f["ev"]["score"], f["ev"]["analysis"]["edge"]) for f in found],
+                 min_prob=min_prob, min_edge=MIN_EDGE, pending_calibration=len(self.d["pending"]),
+                 resolved=len(self.d["resolved"]))
+        return found[:MAX_PER_SCAN]
+
+    def to_signal(self, c, rv, pl, prob, p1h, quality, ev_r, regime, raw, bias, edge) -> dict:
+        sym, side = c["symbol"], c["side"]
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        targets = rv["geometry"]["targets"]
+        levels = [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": TP_R[i],
+                   "price": pl["tps"][i], "hit": False} for i in range(len(TP_R))]
+        sig = {"id": f"self:{sym}:{side}:{int(time.time() // 900)}", "symbol": sym, "side": side, "status": "ACTIVE",
+               "timeframe": "15m", "entry_price": pl["price"], "stop_price": pl["stop"], "current_price": pl["price"],
+               "entry_at": now, "levels": levels, "signal_path": "SELF ANALYSIS", "path_subtype": None}
+        factors = {"source:自選驗算": 0.0, f"side:{side}": 0.0, f"regime:{regime[1].lower()}": 0.0,
+                   f"selfprob:{int(prob // 10 * 10)}": 0.0, f"selfedge:{min(40, int(edge // 10 * 10))}": 0.0}
+        for t in c["tags"]:
+            factors[f"origin:{t.split('#')[0].split('(')[0].split(':')[0]}"] = 0.0
+        strong = []
+        for f in rv.get("factors", []):
+            if not f.get("available"):
+                continue
+            if f["score"] >= 65:
+                factors[f"rf:{f['key']}:hi"] = 0.0
+                strong.append(f"{f['label']} {f['score']:.0f}")
+            elif f["score"] <= 35:
+                factors[f"rf:{f['key']}:lo"] = 0.0
+        adj = self.learner.p.get("factor_adj", {})
+        learned = sum(adj.get(t, 0.0) for t in factors)
+        score = round(50 + ev_r * 40 + edge * 0.2 + learned, 1)
+        reasons = [
+            f"自選訊號來源: {', '.join(c['tags'])}",
+            f"分析驗算 15M 雙向: 做多 {raw['LONG']}% / 做空 {raw['SHORT']}% (模型偏差 {bias:+.1f})",
+            f"去偏後先到 TP1 機率 {prob}%，方向優勢 {edge} 點，交易品質 {quality}，證據分數 {rv.get('evidenceScore')}",
+            f"分析驗算 1H 確認 (去偏後) {p1h}%",
+            "各 TP 預估命中率: " + " ".join(f"TP{i + 1}({TP_R[i]}R)={t['estimatedHitProbability']}%" for i, t in enumerate(targets)),
+            f"期望值 {ev_r:+.2f}R (已扣手續費)，止損 {pl['dist'] / pl['price']:.2%} (1.5×ATR15m)",
+            f"大盤 {regime[1]} {regime[0]:+.2f}",
+            "強項因子: " + ("、".join(strong) if strong else "無"),
+            f"See One 結論: {rv.get('conclusion')}",
+        ]
+        if learned:
+            reasons.append(f"實單優化權重合計 {learned:+.1f}")
+        ev = {"ok": True, "score": score, "reasons": reasons, "factors": factors, "skip": None, "cur_r": 0.0,
+              "analysis": {"prob": prob, "raw": raw, "bias": round(bias, 1), "edge": edge, "prob_1h": p1h, "quality": quality, "ev_r": ev_r,
+                           "targets": [t["estimatedHitProbability"] for t in targets]}}
+        return {"sig": sig, "ev": ev}
+
+    # ------------------------------------------------------------------ open-trade re-verification
+    def recheck(self, tr: dict) -> tuple[bool, str | None]:
+        """Re-run 分析驗算 on an open self-sourced trade; returns (close?, reason)."""
+        if time.time() - tr.get("last_recheck", tr["opened_ts"]) < RECHECK_OPEN_S:
+            return False, None
+        tr["last_recheck"] = time.time()
+        if time.time() - tr["opened_ts"] > MAX_HOLD_H * 3600:
+            return True, f"自選訊號持倉超過 {MAX_HOLD_H} 小時，時間止損"
+        left = [tp["price"] for tp in tr["tps"] if not tp["filled"]]
+        if not left:
+            return False, None
+        try:
+            rv = self.review(tr["tsym"].replace("-SWAP-USDT", "USDT"), tr["side"], tr["stop"], left)
+        except Exception:
+            return False, None
+        p = float(rv.get("probability") or 0) - tr.get("analysis_bias", 0.0)
+        tr.setdefault("rechecks", []).append({"ts": int(time.time()), "prob": p})
+        if p < EXIT_PROB_BELOW:
+            return True, f"分析驗算重評：下一個止盈先到機率降至 {p}% (< {EXIT_PROB_BELOW}%)，提前平倉"
+        return False, None

@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .learner import Learner
 from .shadow import Shadow
+from .selfsignal import SelfScanner
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +29,8 @@ PAUSE_FILE = ROOT / "logs" / "PAUSE"
 LEARN_FILE = ROOT / "logs" / "learned_params.json"
 INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
+CALIB_FILE = ROOT / "logs" / "self_calib.json"
+SELF_SOURCE = "自選驗算"
 LOOP_SECONDS = 30
 DAILY_LOSS_PCT = 0.06
 SLIPPAGE_BUFFER = 0.0003
@@ -73,6 +76,8 @@ class Bot:
         self.st = load_state()
         self.learner = Learner(LEARN_FILE, INSIGHT_LOG, log_event)
         self.shadow = Shadow(SHADOW_FILE, self.learner, log_event)
+        self.selfscan = SelfScanner(self.so, self.tb, self.learner, CALIB_FILE, log_event)
+        self.last_history = 0.0
 
     # ------------------------------------------------------------------ helpers
     def equity(self) -> tuple[float, float]:
@@ -134,6 +139,18 @@ class Bot:
                     except ToobitError as e:
                         log_event("ERROR", trade_id=tid, where="replace_stop", error=str(e))
 
+            if tr.get("source") == SELF_SOURCE and not tr.get("exit_reason"):
+                close, why = self.selfscan.recheck(tr)
+                if close:
+                    tr["exit_reason"] = why
+                    log_event("SELF_EXIT_DECISION", trade_id=tid, symbol=sym, side=side, reason=why,
+                              rechecks=tr.get("rechecks", [])[-3:])
+                    try:
+                        self.tb.flash_close(sym, side)
+                    except ToobitError as e:
+                        log_event("ERROR", trade_id=tid, where="flash_close", error=str(e))
+                continue
+
             sig = sigmap.get(tr["signal_id"])
             if sig and sig.get("status") == "CLOSED" and not tr.get("exit_reason"):
                 tr["exit_reason"] = f"See One 訊號結束: {sig.get('exit_reason') or 'CLOSED'}"
@@ -193,7 +210,10 @@ class Bot:
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):
             self.note_skip(sig, f"現價 {price} 已貼近/穿越止損 {stop}")
             return False
-        sz = S.size_position(equity, price, stop, spec, self.learner.p["risk_pct"])
+        risk_pct = self.learner.p["risk_pct"]
+        if source == SELF_SOURCE and not self.selfscan.calibrated():
+            risk_pct /= 2
+        sz = S.size_position(equity, price, stop, spec, risk_pct)
         if not sz:
             self.note_skip(sig, "以 1% 風險無法達到交易所最小下單量 (或保證金過大)")
             return False
@@ -206,7 +226,7 @@ class Bot:
                           stop=stop, sizing=sz, tp_plan=plan, score=ev["score"], regime=regime,
                           path=sig.get("signal_path"), subtype=sig.get("path_subtype"),
                           timeframe=sig.get("timeframe"), reasons=ev["reasons"], factors=ev["factors"],
-                          learned_min_score=self.learner.p["min_score"], risk_pct=self.learner.p["risk_pct"])
+                          learned_min_score=self.learner.p["min_score"], risk_pct=risk_pct)
         if self.dry:
             log_event("DRY_ENTRY", **entry_info)
             return True
@@ -236,6 +256,7 @@ class Bot:
             "risk_usdt": round(sz["contracts"] * mult * abs(entry - stop), 4), "margin": sz["margin"],
             "leverage": sz["leverage"], "path": sig.get("signal_path"), "opened_ts": time.time(),
             "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
+            "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=order.get("orderId"),
@@ -360,6 +381,12 @@ class Bot:
         signals = self.so.signals()
         sigmap = {s["id"]: s for s in signals}
         self.shadow.ingest(signals)
+        if time.time() - self.last_history > 3600:
+            self.last_history = time.time()
+            try:
+                self.shadow.ingest(self.so.history())
+            except Exception as e:
+                log_event("ERROR", where="history", error=repr(e)[:200])
         self.shadow.optimize()
         positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
 
@@ -413,6 +440,13 @@ class Bot:
                 continue
             scored.append((ev["score"], sig, src, ev))
 
+        try:
+            for f in self.selfscan.scan(reg, rhits, held_syms, specs):
+                if f["sig"]["id"] not in self.st["traded_ids"]:
+                    scored.append((f["ev"]["score"], f["sig"], SELF_SOURCE, f["ev"]))
+        except Exception as e:
+            log_event("ERROR", where="self_scan", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
+
         if self.dry or os.environ.get("BOT_VERBOSE"):
             print(json.dumps({"ts": now_iso(), "regime": reg, "directions": dirs, "equity": round(equity, 2),
                               "open_trades": len(self.st["trades"]), "candidates": len(cands),
@@ -432,6 +466,8 @@ class Bot:
     def run(self, once: bool):
         me = self.so.me()
         self.shadow.ingest(self.so.signals())
+        self.shadow.ingest(self.so.history())
+        self.last_history = time.time()
         self.shadow.optimize(force=True)
         log_event("START", dry_run=self.dry, seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
