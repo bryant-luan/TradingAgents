@@ -15,6 +15,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import strategy as S
+from .learner import Learner
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +23,8 @@ LOG_DIR = ROOT / "logs" / "trades"
 TRADE_LOG = LOG_DIR / "live_trades.jsonl"
 STATE_FILE = ROOT / "logs" / "live_state.json"
 PAUSE_FILE = ROOT / "logs" / "PAUSE"
+LEARN_FILE = ROOT / "logs" / "learned_params.json"
+INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 LOOP_SECONDS = 30
 DAILY_LOSS_PCT = 0.03
 FEE_BUFFER = 0.0012
@@ -62,6 +65,7 @@ class Bot:
         self.tb = Toobit(os.environ["TOOBIT_API_KEY"], os.environ["TOOBIT_API_SECRET"])
         self.so = S.SeeOne(os.environ["SEEONE_RT_SESSION"])
         self.st = load_state()
+        self.learner = Learner(LEARN_FILE, INSIGHT_LOG, log_event)
 
     # ------------------------------------------------------------------ helpers
     def equity(self) -> tuple[float, float]:
@@ -165,6 +169,8 @@ class Bot:
         self.st["closed"].append({"id": tid, "symbol": sym, "side": side, "path": tr.get("path"),
                                   "pnl": pnl, "r_result": r_result, "closed_at": now_iso(), "reason": reason})
         del self.st["trades"][tid]
+        save_state(self.st)
+        self.learner.on_close(tr, r_result, pnl, reason, filled, round((time.time() - tr["opened_ts"]) / 60, 1))
 
     # ------------------------------------------------------------------ entries
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
@@ -175,7 +181,7 @@ class Bot:
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):
             self.note_skip(sig, f"現價 {price} 已貼近/穿越止損 {stop}")
             return False
-        sz = S.size_position(equity, price, stop, spec)
+        sz = S.size_position(equity, price, stop, spec, self.learner.p["risk_pct"])
         if not sz:
             self.note_skip(sig, "以 1% 風險無法達到交易所最小下單量 (或保證金過大)")
             return False
@@ -187,7 +193,8 @@ class Bot:
         entry_info = dict(signal_id=sig["id"], source=source, symbol=sym, side=side, price=price,
                           stop=stop, sizing=sz, tp_plan=plan, score=ev["score"], regime=regime,
                           path=sig.get("signal_path"), subtype=sig.get("path_subtype"),
-                          timeframe=sig.get("timeframe"), reasons=ev["reasons"])
+                          timeframe=sig.get("timeframe"), reasons=ev["reasons"], factors=ev["factors"],
+                          learned_min_score=self.learner.p["min_score"], risk_pct=self.learner.p["risk_pct"])
         if self.dry:
             log_event("DRY_ENTRY", **entry_info)
             return True
@@ -220,6 +227,7 @@ class Bot:
             "contracts": sz["contracts"], "entry": entry, "stop": stop, "tps": tps,
             "risk_usdt": round(sz["contracts"] * mult * abs(entry - stop), 4), "margin": sz["margin"],
             "leverage": sz["leverage"], "path": sig.get("signal_path"), "opened_ts": time.time(),
+            "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
         self.st["traded_ids"].append(sig["id"])
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=order.get("orderId"),
@@ -280,7 +288,7 @@ class Bot:
             if tsym in held_syms:
                 self.note_skip(sig, "該幣已有持倉")
                 continue
-            ev = S.evaluate(sig, src, reg[0], reg[1], board, rhits, pexp)
+            ev = S.evaluate(sig, src, reg[0], reg[1], board, rhits, pexp, self.learner.p)
             if not ev["ok"]:
                 self.note_skip(sig, ev["skip"])
                 continue
@@ -290,7 +298,8 @@ class Bot:
             print(json.dumps({"ts": now_iso(), "regime": reg, "directions": dirs, "equity": round(equity, 2),
                               "open_trades": len(self.st["trades"]), "candidates": len(cands),
                               "qualified": [(round(s, 1), x["symbol"], x["side"]) for s, x, _, _ in scored],
-                              "recipe_hits": rhits, "path_expectancy": pexp}, ensure_ascii=False), flush=True)
+                              "recipe_hits": rhits, "path_expectancy": pexp["seeone"],
+                              "learned": self.learner.summary()}, ensure_ascii=False), flush=True)
 
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
@@ -304,8 +313,8 @@ class Bot:
     def run(self, once: bool):
         me = self.so.me()
         log_event("START", dry_run=self.dry, seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
-                  risk_pct=S.RISK_PCT, max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
-                  daily_loss_pct=DAILY_LOSS_PCT, min_score=S.MIN_SCORE)
+                  max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
+                  daily_loss_pct=DAILY_LOSS_PCT, learned=self.learner.summary())
         while True:
             try:
                 self.cycle()

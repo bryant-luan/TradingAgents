@@ -107,94 +107,99 @@ def _age_min(ts: str) -> float:
 
 
 def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
-             board: dict, rhits: dict, pexp: dict) -> dict:
-    """Return {'ok': bool, 'score': float, 'reasons': [...], 'skip': str|None} for one signal."""
+             board: dict, rhits: dict, pexp: dict, learned: dict | None = None) -> dict:
+    """Score one signal. Returns ok/score/skip, human reasons, and machine factor tags (tag -> points)."""
+    learned = learned or {}
     side = sig["side"]
     base = sig["symbol"][:-4]
-    reasons, skip = [], None
+    reasons, factors, skip = [], {}, None
     entry, stop, cur = float(sig["entry_price"]), float(sig["stop_price"]), float(sig["current_price"])
     risk = abs(entry - stop)
     cur_r = (cur - entry) / risk * (1 if side == "LONG" else -1) if risk else 0.0
     age = _age_min(sig["entry_at"])
     tp_hit = any(l.get("hit") for l in sig.get("levels", []) if l.get("kind") == "TP" or str(l.get("label", "")).startswith("TP"))
+    r_lo, r_hi = learned.get("entry_r_window", ENTRY_R_WINDOW)
+    min_score = learned.get("min_score", MIN_SCORE)
+    cooldown_until = learned.get("symbol_cooldown", {}).get(sig["symbol"], 0)
 
-    if age > MAX_SIGNAL_AGE_MIN:
+    if cooldown_until > datetime.now(timezone.utc).timestamp():
+        skip = f"{sig['symbol']} 近期虧損冷卻中 (至 {datetime.fromtimestamp(cooldown_until, timezone.utc):%m-%d %H:%M} UTC)"
+    elif age > MAX_SIGNAL_AGE_MIN:
         skip = f"訊號已 {age:.0f} 分鐘 (> {MAX_SIGNAL_AGE_MIN})"
     elif tp_hit or sig.get("highest_hit_tp_label"):
         skip = "已打到 TP，不追價"
-    elif not (ENTRY_R_WINDOW[0] <= cur_r <= ENTRY_R_WINDOW[1]):
-        skip = f"現價偏離進場 {cur_r:+.2f}R (允許 {ENTRY_R_WINDOW[0]}~{ENTRY_R_WINDOW[1]}R)"
+    elif not (r_lo <= cur_r <= r_hi):
+        skip = f"現價偏離進場 {cur_r:+.2f}R (允許 {r_lo}~{r_hi}R)"
     elif side == "LONG" and regime_score < -REGIME_VETO:
         skip = f"大盤偏空 {regime_score:+.2f}，否決做多"
     elif side == "SHORT" and regime_score > REGIME_VETO:
         skip = f"大盤偏多 {regime_score:+.2f}，否決做空"
 
+    def add(tag: str, pts: float, text: str):
+        factors[tag] = round(pts, 1)
+        reasons.append(f"{text} {pts:+.1f}")
+
     scanner = float(sig.get("scanner_score") or (sig.get("strength_score") or 0))
-    score = scanner * 0.4
-    reasons.append(f"來源={source} 掃描分數={scanner:.1f} (×0.4={scanner * 0.4:.1f})")
+    add(f"source:{source}", scanner * 0.4, f"來源={source} 掃描分數={scanner:.1f}×0.4")
 
     aligned = (regime_label == "BULL" and side == "LONG") or (regime_label == "BEAR" and side == "SHORT")
     if aligned:
-        score += 20
-        reasons.append(f"大盤 {regime_label} {regime_score:+.2f} 與方向一致 +20")
+        add("regime:aligned", 20, f"大盤 {regime_label} {regime_score:+.2f} 與方向一致")
     elif regime_label == "NEUTRAL":
-        score += 10
-        reasons.append(f"大盤中性 {regime_score:+.2f} +10")
+        add("regime:neutral", 10, f"大盤中性 {regime_score:+.2f}")
     else:
-        reasons.append(f"大盤 {regime_label} {regime_score:+.2f} 逆勢 +0")
+        add("regime:counter", 0, f"大盤 {regime_label} {regime_score:+.2f} 逆勢")
 
     b = board.get(sig["symbol"])
     if b and b["side"] == side:
-        score += 15
-        reasons.append(f"強勢榜 #{b.get('rank')} 同向 (strength {b.get('strength_score')}) +15")
+        add("board:same", 15, f"強勢榜 #{b.get('rank')} 同向 (strength {b.get('strength_score')})")
     elif b:
-        score -= 10
-        reasons.append(f"強勢榜 #{b.get('rank')} 反向 -10")
+        add("board:opposite", -10, f"強勢榜 #{b.get('rank')} 反向")
 
     snap = sig.get("scanner_snapshot") or {}
     rank = snap.get("rank")
     if rank is not None and rank <= 10:
-        score += 5
-        reasons.append(f"潛力榜排名 #{rank} +5")
+        add("potential:top10", 5, f"潛力榜排名 #{rank}")
     hint = (snap.get("raw_features") or {}).get("directionHint")
     if hint and hint != side:
-        score -= 10
-        reasons.append(f"掃描方向提示 {hint} 與訊號相反 -10")
+        add("hint:opposite", -10, f"掃描方向提示 {hint} 與訊號相反")
 
     for name, d in rhits.get(base, []):
         if d == side:
-            score += 15
-            reasons.append(f"客製化訊號「{name}」同向命中 +15")
+            add(f"recipe:{name}", 15, f"客製化訊號「{name}」同向命中")
         elif d:
-            score -= 15
-            reasons.append(f"客製化訊號「{name}」反向命中 -15")
+            add(f"recipe_opp:{name}", -15, f"客製化訊號「{name}」反向命中")
 
     path = sig.get("signal_path") or "?"
     exp, n = pexp["seeone"].get(path, (0.0, 0))
     if n >= 10:
-        adj = round(max(-20.0, min(15.0, exp * 30)), 1)
-        score += adj
-        reasons.append(f"路徑 {path} 近期期望值 {exp:+.3f}R (n={n}) {adj:+.1f}")
-    oexp, on = pexp["own"].get(path, (0.0, 0))
-    if on >= 5 and oexp < 0:
-        score -= 15
-        reasons.append(f"本機器人在 {path} 實績 {oexp:+.3f}R (n={on}) -15")
+        add(f"path:{path}", max(-20.0, min(15.0, exp * 30)), f"路徑 {path} See One 近期期望值 {exp:+.3f}R (n={n})")
+    else:
+        factors[f"path:{path}"] = 0.0
+    factors[f"side:{side}"] = 0.0
+    factors[f"tf:{sig.get('timeframe')}"] = 0.0
+
+    adj = learned.get("factor_adj", {})
+    for tag in list(factors):
+        if adj.get(tag):
+            reasons.append(f"自動優化權重 [{tag}] {adj[tag]:+.1f}")
+    score = round(sum(factors.values()) + sum(adj.get(t, 0.0) for t in factors), 1)
 
     reasons.append(f"訊號年齡 {age:.0f}m，現價位於 {cur_r:+.2f}R")
-    score = round(score, 1)
-    if not skip and score < MIN_SCORE:
-        skip = f"綜合分數 {score} < {MIN_SCORE}"
-    return {"ok": skip is None, "score": score, "reasons": reasons, "skip": skip, "cur_r": cur_r}
+    if not skip and score < min_score:
+        skip = f"綜合分數 {score} < {min_score}"
+    return {"ok": skip is None, "score": score, "reasons": reasons, "factors": factors,
+            "skip": skip, "cur_r": round(cur_r, 3)}
 
 
-def size_position(equity: float, price: float, stop: float, spec: dict) -> dict | None:
+def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct: float = RISK_PCT) -> dict | None:
     """Risk-based sizing in contracts plus leverage. Returns None if the trade can't be sized safely."""
     mult = float(spec["multiplier"])
     dist = abs(price - stop)
     if dist <= 0:
         return None
     sl_pct = dist / price
-    risk_usdt = equity * RISK_PCT
+    risk_usdt = equity * risk_pct
     contracts = math.floor(risk_usdt / (dist * mult))
     if contracts < spec["min_contracts"]:
         min_risk = spec["min_contracts"] * dist * mult
