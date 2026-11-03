@@ -20,6 +20,9 @@ MAX_LEVERAGE = 25
 MAX_POSITIONS = 3
 MAX_TOTAL_MARGIN_PCT = 0.70
 MARGIN_PER_TRADE_PCT = 0.07
+HIGH_RISK_PCT = 0.10            # high-conviction tier (CLANKER-type setups): equity at risk at the stop
+HIGH_MARGIN_CAP_PCT = 0.30
+MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
 MAKER_FEE, TAKER_FEE = 0.0002, 0.0006
@@ -225,7 +228,8 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
             "skip": skip, "cur_r": round(cur_r, 3)}
 
 
-def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct: float = RISK_PCT) -> dict | None:
+def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct: float = RISK_PCT,
+                  margin_cap_pct: float = MARGIN_PER_TRADE_PCT * 1.5) -> dict | None:
     """Risk-based sizing in contracts plus leverage. Returns None if the trade can't be sized safely."""
     mult = float(spec["multiplier"])
     dist = abs(price - stop)
@@ -243,8 +247,8 @@ def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct
     lev_cap = max(1, min(spec["max_leverage"], MAX_LEVERAGE, math.floor(0.4 / sl_pct)))
     leverage = max(1, min(lev_cap, math.ceil(notional / (MARGIN_PER_TRADE_PCT * equity))))
     margin = notional / leverage
-    if margin > MARGIN_PER_TRADE_PCT * equity * 1.5:
-        contracts = math.floor(MARGIN_PER_TRADE_PCT * equity * leverage / (mult * price))
+    if margin > margin_cap_pct * equity:
+        contracts = math.floor(margin_cap_pct * equity * leverage / (mult * price))
         if contracts < spec["min_contracts"]:
             return None
         notional = contracts * mult * price

@@ -29,6 +29,9 @@ TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
 DEFAULT_MIN_PROB = 60.0          # de-biased probability of TP1 before SL
 MIN_EDGE = 25.0                  # raw prob(side) - prob(opposite side), percentage points
 MAX_PER_SCAN = 3
+# High-conviction tier = setups like the CLANKER trade: strong two-sided edge, high de-biased probability,
+# high trade quality, 1H agreement, and the coin is on the strength board or potential board top 10.
+HIGH_MIN_EDGE, HIGH_MIN_PROB, HIGH_MIN_QUALITY, HIGH_MIN_1H = 35.0, 68.0, 75.0, 60.0
 MIN_QUALITY = 60.0
 MIN_EV_R = 0.20
 CONFIRM_MIN_PROB = 50.0
@@ -292,6 +295,12 @@ class SelfScanner:
                 strong.append(f"{f['label']} {f['score']:.0f}")
             elif f["score"] <= 35:
                 factors[f"rf:{f['key']}:lo"] = 0.0
+        on_board = any(t.startswith("強勢榜") or (t.startswith("潛力榜#") and int(t[4:].split("(")[0]) <= 10)
+                       for t in c["tags"])
+        high = (edge >= HIGH_MIN_EDGE and prob >= HIGH_MIN_PROB and quality >= HIGH_MIN_QUALITY
+                and p1h >= HIGH_MIN_1H and on_board and self.learner.p.get("high_tier_enabled", True))
+        if high:
+            factors["tier:high"] = 0.0
         adj = self.learner.p.get("factor_adj", {})
         learned = sum(adj.get(t, 0.0) for t in factors)
         score = round(50 + ev_r * 40 + edge * 0.2 + learned, 1)
@@ -308,7 +317,10 @@ class SelfScanner:
         ]
         if learned:
             reasons.append(f"實單優化權重合計 {learned:+.1f}")
-        ev = {"ok": True, "score": score, "reasons": reasons, "factors": factors, "skip": None, "cur_r": 0.0,
+        if high:
+            reasons.append(f"高信心單 (CLANKER 型): 優勢 ≥{HIGH_MIN_EDGE}、機率 ≥{HIGH_MIN_PROB}%、品質 ≥{HIGH_MIN_QUALITY}、"
+                           f"1H ≥{HIGH_MIN_1H}%、在強勢榜或潛力榜前 10 → 放大部位")
+        ev = {"ok": True, "score": score + (10 if high else 0), "tier": "HIGH" if high else "NORMAL", "reasons": reasons, "factors": factors, "skip": None, "cur_r": 0.0,
               "analysis": {"prob": prob, "raw": raw, "bias": round(bias, 1), "edge": edge, "prob_1h": p1h, "quality": quality, "ev_r": ev_r,
                            "targets": [t["estimatedHitProbability"] for t in targets]}}
         return {"sig": sig, "ev": ev}

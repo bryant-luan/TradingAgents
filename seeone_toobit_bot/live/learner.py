@@ -89,6 +89,14 @@ class Learner:
                     regime_at_entry=tr.get("regime"), entry_at_r=entry_r, tps_filled=tps_filled,
                     held_min=held_min, exit_reason=reason)
 
+        if tr.get("tier") == "HIGH":
+            p["high_consec_losses"] = p.get("high_consec_losses", 0) + 1 if loss else 0 if win else p.get("high_consec_losses", 0)
+            if p["high_consec_losses"] >= 2 and p.get("high_tier_enabled", True):
+                p["high_tier_enabled"] = False
+                changes.append("高信心單連續虧損 2 筆，暫停放大部位 (恢復一般風險)")
+            elif win and not p.get("high_tier_enabled", True):
+                p["high_tier_enabled"] = True
+                changes.append("高信心單獲利，恢復放大部位")
         if loss:
             p["losses"] += 1
             p["consec_losses"] += 1

@@ -32,7 +32,7 @@ SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 CALIB_FILE = ROOT / "logs" / "self_calib.json"
 SELF_SOURCE = "自選驗算"
 LOOP_SECONDS = 30
-DAILY_LOSS_PCT = 0.08
+DAILY_LOSS_PCT = 0.12
 SLIPPAGE_BUFFER = 0.0003
 MAKER_TRIES = 6
 MAKER_WAIT_S = 30
@@ -208,9 +208,15 @@ class Bot:
             self.note_skip(sig, f"現價 {price} 已貼近/穿越止損 {stop}")
             return False
         risk_pct = self.learner.p["risk_pct"]
-        if source == SELF_SOURCE and not self.selfscan.calibrated():
+        margin_cap = S.MARGIN_PER_TRADE_PCT * 1.5
+        high_open = sum(1 for t in self.st["trades"].values() if t.get("tier") == "HIGH")
+        tier = "HIGH" if ev.get("tier") == "HIGH" and high_open < S.MAX_HIGH_POSITIONS else "NORMAL"
+        if tier == "HIGH":
+            risk_pct = S.HIGH_RISK_PCT * (0.5 if self.learner.p["consec_losses"] >= 3 else 1)
+            margin_cap = S.HIGH_MARGIN_CAP_PCT
+        elif source == SELF_SOURCE and not self.selfscan.calibrated():
             risk_pct /= 2
-        sz = S.size_position(equity, price, stop, spec, risk_pct)
+        sz = S.size_position(equity, price, stop, spec, risk_pct, margin_cap)
         if not sz:
             self.note_skip(sig, "以 1% 風險無法達到交易所最小下單量 (或保證金過大)")
             return False
@@ -223,7 +229,8 @@ class Bot:
                           stop=stop, sizing=sz, tp_plan=plan, score=ev["score"], regime=regime,
                           path=sig.get("signal_path"), subtype=sig.get("path_subtype"),
                           timeframe=sig.get("timeframe"), reasons=ev["reasons"], factors=ev["factors"],
-                          learned_min_score=self.learner.p["min_score"], risk_pct=risk_pct)
+                          learned_min_score=self.learner.p["min_score"], risk_pct=risk_pct, tier=tier,
+                          projected_profit_usdt=self.projected(sig, plan, price, spec))
         if self.dry:
             log_event("DRY_ENTRY", **entry_info)
             return True
@@ -254,6 +261,7 @@ class Bot:
             "leverage": sz["leverage"], "path": sig.get("signal_path"), "opened_ts": time.time(),
             "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
+            "tier": tier,
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=order.get("orderId"),
@@ -444,6 +452,16 @@ class Bot:
         fee = sum(float(t.get("commission") or 0) for t in rows)
         maker = sum(1 for t in rows if t.get("isMaker"))
         return {"fee_usdt": round(fee, 5), "fills": len(rows), "maker_fills": maker}
+
+    @staticmethod
+    def projected(sig: dict, plan: list, price: float, spec: dict) -> dict:
+        """Cumulative USDT gained (before fees) if price reaches each TP in turn."""
+        mult, out, total = float(spec["multiplier"]), {}, 0.0
+        for tp in plan:
+            total += tp["qty"] * mult * abs(tp["price"] - price)
+            out[tp["label"]] = round(total, 2)
+        out["SL"] = round(-sum(tp["qty"] for tp in plan) * mult * abs(price - float(sig["stop_price"])), 2)
+        return out
 
     def note_skip(self, sig: dict, why: str):
         key = sig["id"]
