@@ -6,6 +6,7 @@ Pause new entries: touch logs/PAUSE   (open trades keep being managed)
 """
 import argparse
 import json
+import re
 import os
 import time
 import traceback
@@ -349,8 +350,9 @@ class Bot:
 
     def note_skip(self, sig: dict, why: str):
         key = sig["id"]
-        if self.st["skips"].get(key) != why:
-            self.st["skips"][key] = why
+        kind = re.sub(r"[-+]?\d+(\.\d+)?", "#", why)
+        if self.st["skips"].get(key) != kind:
+            self.st["skips"][key] = kind
             log_event("SKIP", signal_id=key, symbol=sig["symbol"], side=sig["side"], reason=why)
 
     # ------------------------------------------------------------------ cycle
