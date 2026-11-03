@@ -1,5 +1,6 @@
 """See One data + decision logic: market regime, candidate scoring, position sizing."""
 import math
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -20,6 +21,7 @@ MAX_POSITIONS = 3
 MAX_TOTAL_MARGIN_PCT = 0.60
 MARGIN_PER_TRADE_PCT = 0.20
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
+MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
 
 
 class SeeOne:
@@ -29,16 +31,24 @@ class SeeOne:
         self.http.headers["User-Agent"] = "Mozilla/5.0 seeone-toobit-bot"
 
     def _get(self, path: str, **params):
-        r = self.http.get(SEEONE + path, params=params or None, timeout=20)
-        r.raise_for_status()
-        return r.json()
+        for attempt in range(3):
+            try:
+                r = self.http.get(SEEONE + path, params=params or None, timeout=20)
+                if r.status_code >= 500 and attempt < 2:
+                    raise requests.HTTPError(f"{r.status_code}")
+                r.raise_for_status()
+                return r.json()
+            except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+                if attempt == 2:
+                    raise
+                time.sleep(2 * (attempt + 1))
 
     def me(self):
         return self._get("/api/account/me")
 
     def directions(self) -> dict:
         d = self._get("/app/api/market-pulse", part="direction")
-        return {x["horizon"]: float(x["score"]) for x in d.get("directions", [])}
+        return {x["horizon"]: float(x["score"]) for x in d.get("directions", []) if x.get("score") is not None}
 
     def signals(self) -> list:
         return self._get("/api/signals")
@@ -142,6 +152,8 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         skip = "已打到 TP，不追價"
     elif not (r_lo <= cur_r <= r_hi):
         skip = f"現價偏離進場 {cur_r:+.2f}R (允許 {r_lo}~{r_hi}R)"
+    elif risk / cur > MAX_STOP_PCT:
+        skip = f"止損距離 {risk / cur:.0%} 過寬 (> {MAX_STOP_PCT:.0%})，TP 難以到達"
     elif side == "LONG" and regime_score < -REGIME_VETO:
         skip = f"大盤偏空 {regime_score:+.2f}，否決做多"
     elif side == "SHORT" and regime_score > REGIME_VETO:
