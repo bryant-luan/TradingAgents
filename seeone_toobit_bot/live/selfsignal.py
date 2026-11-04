@@ -179,8 +179,11 @@ class SelfScanner:
             table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
         if any(n < M15_MIN_N for _, _, n, _ in table[:2]):
             return
-        passing = [lo for lo, _, n, rate in table if n >= M15_MIN_N and rate >= M15_PASS]
-        floor = min(passing) if passing else HTF_BUCKETS[-1][0]
+        floor = HTF_BUCKETS[-1][0]
+        for lo, _, n, rate in reversed(table):
+            if n < M15_MIN_N or rate < M15_PASS:
+                break
+            floor = lo
         old = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
         self.learner.p["htf_min"] = floor
         self.learner.save()
@@ -197,8 +200,11 @@ class SelfScanner:
             table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
         if any(n < M15_MIN_N for _, _, n, _ in table[:2]):
             return
-        passing = [hi for _, hi, n, rate in table if n >= M15_MIN_N and rate >= M15_PASS]
-        cap = max(passing) if passing else M15_BUCKETS[0][1]
+        cap = M15_BUCKETS[0][1]
+        for _, hi, n, rate in table:
+            if n < M15_MIN_N or rate < M15_PASS:
+                break
+            cap = hi
         old = self.learner.p.get("m15_max", S.M15_MAX_DEFAULT)
         self.learner.p["m15_max"] = cap
         self.learner.save()
