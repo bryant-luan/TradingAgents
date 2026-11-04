@@ -8,6 +8,8 @@ import argparse
 import json
 import re
 import os
+import sys
+import threading
 import time
 import traceback
 from datetime import datetime, timezone
@@ -32,6 +34,8 @@ SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 CALIB_FILE = ROOT / "logs" / "self_calib.json"
 SELF_SOURCE = "自選驗算"
 LOOP_SECONDS = 30
+# A normal cycle with several maker entries/exits stays well under this.
+WATCHDOG_S = 1200
 SLIPPAGE_BUFFER = 0.0003
 MAKER_TRIES = 6
 MAKER_WAIT_S = 30
@@ -172,6 +176,8 @@ class Bot:
                     self.maker_close(tr)
                 continue
 
+            if sigmap is None:
+                continue
             sig = sigmap.get(tr["signal_id"])
             if sig and sig.get("status") == "CLOSED" and not tr.get("exit_reason"):
                 tr["exit_reason"] = f"See One 訊號結束: {sig.get('exit_reason') or 'CLOSED'}"
@@ -241,6 +247,8 @@ class Bot:
                       + (f"，已達 {filled[-1]}" if filled else ""))
         elif filled:
             reason = f"已達 {filled[-1]} 後，移動止損 {tr['stop']} 觸發"
+        elif pnl is not None and pnl > 0:
+            reason = f"交易所止盈掛單成交後平倉 (平均出場價 {close_px}，未即時追蹤到各 TP 成交)"
         else:
             reason = f"初始止損 {tr['stop']} 觸發"
         r_result = round(pnl / tr["risk_usdt"], 3) if pnl is not None and tr["risk_usdt"] else None
@@ -575,10 +583,15 @@ class Bot:
 
     # ------------------------------------------------------------------ cycle
     def cycle(self):
-        signals = self.so.signals()
-        sigmap = {s["id"]: s for s in signals}
-        self.shadow.ingest(signals)
-        if time.time() - self.last_history > 3600:
+        try:
+            signals = self.so.signals()
+        except Exception as e:
+            signals = None
+            log_event("ERROR", where="signals", error=repr(e)[:200], note="See One 暫時無法取得訊號，本輪只管理持倉、不開新倉")
+        sigmap = {s["id"]: s for s in signals} if signals is not None else None
+        if signals is not None:
+            self.shadow.ingest(signals)
+        if signals is not None and time.time() - self.last_history > 3600:
             self.last_history = time.time()
             try:
                 self.shadow.ingest(self.so.history())
@@ -631,6 +644,8 @@ class Bot:
                           day_start_equity=self.st["day_start_equity"], equity=equity)
             return
         self.day_room = equity - loss_floor - self.open_risk()
+        if sigmap is None:
+            return
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
             return
         if len(self.st["trades"]) >= S.MAX_POSITIONS:
@@ -750,7 +765,21 @@ class Bot:
                 self.st["traded_ids"].append(sig["id"])
                 log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
 
+    def watchdog(self):
+        while True:
+            time.sleep(30)
+            stalled = time.time() - self.beat
+            if stalled > WATCHDOG_S:
+                frame = sys._current_frames().get(threading.main_thread().ident)
+                log_event("WATCHDOG_RESTART", stalled_s=int(stalled),
+                          stack="".join(traceback.format_stack(frame)[-6:]) if frame else None,
+                          note=f"主迴圈超過 {WATCHDOG_S // 60} 分鐘沒有完成一輪，強制結束由外層自動重啟；交易所止損/止盈掛單不受影響")
+                os._exit(3)
+
     def run(self, once: bool):
+        self.beat = time.time()
+        if not once:
+            threading.Thread(target=self.watchdog, daemon=True).start()
         me = self.so.me()
         self.shadow.ingest(self.so.signals())
         self.shadow.ingest(self.so.history())
@@ -762,6 +791,7 @@ class Bot:
                   day_lock=[S.DAY_LOCK_TRIGGER_PCT, S.DAY_LOCK_GIVEBACK], profit_reserve=S.PROFIT_RESERVE,
                   principal=self.st.get("principal"), learned=self.learner.summary())
         while True:
+            self.beat = time.time()
             try:
                 self.cycle()
             except Exception as e:  # keep the loop alive; open positions have exchange-side SL/TP

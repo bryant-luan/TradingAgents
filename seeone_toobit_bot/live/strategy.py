@@ -1,4 +1,5 @@
 """See One data + decision logic: market regime, candidate scoring, position sizing."""
+import concurrent.futures
 import math
 import time
 from datetime import datetime, timezone
@@ -6,6 +7,8 @@ from datetime import datetime, timezone
 import requests
 
 SEEONE = "https://seeone.club"
+HTTP_DEADLINE_S = 60
+_HTTP_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 # --- tunables -------------------------------------------------------------
 REGIME_WEIGHTS = {"15m": 0.25, "1h": 0.35, "4h": 0.40}
@@ -82,7 +85,12 @@ class SeeOne:
     def _get(self, path: str, **params):
         for attempt in range(3):
             try:
-                r = self.http.get(SEEONE + path, params=params or None, timeout=20)
+                # The socket timeout alone once left a read hanging for 11 hours; enforce a wall-clock deadline too.
+                fut = _HTTP_POOL.submit(self.http.get, SEEONE + path, params=params or None, timeout=20)
+                try:
+                    r = fut.result(timeout=HTTP_DEADLINE_S)
+                except concurrent.futures.TimeoutError:
+                    raise requests.Timeout(f"{path} 超過 {HTTP_DEADLINE_S}s 未回應")
                 if r.status_code >= 500 and attempt < 2:
                     raise requests.HTTPError(f"{r.status_code}")
                 r.raise_for_status()
