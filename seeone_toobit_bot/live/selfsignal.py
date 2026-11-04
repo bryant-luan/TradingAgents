@@ -48,6 +48,10 @@ CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 RECHECK_OPEN_S = 900
 EXIT_PROB_BELOW = 40.0
+# See One vs Toobit price ratio: cached per symbol, re-aligned when the levels sent are off by more than BASIS_TOL_R.
+BASIS_TTL_S = 600
+BASIS_TOL_R = 0.05
+BASIS_LOG_PCT = 0.003
 MAX_HOLD_H = 24
 CAL_BUCKETS = [(50, 60), (60, 70), (70, 80), (80, 101)]
 CAL_MIN_N = 15
@@ -123,6 +127,7 @@ class SelfScanner:
         if calib_path.exists():
             self.d.update(json.loads(calib_path.read_text()))
         self.last_scan = 0.0
+        self.basis: dict[str, tuple[float, float]] = {}
 
     def save(self):
         self.d["resolved"] = self.d["resolved"][-2000:]
@@ -133,11 +138,50 @@ class SelfScanner:
         tmp.replace(self.path)
 
     # ------------------------------------------------------------------ See One 分析驗算
-    def review(self, symbol: str, side: str, stop: float, tps: list, tf: str = "15M") -> dict:
+    def _review(self, symbol: str, side: str, stop: float, tps: list, tf: str) -> dict:
         body = {"symbol": symbol, "side": side, "timeframe": tf, "entry_mode": "MARKET", "entry_price": None,
                 "take_profit_prices": [float(f"{p:.8g}") for p in tps], "stop_price": float(f"{stop:.8g}"),
                 "language": "zh-TW"}
         return self.so.request("POST", "/api/analysis-review", deadline=S.REVIEW_DEADLINE_S, json=body)
+
+    def review(self, symbol: str, side: str, stop: float, tps: list, tf: str = "15M") -> dict:
+        """分析驗算 on See One's own price basis: See One's market price can sit apart from Toobit's, so the Toobit
+        stop/TPs are scaled by the See One/Toobit price ratio to keep the same R geometry."""
+        px = self.tb.price(S.to_toobit(symbol))
+        risk = max(abs(px - stop), px * MIN_STOP_PCT)
+        cached = self.basis.get(symbol)
+        ratio = cached[0] if cached and time.time() - cached[1] < BASIS_TTL_S else 1.0
+        rv = None
+        for _ in range(3):
+            try:
+                rv = self._review(symbol, side, stop * ratio, [p * ratio for p in tps], tf)
+            except requests.HTTPError as e:
+                if e.response is None or e.response.status_code != 400 or "進場價" not in e.response.text:
+                    raise
+                wide = (px * 1e-3, [px * 1e3]) if side == "LONG" else (px * 1e3, [px * 1e-3])
+                ratio = self._set_basis(symbol, self._review(symbol, side, wide[0], wide[1], tf), px) or ratio
+                continue
+            seeone_px = float((rv.get("geometry") or {}).get("currentPrice") or 0)
+            if not seeone_px or abs(seeone_px - px * ratio) <= BASIS_TOL_R * risk * ratio:
+                if seeone_px:
+                    self._set_basis(symbol, rv, px)
+                return rv
+            ratio = self._set_basis(symbol, rv, px)
+        if rv is None:
+            raise requests.HTTPError(f"{symbol} 分析驗算無法對齊 See One 價格基準")
+        return rv
+
+    def _set_basis(self, symbol: str, rv: dict, px: float) -> float | None:
+        sp = float((rv.get("geometry") or {}).get("currentPrice") or 0)
+        if not sp or not px:
+            return None
+        ratio = sp / px
+        prev = self.basis.get(symbol)
+        self.basis[symbol] = (ratio, time.time())
+        if abs(ratio - 1) >= BASIS_LOG_PCT and (not prev or abs(prev[0] - ratio) >= BASIS_LOG_PCT):
+            self.log("SEEONE_BASIS", symbol=symbol, seeone_price=sp, toobit_price=px, gap_pct=round((ratio - 1) * 100, 2),
+                     note="See One 與 Toobit 價格有落差；分析驗算的止盈/止損已按比例換算到 See One 價格，維持相同 R 距離")
+        return ratio
 
     # ------------------------------------------------------------------ calibration of 分析驗算 probabilities
     def calibrated(self) -> bool:
