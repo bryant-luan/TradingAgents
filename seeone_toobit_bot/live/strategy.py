@@ -43,6 +43,9 @@ TRAIL_GAP_R = 1.2               # beyond the ladder, trail the stop this far beh
 TRAIL_STEP_R = 0.25
 DAY_LOCK_TRIGGER_PCT = 0.05     # day gain at which the daily profit lock arms
 DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
+POST_LOCK_MAX_OPEN = 1          # after the lock arms: positions opened since then that may be open at once
+POST_LOCK_SCORE_MARGIN = 20     # official signals need this much above the effective min score after the lock
+POST_LOCK_HTF_MIN = 0.5         # and the 1h/4h direction clearly with the trade
 PROFIT_RESERVE = 0.5            # share of gains above principal kept out of position sizing
 
 

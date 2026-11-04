@@ -520,6 +520,25 @@ class Bot:
         out["SL"] = round(-sum(tp["qty"] for tp in plan) * mult * abs(price - float(sig["stop_price"])), 2)
         return out
 
+    def lock_pass(self, sig: dict, ev: dict, src: str, htf: float | None, sgn: int) -> tuple[bool, str]:
+        """After the daily profit lock arms, only strong, trend-aligned signals get through, one at a time."""
+        armed_ts = self.st.get("day_lock_ts", 0)
+        post = [t for t in self.st["trades"].values() if t["opened_ts"] >= armed_ts]
+        if len(post) >= S.POST_LOCK_MAX_OPEN:
+            return False, f"鎖利後已有 {len(post)} 筆放行單持倉中"
+        if src == SELF_SOURCE:
+            if ev.get("tier") != "HIGH":
+                return False, "自選驗算未達高信心標準"
+            quality = "自選驗算達高信心標準"
+        else:
+            need = self.learner.p.get("effective_min_score", S.MIN_SCORE) + S.POST_LOCK_SCORE_MARGIN
+            if ev["score"] < need:
+                return False, f"分數 {ev['score']:.1f} < {need:.1f}"
+            quality = f"分數 {ev['score']:.1f} ≥ {need:.1f}"
+        if htf is None or htf * sgn < S.POST_LOCK_HTF_MIN:
+            return False, f"1h/4h 順方向 {0 if htf is None else htf * sgn:+.1f} < {S.POST_LOCK_HTF_MIN:+.1f}"
+        return True, f"{quality}，1h/4h 順方向 {htf * sgn:+.1f}，以一般 3% 風險進場"
+
     def note_skip(self, sig: dict, why: str):
         key = sig["id"]
         kind = re.sub(r"[-+]?\d+(\.\d+)?", "#", why)
@@ -556,7 +575,7 @@ class Bot:
                 today = sum(c["pnl"] or 0 for c in self.st["closed"] if c["closed_at"].startswith(day))
             self.st["day_start_balance"] = bal - today
             self.st["day_peak_balance"] = bal
-            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity"):
+            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity", "day_lock_ts"):
                 self.st.pop(k, None)
         self.st.setdefault("principal", equity)
         # Profit lock tracks realized balance only, so a floating profit that is later given back can't trip it.
@@ -564,9 +583,11 @@ class Bot:
         peak = self.st["day_peak_balance"] = max(self.st["day_peak_balance"], bal)
         if peak - start >= start * S.DAY_LOCK_TRIGGER_PCT and not self.st.get("day_lock_armed"):
             self.st["day_lock_armed"] = True
+            self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
-                      reason=f"當日已實現獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，今日停用高信心放大單；"
-                             f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則停止開新倉")
+                      reason=f"當日已實現獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，鎖利：一般訊號停止開倉，"
+                             f"只放行高品質且順 1h/4h 大勢的訊號 (3% 風險、同時最多 {S.POST_LOCK_MAX_OPEN} 筆)；"
+                             f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則全部停止開新倉")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
         if self.st.get("day_lock_armed") and bal < floor:
             if not self.st.get("day_lock_hit"):
@@ -661,6 +682,12 @@ class Bot:
             if time.time() - last < S.SAME_SIDE_GAP_MIN * 60:
                 self.note_skip(sig, f"同方向 {S.SAME_SIDE_GAP_MIN} 分鐘內已開倉，分散進場時間")
                 continue
+            if self.st.get("day_lock_armed"):
+                ok, why = self.lock_pass(sig, ev, src, htf, sgn)
+                if not ok:
+                    self.note_skip(sig, f"當日已鎖利 {S.DAY_LOCK_TRIGGER_PCT:.0%}，只放行好訊號: {why}")
+                    continue
+                ev["reasons"] = ev["reasons"] + [f"鎖利後放行: {why}"]
             try:
                 self.open_trade(sig, ev, src, reg, size_eq)
             except ToobitError as e:
