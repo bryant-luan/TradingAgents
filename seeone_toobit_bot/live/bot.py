@@ -32,7 +32,6 @@ SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 CALIB_FILE = ROOT / "logs" / "self_calib.json"
 SELF_SOURCE = "自選驗算"
 LOOP_SECONDS = 30
-DAILY_LOSS_PCT = 0.12
 SLIPPAGE_BUFFER = 0.0003
 MAKER_TRIES = 6
 MAKER_WAIT_S = 30
@@ -197,7 +196,7 @@ class Bot:
         cur_r = (px - entry) * sgn / dist
         if cur_r > tr.get("mfe_r", 0.0):
             tr["mfe_r"] = round(cur_r, 3)
-        lk = S.lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
+        lk = S.lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit") or self.st.get("day_done")))
         if lk is None or lk <= tr.get("lock_r", -1):
             return
         buf = tr.get("be_buffer", 0.0012)
@@ -272,6 +271,14 @@ class Bot:
         if tier == "HIGH":
             risk_pct = S.HIGH_RISK_PCT
             margin_cap = S.HIGH_MARGIN_CAP_PCT
+        room_pct = getattr(self, "day_room", equity * risk_pct) / equity
+        if room_pct < S.MIN_RISK_PCT:
+            self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
+                                f"已計入持倉到止損的風險)，不足 {S.MIN_RISK_PCT:.0%} 最低風險")
+            return False
+        if room_pct < risk_pct:
+            ev["reasons"] = ev["reasons"] + [f"風險 {risk_pct:.0%} 受每日止損剩餘額度限制為 {room_pct:.1%}"]
+            risk_pct = room_pct
         sz = S.size_position(equity, price, stop, spec, risk_pct, margin_cap)
         if not sz:
             self.note_skip(sig, f"無法以至少 {S.MIN_RISK_PCT:.0%} 風險建立部位 (槓桿/保證金上限或最小下單量)，不開小倉")
@@ -325,6 +332,8 @@ class Bot:
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=order.get("orderId"),
                   tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **entry_info)
+        if hasattr(self, "day_room"):
+            self.day_room -= self.st["trades"][tid]["risk_usdt"]
         return True
 
     def _entry_ok(self, px: float, sig: dict, stop: float) -> bool:
@@ -541,6 +550,15 @@ class Bot:
             return False, f"1h/4h 順方向 {0 if htf is None else htf * sgn:+.1f} < {S.POST_LOCK_HTF_MIN:+.1f}"
         return True, f"{quality}，1h/4h 順方向 {htf * sgn:+.1f}，以一般 3% 風險進場"
 
+    def open_risk(self) -> float:
+        specs = self.tb.specs()
+        total = 0.0
+        for t in self.st["trades"].values():
+            sgn = 1 if t["side"] == "LONG" else -1
+            mult = float(specs.get(t["tsym"], {}).get("multiplier", 0))
+            total += t["contracts"] * mult * max(0.0, (t["entry"] - t["stop"]) * sgn)
+        return total
+
     def pre_move(self, sig: dict) -> float | None:
         if sig["id"] not in self.pre_moves:
             try:
@@ -588,7 +606,7 @@ class Bot:
                 today = sum(c["pnl"] or 0 for c in self.st["closed"] if c["closed_at"].startswith(day))
             self.st["day_start_balance"] = bal - today
             self.st["day_peak_balance"] = bal
-            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity", "day_lock_ts"):
+            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_done", "day_peak_equity", "day_lock_ts"):
                 self.st.pop(k, None)
         self.st.setdefault("principal", equity)
         # Profit lock tracks realized balance only, so a floating profit that is later given back can't trip it.
@@ -609,12 +627,21 @@ class Bot:
                           balance=round(bal, 2), floor=round(floor, 2),
                           reason="當日已實現獲利回吐過半，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
             return
-        if equity < self.st["day_start_equity"] * (1 - DAILY_LOSS_PCT):
+        if bal - start >= start * S.DAY_DONE_PCT:
+            if not self.st.get("day_done"):
+                self.st["day_done"] = True
+                log_event("DAY_TARGET_DONE", day_start_balance=round(start, 2), balance=round(bal, 2),
+                          reason=f"當日已實現獲利達 {S.DAY_DONE_PCT:.0%} (目標 {S.DAY_LOCK_TRIGGER_PCT:.0%}~"
+                                 f"{S.DAY_DONE_PCT:.0%})，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
+            return
+        loss_floor = self.st["day_start_equity"] * (1 - S.DAILY_STOP_PCT)
+        if equity < loss_floor:
             if not self.st.get("halted"):
                 self.st["halted"] = True
-                log_event("HALT", reason=f"當日虧損達 {DAILY_LOSS_PCT:.0%}，今日停止開新倉",
+                log_event("HALT", reason=f"當日虧損達 {S.DAILY_STOP_PCT:.0%}，今日停止開新倉",
                           day_start_equity=self.st["day_start_equity"], equity=equity)
             return
+        self.day_room = equity - loss_floor - self.open_risk()
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
             return
         if len(self.st["trades"]) >= S.MAX_POSITIONS:
@@ -736,8 +763,8 @@ class Bot:
         self.shadow.optimize(force=True)
         log_event("START", dry_run=self.dry, seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
-                  daily_loss_pct=DAILY_LOSS_PCT, lock_ladder=S.LOCK_LADDER, trail_gap_r=S.TRAIL_GAP_R,
-                  day_lock=[S.DAY_LOCK_TRIGGER_PCT, S.DAY_LOCK_GIVEBACK], profit_reserve=S.PROFIT_RESERVE,
+                  daily_stop_pct=S.DAILY_STOP_PCT, lock_ladder=S.LOCK_LADDER, trail_gap_r=S.TRAIL_GAP_R,
+                  day_target=[S.DAY_LOCK_TRIGGER_PCT, S.DAY_DONE_PCT], day_lock_giveback=S.DAY_LOCK_GIVEBACK, profit_reserve=S.PROFIT_RESERVE,
                   principal=self.st.get("principal"), learned=self.learner.summary())
         while True:
             try:
