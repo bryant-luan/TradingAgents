@@ -33,7 +33,6 @@ MAX_PER_SCAN = 3
 # high trade quality, 1H agreement, and the coin is on the strength board or potential board top 10.
 HIGH_MIN_EDGE, HIGH_MIN_PROB, HIGH_MIN_QUALITY, HIGH_MIN_1H = 35.0, 68.0, 75.0, 60.0
 EXT_BARS = 8                     # 2h of 15m bars
-HIGH_MAX_EXT_R = 2.5             # high tier: coin must not already have run this far (in stop distances) in the trade direction
 BTC_COUNTER_ATR = 2.0            # BTC off its 2h extreme against the trade by this many ATRs = market turning
 EXT_TAG_R = 2.0
 MIN_QUALITY = 60.0
@@ -70,6 +69,17 @@ def atr(symbol: str, n: int = 14) -> tuple[float, list] | None:
         h, l, pc = float(cur[2]), float(cur[3]), float(prev[4])
         trs.append(max(h - l, abs(h - pc), abs(l - pc)))
     return sum(trs) / len(trs), rows
+
+
+def move_2h(symbol: str) -> dict | None:
+    """Price move over the last 2h, in percent and in self-signal stop distances (1.5×ATR15m, floor 0.8%)."""
+    a = atr(symbol)
+    if not a:
+        return None
+    atr_v, rows = a
+    price, start = float(rows[-1][4]), float(rows[-EXT_BARS][1])
+    dist = max(ATR_MULT * atr_v, MIN_STOP_PCT * price)
+    return {"pct": round((price - start) / start * 100, 2), "r": round((price - start) / dist, 2)}
 
 
 class SelfScanner:
@@ -401,7 +411,7 @@ class SelfScanner:
             factors["btc:counter"] = 0.0
         high = (edge >= HIGH_MIN_EDGE and prob >= HIGH_MIN_PROB and quality >= HIGH_MIN_QUALITY
                 and p1h >= HIGH_MIN_1H and on_board and self.learner.high_tier_on()
-                and ext < HIGH_MAX_EXT_R and btc_against < BTC_COUNTER_ATR)
+                and ext < S.MAX_EXT_R and btc_against < BTC_COUNTER_ATR)
         if high:
             factors["tier:high"] = 0.0
         adj = self.learner.p.get("factor_adj", {})

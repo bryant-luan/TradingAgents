@@ -28,6 +28,7 @@ MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
+MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
 MAX_SAME_SIDE = 2               # open positions on one side
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price

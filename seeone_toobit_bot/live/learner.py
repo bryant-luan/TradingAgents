@@ -146,6 +146,9 @@ class Learner:
             htf = tr.get("htf_at_entry")
             if htf is not None and htf * sgn < 0:
                 diagnosis.append(f"進場時 1h/4h 大方向 {htf:+.1f}，屬逆大勢交易")
+            ext = tr.get("ext_r_at_entry")
+            if ext is not None and ext >= 2.0:
+                diagnosis.append(f"進場前 2 小時本幣已順方向走 {ext:+.1f}R，追在走勢末端")
             if tr.get("same_side_at_entry"):
                 diagnosis.append(f"進場時已有 {tr['same_side_at_entry']} 筆同方向持倉，風險集中")
             negs = [f"{k}({v:+})" for k, v in factors.items() if v < 0]

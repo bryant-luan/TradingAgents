@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .learner import Learner
 from .shadow import Shadow
-from .selfsignal import SelfScanner
+from .selfsignal import SelfScanner, move_2h
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -317,7 +317,7 @@ class Bot:
             "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
             "tier": tier, "m15_at_entry": getattr(self, "m15", None),
-            "htf_at_entry": getattr(self, "htf", None),
+            "htf_at_entry": getattr(self, "htf", None), "ext_r_at_entry": getattr(self, "ext", None),
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
@@ -657,6 +657,7 @@ class Bot:
         m15_max = self.learner.p.get("m15_max", S.M15_MAX_DEFAULT)
         htf = self.htf = S.htf_score(dirs)
         htf_min = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
+        moves = {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
                 break
@@ -674,6 +675,19 @@ class Bot:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                     f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
                 continue
+            tsym = S.to_toobit(sig["symbol"])
+            if tsym not in moves:
+                try:
+                    moves[tsym] = move_2h(tsym)
+                except Exception:
+                    moves[tsym] = None
+            mv = moves[tsym]
+            if mv and mv["r"] * sgn >= S.MAX_EXT_R:
+                self.note_skip(sig, f"{sig['symbol']} 近 2 小時已{'漲' if mv['pct'] > 0 else '跌'} "
+                                    f"{abs(mv['pct']):.1f}% ({mv['r'] * sgn:+.1f}R ≥ {S.MAX_EXT_R}R)，"
+                                    f"{'做多' if sgn > 0 else '做空'}會追在走勢末端，等回檔再進")
+                continue
+            self.ext = mv["r"] * sgn if mv else None
             same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
             if len(same) >= S.MAX_SAME_SIDE:
                 self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
