@@ -616,7 +616,7 @@ class Bot:
             scored.append((ev["score"], sig, src, ev))
 
         try:
-            for f in self.selfscan.scan(reg, rhits, held_syms, specs):
+            for f in self.selfscan.scan(reg, rhits, held_syms, specs, dirs.get("15m")):
                 if f["sig"]["id"] not in self.st["traded_ids"]:
                     scored.append((f["ev"]["score"], f["sig"], SELF_SOURCE, f["ev"]))
         except Exception as e:
@@ -632,6 +632,7 @@ class Bot:
         principal = self.st["principal"]
         size_eq = equity - S.PROFIT_RESERVE * max(0.0, equity - principal)
         m15 = self.m15 = dirs.get("15m") or 0.0
+        m15_max = self.learner.p.get("m15_max", S.M15_MAX_DEFAULT)
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
                 break
@@ -641,9 +642,9 @@ class Bot:
                 self.note_skip(sig, f"{sig['symbol']} 近期虧損冷卻中 (至台北 "
                                     f"{datetime.fromtimestamp(cd + 8 * 3600, timezone.utc):%H:%M})")
                 continue
-            if m15 * sgn >= S.EXHAUSTION_15M:
-                self.note_skip(sig, f"See One 15m 方向 {m15:+.1f} 已極端 (≥{S.EXHAUSTION_15M})，"
-                                    f"順勢{'做多' if sgn > 0 else '做空'}易追在末端，等回檔")
+            if m15 * sgn >= m15_max:
+                self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
+                                    f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
             same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
             if len(same) >= S.MAX_SAME_SIDE:
