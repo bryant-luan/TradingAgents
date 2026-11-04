@@ -43,22 +43,12 @@ HIGH_BE_TRIGGER_R = 0.6         # high-conviction trades risk 10%, so they go ri
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
 TRAIL_GAP_R = 1.2               # beyond the ladder, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
-DAY_LOCK_TRIGGER_PCT = 0.03     # daily target reached: profit lock arms, only strong signals pass
-DAY_DONE_PCT = 0.05             # top of the daily target: no new entries for the rest of the day
-DAILY_STOP_PCT = 0.06           # day loss (realized + floating, incl. open risk to stops) that ends the day
-DAY_RULES_FROM = "2026-11-05"   # UTC day the 3-5% target rules start; earlier days keep the old 5% lock / 12% stop
-OLD_DAY_RULES = {"lock": 0.05, "done": None, "stop": 0.12, "cap_room": False}
+DAY_LOCK_TRIGGER_PCT = 0.05     # day realized gain at which only high-conviction signals may open
+DAILY_STOP_PCT = 0.12           # day loss (realized + floating, incl. open risk to stops) that ends the day
 DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
 POST_LOCK_MAX_OPEN = 1          # after the lock arms: positions opened since then that may be open at once
-POST_LOCK_SCORE_MARGIN = 20     # official signals need this much above the effective min score after the lock
 POST_LOCK_HTF_MIN = 0.5         # and the 1h/4h direction clearly with the trade
 PROFIT_RESERVE = 0.5            # share of gains above principal kept out of position sizing
-
-
-def day_rules(day: str) -> dict:
-    if day < DAY_RULES_FROM:
-        return OLD_DAY_RULES
-    return {"lock": DAY_LOCK_TRIGGER_PCT, "done": DAY_DONE_PCT, "stop": DAILY_STOP_PCT, "cap_room": True}
 
 
 def htf_score(dirs: dict) -> float | None:
