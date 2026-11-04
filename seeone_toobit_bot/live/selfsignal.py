@@ -32,6 +32,10 @@ MAX_PER_SCAN = 3
 # High-conviction tier = setups like the CLANKER trade: strong two-sided edge, high de-biased probability,
 # high trade quality, 1H agreement, and the coin is on the strength board or potential board top 10.
 HIGH_MIN_EDGE, HIGH_MIN_PROB, HIGH_MIN_QUALITY, HIGH_MIN_1H = 35.0, 68.0, 75.0, 60.0
+EXT_BARS = 8                     # 2h of 15m bars
+HIGH_MAX_EXT_R = 2.5             # high tier: coin must not already have run this far (in stop distances) in the trade direction
+BTC_COUNTER_ATR = 2.0            # BTC off its 2h extreme against the trade by this many ATRs = market turning
+EXT_TAG_R = 2.0
 MIN_QUALITY = 60.0
 MIN_EV_R = 0.20
 CONFIRM_MIN_PROB = 50.0
@@ -268,8 +272,20 @@ class SelfScanner:
         if dist / price > MAX_STOP_PCT:
             return None
         sgn = 1 if side == "LONG" else -1
+        move = (price - float(rows[-EXT_BARS][1])) / dist
         return {"price": price, "atr": atr_v, "stop": price - sgn * dist,
-                "tps": [price + sgn * dist * r for r in TP_R], "dist": dist}
+                "tps": [price + sgn * dist * r for r in TP_R], "dist": dist, "move_r": round(move, 2)}
+
+    def btc_counter(self) -> dict:
+        """How far BTC has moved off its recent low and high, in BTC 15m ATRs."""
+        a = atr("BTC-SWAP-USDT")
+        if not a:
+            return {"up": 0.0, "down": 0.0}
+        atr_v, rows = a
+        recent = rows[-EXT_BARS:]
+        last = float(recent[-1][4])
+        lo, hi = min(float(r[3]) for r in recent), max(float(r[2]) for r in recent)
+        return {"up": round((last - lo) / atr_v, 2), "down": round((hi - last) / atr_v, 2)}
 
     def expected_r(self, rv: dict, split: list, sl_pct: float, bias: float = 0.0) -> float:
         probs = [max(0.0, t["estimatedHitProbability"] - bias) / 100 for t in rv["geometry"]["targets"]]
@@ -289,6 +305,10 @@ class SelfScanner:
         self.resolve()
         split = self.learner.p.get("tp_split") or S.TP_SPLIT
         min_prob = self.min_prob()
+        try:
+            self.btc = self.btc_counter()
+        except Exception:
+            self.btc = {"up": 0.0, "down": 0.0}
         found, reviewed, by_symbol = [], 0, {}
         for c in self.universe(regime[1], rhits):
             by_symbol.setdefault(c["symbol"], c)
@@ -372,8 +392,16 @@ class SelfScanner:
                 factors[f"rf:{f['key']}:lo"] = 0.0
         on_board = any(t.startswith("強勢榜") or (t.startswith("潛力榜#") and int(t[4:].split("(")[0]) <= 10)
                        for t in c["tags"])
+        ext = pl["move_r"] * (1 if side == "LONG" else -1)
+        btc = getattr(self, "btc", {"up": 0.0, "down": 0.0})
+        btc_against = btc["down"] if side == "LONG" else btc["up"]
+        if ext >= EXT_TAG_R:
+            factors["ext:hi"] = 0.0
+        if btc_against >= BTC_COUNTER_ATR:
+            factors["btc:counter"] = 0.0
         high = (edge >= HIGH_MIN_EDGE and prob >= HIGH_MIN_PROB and quality >= HIGH_MIN_QUALITY
-                and p1h >= HIGH_MIN_1H and on_board and self.learner.p.get("high_tier_enabled", True))
+                and p1h >= HIGH_MIN_1H and on_board and self.learner.high_tier_on()
+                and ext < HIGH_MAX_EXT_R and btc_against < BTC_COUNTER_ATR)
         if high:
             factors["tier:high"] = 0.0
         adj = self.learner.p.get("factor_adj", {})
@@ -387,6 +415,7 @@ class SelfScanner:
             "各 TP 預估命中率: " + " ".join(f"TP{i + 1}({TP_R[i]}R)={t['estimatedHitProbability']}%" for i, t in enumerate(targets)),
             f"期望值 {ev_r:+.2f}R (已扣手續費)，止損 {pl['dist'] / pl['price']:.2%} (1.5×ATR15m)",
             f"大盤 {regime[1]} {regime[0]:+.2f}",
+            f"本幣近 2 小時順方向已走 {ext:+.2f}R；BTC 逆方向反彈/回落 {btc_against:.1f} ATR",
             "強項因子: " + ("、".join(strong) if strong else "無"),
             f"See One 結論: {rv.get('conclusion')}",
         ]

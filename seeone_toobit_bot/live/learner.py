@@ -9,6 +9,7 @@ MIN_SCORE_CAP, MIN_SCORE_FLOOR = 70, 48
 LOSS_SCORE_STEP, WIN_SCORE_STEP = 2, 1
 LOSS_COOLDOWN_H = 12
 STREAK_PAUSE_LOSSES, STREAK_PAUSE_H = 3, 6
+HIGH_OFF_H, HIGH_REARM_WINS = 24, 2
 FACTOR_MIN_N = 3
 FACTOR_GAIN, FACTOR_ADJ_MIN, FACTOR_ADJ_MAX = 8.0, -15.0, 10.0
 CHASE_R = 0.25
@@ -48,6 +49,23 @@ class Learner:
         own = self.p["min_score"]
         eff = own if cal is None else round((own + cal) / 2)
         self.p["effective_min_score"] = max(MIN_SCORE_FLOOR, min(MIN_SCORE_CAP, eff))
+
+    def high_tier_on(self) -> bool:
+        if self.p.get("high_tier_enabled", True):
+            return True
+        off_at = self.p.setdefault("high_disabled_at", time.time())
+        if time.time() - off_at >= HIGH_OFF_H * 3600:
+            self._rearm_high(f"高信心單暫停已滿 {HIGH_OFF_H} 小時")
+            return True
+        return False
+
+    def _rearm_high(self, why: str):
+        self.p["high_tier_enabled"] = True
+        self.p["high_consec_losses"] = 0
+        self.p.pop("high_disabled_at", None)
+        self.p.pop("wins_since_high_off", None)
+        self.save()
+        self.log("HIGH_TIER_REARM", reason=why)
 
     def save(self):
         now = time.time()
@@ -98,10 +116,14 @@ class Learner:
             p["high_consec_losses"] = p.get("high_consec_losses", 0) + 1 if loss else 0 if win else p.get("high_consec_losses", 0)
             if p["high_consec_losses"] >= 2 and p.get("high_tier_enabled", True):
                 p["high_tier_enabled"] = False
-                changes.append("高信心單連續虧損 2 筆，暫停放大部位 (恢復一般風險)")
-            elif win and not p.get("high_tier_enabled", True):
-                p["high_tier_enabled"] = True
-                changes.append("高信心單獲利，恢復放大部位")
+                p["high_disabled_at"] = time.time()
+                p["wins_since_high_off"] = 0
+                changes.append(f"高信心單連續虧損 2 筆，暫停放大部位 {HIGH_OFF_H} 小時或待一般單連贏 {HIGH_REARM_WINS} 筆")
+        if not p.get("high_tier_enabled", True):
+            p["wins_since_high_off"] = p.get("wins_since_high_off", 0) + 1 if win else 0 if loss else p.get("wins_since_high_off", 0)
+            if p["wins_since_high_off"] >= HIGH_REARM_WINS:
+                self._rearm_high(f"高信心單暫停後連贏 {HIGH_REARM_WINS} 筆")
+                changes.append(f"連贏 {HIGH_REARM_WINS} 筆，恢復高信心放大部位")
         if loss:
             p["losses"] += 1
             p["consec_losses"] += 1
@@ -112,9 +134,11 @@ class Learner:
             if entry_r > CHASE_R:
                 diagnosis.append(f"進場已在 {entry_r:+.2f}R，偏追價")
                 p["chased_losses"] += 1
-            if not tps_filled and held_min < 30:
+            if not tps_filled and "重評" in (reason or ""):
+                diagnosis.append(f"{held_min:.0f} 分鐘內分析驗算重評轉向，提前出場 (未打到止損，減少虧損)")
+            elif not tps_filled and held_min < 30:
                 diagnosis.append(f"{held_min:.0f} 分鐘內直接止損，進場時機/止損過近")
-            if not tps_filled and held_min >= 30:
+            elif not tps_filled:
                 diagnosis.append("未達 TP1 即止損，訊號方向判斷失準")
             m15, sgn = tr.get("m15_at_entry"), 1 if tr["side"] == "LONG" else -1
             if m15 is not None and m15 * sgn >= self.p.get("m15_max", S.M15_MAX_DEFAULT):
