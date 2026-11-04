@@ -48,6 +48,9 @@ CAL_RESOLVE_MAX_H = 24
 M15_BUCKETS = [(-99.0, -1.0), (-1.0, 1.0), (1.0, 2.5), (2.5, 99.0)]
 M15_MIN_N = 20
 M15_PASS = 0.50
+# Average of the 1h and 4h See One direction scores, signed to the trade side; the entry floor is the
+# bottom of the lowest bucket that passes, with the same sample and pass-rate rules.
+HTF_BUCKETS = [(-99.0, -0.5), (-0.5, 0.5), (0.5, 99.0)]
 
 
 def atr(symbol: str, n: int = 14) -> tuple[float, list] | None:
@@ -102,10 +105,12 @@ class SelfScanner:
         return self.learner.p.get("self_min_prob", DEFAULT_MIN_PROB)
 
     def record(self, symbol: str, tsym: str, side: str, entry: float, stop: float, tp1: float, prob: float,
-               m15: float | None = None):
+               m15: float | None = None, htf: float | None = None):
+        sgn = 1 if side == "LONG" else -1
         self.d["pending"].append({"symbol": symbol, "tsym": tsym, "side": side, "entry": entry, "stop": stop,
                                   "tp1": tp1, "prob": prob, "ts": time.time(),
-                                  "m15": None if m15 is None else round(m15 * (1 if side == "LONG" else -1), 2)})
+                                  "m15": None if m15 is None else round(m15 * sgn, 2),
+                                  "htf": None if htf is None else round(htf * sgn, 2)})
 
     def resolve(self):
         still, new = [], 0
@@ -165,6 +170,25 @@ class SelfScanner:
                  min_prob_old=old, min_prob_new=self.min_prob(),
                  note="分析驗算預估機率 vs 實際先到 TP1 的比例；樣本足夠時自動調整最低機率門檻")
         self.calibrate_m15(rows)
+        self.calibrate_htf(rows)
+
+    def calibrate_htf(self, rows: list):
+        table = []
+        for lo, hi in HTF_BUCKETS:
+            b = [r["hit"] for r in rows if r.get("htf") is not None and lo <= r["htf"] < hi]
+            table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
+        if any(n < M15_MIN_N for _, _, n, _ in table[:2]):
+            return
+        passing = [lo for lo, _, n, rate in table if n >= M15_MIN_N and rate >= M15_PASS]
+        floor = min(passing) if passing else HTF_BUCKETS[-1][0]
+        old = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
+        self.learner.p["htf_min"] = floor
+        self.learner.save()
+        if floor != old or not self.learner.p.get("htf_logged"):
+            self.learner.p["htf_logged"] = True
+            self.log("SELF_HTF_CALIBRATE", htf_min_old=old, htf_min_new=floor,
+                     buckets=[{"htf_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
+                     note="1h/4h 大方向與交易方向相反時先到 TP1 比例偏低；自動設定可進場的大週期方向下限")
 
     def calibrate_m15(self, rows: list):
         table = []
@@ -230,7 +254,8 @@ class SelfScanner:
         fee_r = (S.MAKER_FEE * (1 + p1) + S.TAKER_FEE * (1 - p1)) / sl_pct
         return round(ev - fee_r, 3)
 
-    def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None) -> list:
+    def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
+             htf: float | None = None) -> list:
         """Review every candidate both LONG and SHORT on mirrored geometry. 分析驗算 is direction-biased
         (mirrored 1R probabilities sum to well over 100%), so each side is de-biased by half the excess and
         a trade needs a clear edge over the opposite side, not just a high raw probability."""
@@ -272,7 +297,7 @@ class SelfScanner:
             prob = round(raw[side] - bias, 1)
             edge = round(raw[side] - raw[other], 1)
             for sd, plx in (("LONG", pl_long), ("SHORT", pl_short)):
-                self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15)
+                self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf)
             if side == "LONG" and regime[0] < -S.REGIME_VETO or side == "SHORT" and regime[0] > S.REGIME_VETO:
                 continue
             r = rv[side]

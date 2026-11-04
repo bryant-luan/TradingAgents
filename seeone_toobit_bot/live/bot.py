@@ -317,6 +317,7 @@ class Bot:
             "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
             "tier": tier, "m15_at_entry": getattr(self, "m15", None),
+            "htf_at_entry": getattr(self, "htf", None),
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
@@ -616,7 +617,7 @@ class Bot:
             scored.append((ev["score"], sig, src, ev))
 
         try:
-            for f in self.selfscan.scan(reg, rhits, held_syms, specs, dirs.get("15m")):
+            for f in self.selfscan.scan(reg, rhits, held_syms, specs, dirs.get("15m"), S.htf_score(dirs)):
                 if f["sig"]["id"] not in self.st["traded_ids"]:
                     scored.append((f["ev"]["score"], f["sig"], SELF_SOURCE, f["ev"]))
         except Exception as e:
@@ -633,6 +634,8 @@ class Bot:
         size_eq = equity - S.PROFIT_RESERVE * max(0.0, equity - principal)
         m15 = self.m15 = dirs.get("15m") or 0.0
         m15_max = self.learner.p.get("m15_max", S.M15_MAX_DEFAULT)
+        htf = self.htf = S.htf_score(dirs)
+        htf_min = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
                 break
@@ -645,6 +648,10 @@ class Bot:
             if m15 * sgn >= m15_max:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                     f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
+                continue
+            if htf is not None and htf * sgn < htf_min:
+                self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
+                                    f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
                 continue
             same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
             if len(same) >= S.MAX_SAME_SIDE:

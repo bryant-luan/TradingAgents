@@ -27,6 +27,7 @@ HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 M15_MAX_DEFAULT = 1.0           # cap on the 15m See One direction score in the trade's direction; recalibrated live
+HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
 MAX_SAME_SIDE = 2               # open positions on one side
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
@@ -43,6 +44,11 @@ TRAIL_STEP_R = 0.25
 DAY_LOCK_TRIGGER_PCT = 0.05     # day gain at which the daily profit lock arms
 DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
 PROFIT_RESERVE = 0.5            # share of gains above principal kept out of position sizing
+
+
+def htf_score(dirs: dict) -> float | None:
+    vals = [dirs.get(k) for k in ("1h", "4h") if dirs.get(k) is not None]
+    return round(sum(vals) / len(vals), 2) if vals else None
 
 
 def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:
