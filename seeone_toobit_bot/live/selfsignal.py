@@ -51,6 +51,9 @@ M15_PASS = 0.50
 # Average of the 1h and 4h See One direction scores, signed to the trade side; the entry floor is the
 # bottom of the lowest bucket that passes, with the same sample and pass-rate rules.
 HTF_BUCKETS = [(-99.0, -0.5), (-0.5, 0.5), (0.5, 99.0)]
+# Reviews taken in the same scan all ride the same market move, so sample counts overstate the evidence.
+# The gates keep their defaults until the records span this many distinct hours.
+GATE_MIN_HOURS = 24
 
 
 def atr(symbol: str, n: int = 14) -> tuple[float, list] | None:
@@ -172,7 +175,20 @@ class SelfScanner:
         self.calibrate_m15(rows)
         self.calibrate_htf(rows)
 
+    def _gate_ready(self, rows: list, key: str, param: str, default: float) -> bool:
+        hours = len({int(r["ts"] // 3600) for r in rows if r.get(key) is not None})
+        if hours >= GATE_MIN_HOURS:
+            return True
+        if self.learner.p.get(param) != default:
+            self.learner.p[param] = default
+            self.learner.save()
+            self.log("SELF_GATE_DEFAULT", param=param, value=default, hours=hours,
+                     note=f"樣本只涵蓋 {hours} 個小時 (< {GATE_MIN_HOURS})，同一時段的評估高度相關，先用預設值")
+        return False
+
     def calibrate_htf(self, rows: list):
+        if not self._gate_ready(rows, "htf", "htf_min", S.HTF_MIN_DEFAULT):
+            return
         table = []
         for lo, hi in HTF_BUCKETS:
             b = [r["hit"] for r in rows if r.get("htf") is not None and lo <= r["htf"] < hi]
@@ -194,6 +210,8 @@ class SelfScanner:
                      note="1h/4h 大方向與交易方向相反時先到 TP1 比例偏低；自動設定可進場的大週期方向下限")
 
     def calibrate_m15(self, rows: list):
+        if not self._gate_ready(rows, "m15", "m15_max", S.M15_MAX_DEFAULT):
+            return
         table = []
         for lo, hi in M15_BUCKETS:
             b = [r["hit"] for r in rows if r.get("m15") is not None and lo <= r["m15"] < hi]
