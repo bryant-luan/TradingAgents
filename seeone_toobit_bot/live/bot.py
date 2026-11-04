@@ -271,9 +271,10 @@ class Bot:
         if tier == "HIGH":
             risk_pct = S.HIGH_RISK_PCT
             margin_cap = S.HIGH_MARGIN_CAP_PCT
-        room_pct = getattr(self, "day_room", equity * risk_pct) / equity
+        room = getattr(self, "day_room", None)
+        room_pct = risk_pct if room is None else room / equity
         if room_pct < S.MIN_RISK_PCT:
-            self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
+            self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {self.rules['stop']:.0%}，"
                                 f"已計入持倉到止損的風險)，不足 {S.MIN_RISK_PCT:.0%} 最低風險")
             return False
         if room_pct < risk_pct:
@@ -332,7 +333,7 @@ class Bot:
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=order.get("orderId"),
                   tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **entry_info)
-        if hasattr(self, "day_room"):
+        if getattr(self, "day_room", None) is not None:
             self.day_room -= self.st["trades"][tid]["risk_usdt"]
         return True
 
@@ -610,13 +611,14 @@ class Bot:
                 self.st.pop(k, None)
         self.st.setdefault("principal", equity)
         # Profit lock tracks realized balance only, so a floating profit that is later given back can't trip it.
+        rules = self.rules = S.day_rules(day)
         start = self.st["day_start_balance"]
         peak = self.st["day_peak_balance"] = max(self.st["day_peak_balance"], bal)
-        if peak - start >= start * S.DAY_LOCK_TRIGGER_PCT and not self.st.get("day_lock_armed"):
+        if peak - start >= start * rules["lock"] and not self.st.get("day_lock_armed"):
             self.st["day_lock_armed"] = True
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
-                      reason=f"當日已實現獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，鎖利：一般訊號停止開倉，"
+                      reason=f"當日已實現獲利達 {rules['lock']:.0%}，鎖利：一般訊號停止開倉，"
                              f"只放行高品質且順 1h/4h 大勢的訊號 (3% 風險、同時最多 {S.POST_LOCK_MAX_OPEN} 筆)；"
                              f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則全部停止開新倉")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
@@ -627,21 +629,21 @@ class Bot:
                           balance=round(bal, 2), floor=round(floor, 2),
                           reason="當日已實現獲利回吐過半，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
             return
-        if bal - start >= start * S.DAY_DONE_PCT:
+        if rules["done"] is not None and bal - start >= start * rules["done"]:
             if not self.st.get("day_done"):
                 self.st["day_done"] = True
                 log_event("DAY_TARGET_DONE", day_start_balance=round(start, 2), balance=round(bal, 2),
-                          reason=f"當日已實現獲利達 {S.DAY_DONE_PCT:.0%} (目標 {S.DAY_LOCK_TRIGGER_PCT:.0%}~"
-                                 f"{S.DAY_DONE_PCT:.0%})，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
+                          reason=f"當日已實現獲利達 {rules['done']:.0%} (目標 {rules['lock']:.0%}~"
+                                 f"{rules['done']:.0%})，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
             return
-        loss_floor = self.st["day_start_equity"] * (1 - S.DAILY_STOP_PCT)
+        loss_floor = self.st["day_start_equity"] * (1 - rules["stop"])
         if equity < loss_floor:
             if not self.st.get("halted"):
                 self.st["halted"] = True
-                log_event("HALT", reason=f"當日虧損達 {S.DAILY_STOP_PCT:.0%}，今日停止開新倉",
+                log_event("HALT", reason=f"當日虧損達 {rules['stop']:.0%}，今日停止開新倉",
                           day_start_equity=self.st["day_start_equity"], equity=equity)
             return
-        self.day_room = equity - loss_floor - self.open_risk()
+        self.day_room = equity - loss_floor - self.open_risk() if rules["cap_room"] else None
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
             return
         if len(self.st["trades"]) >= S.MAX_POSITIONS:
@@ -746,7 +748,7 @@ class Bot:
             if self.st.get("day_lock_armed"):
                 ok, why = self.lock_pass(sig, ev, src, htf, sgn)
                 if not ok:
-                    self.note_skip(sig, f"當日已鎖利 {S.DAY_LOCK_TRIGGER_PCT:.0%}，只放行好訊號: {why}")
+                    self.note_skip(sig, f"當日已鎖利 {self.rules['lock']:.0%}，只放行好訊號: {why}")
                     continue
                 ev["reasons"] = ev["reasons"] + [f"鎖利後放行: {why}"]
             try:
