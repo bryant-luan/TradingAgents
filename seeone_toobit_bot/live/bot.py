@@ -79,6 +79,7 @@ class Bot:
             TRADE_LOG = LOG_DIR / "dry_run.jsonl"
         self.tb = Toobit(os.environ["TOOBIT_API_KEY"], os.environ["TOOBIT_API_SECRET"])
         self.so = S.SeeOne(os.environ["SEEONE_RT_SESSION"])
+        self.so.log = log_event
         self.st = load_state()
         self.learner = Learner(LEARN_FILE, INSIGHT_LOG, log_event)
         self.shadow = Shadow(SHADOW_FILE, self.learner, log_event)
@@ -587,7 +588,8 @@ class Bot:
             signals = self.so.signals()
         except Exception as e:
             signals = None
-            log_event("ERROR", where="signals", error=repr(e)[:200], note="See One 暫時無法取得訊號，本輪只管理持倉、不開新倉")
+            if not isinstance(e, S.SeeOneDown):
+                log_event("ERROR", where="signals", error=repr(e)[:200], note="See One 暫時無法取得訊號，本輪只管理持倉、不開新倉")
         sigmap = {s["id"]: s for s in signals} if signals is not None else None
         if signals is not None:
             self.shadow.ingest(signals)

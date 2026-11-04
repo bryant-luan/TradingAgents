@@ -137,15 +137,7 @@ class SelfScanner:
         body = {"symbol": symbol, "side": side, "timeframe": tf, "entry_mode": "MARKET", "entry_price": None,
                 "take_profit_prices": [float(f"{p:.8g}") for p in tps], "stop_price": float(f"{stop:.8g}"),
                 "language": "zh-TW"}
-        for attempt in range(2):
-            try:
-                r = self.so.http.post(S.SEEONE + "/api/analysis-review", json=body, timeout=45)
-                r.raise_for_status()
-                return r.json()
-            except requests.RequestException:
-                if attempt:
-                    raise
-                time.sleep(2)
+        return self.so.request("POST", "/api/analysis-review", deadline=S.REVIEW_DEADLINE_S, json=body)
 
     # ------------------------------------------------------------------ calibration of 分析驗算 probabilities
     def calibrated(self) -> bool:

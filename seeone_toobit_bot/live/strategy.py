@@ -1,14 +1,23 @@
 """See One data + decision logic: market regime, candidate scoring, position sizing."""
-import concurrent.futures
 import math
+import threading
 import time
 from datetime import datetime, timezone
 
 import requests
 
 SEEONE = "https://seeone.club"
-HTTP_DEADLINE_S = 60
-_HTTP_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+# See One normally answers in well under a second (analysis-review included).
+SEEONE_CONNECT_S = 5
+HTTP_DEADLINE_S = 20
+REVIEW_DEADLINE_S = 40
+# After this many failed requests in a row, stop calling See One for the cooldown instead of waiting on every call.
+BREAKER_FAILS = 3
+BREAKER_COOLDOWN_S = 60
+
+
+class SeeOneDown(requests.ConnectionError):
+    pass
 
 # --- tunables -------------------------------------------------------------
 REGIME_WEIGHTS = {"15m": 0.25, "1h": 0.35, "4h": 0.40}
@@ -78,27 +87,84 @@ def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float 
 
 class SeeOne:
     def __init__(self, rt_session: str):
+        self.rt_session = rt_session
+        self.log = lambda event, **kw: None
+        self.fails, self.open_until, self.down_since, self.last_error = 0, 0.0, None, None
+        self.http = None
+        self._new_session()
+
+    def _new_session(self):
+        old = self.http
         self.http = requests.Session()
-        self.http.cookies.set("rt_session", rt_session, domain="seeone.club")
+        self.http.cookies.set("rt_session", self.rt_session, domain="seeone.club")
         self.http.headers["User-Agent"] = "Mozilla/5.0 seeone-toobit-bot"
+        if old is not None:
+            old.close()
+
+    def _call(self, method: str, path: str, deadline: float, **kw) -> requests.Response:
+        # The socket timeout alone once left a read hanging for 11 hours, so the request runs in its own daemon
+        # thread under a wall-clock deadline; a thread that never returns is abandoned instead of blocking the bot.
+        out = {}
+
+        def work():
+            try:
+                out["r"] = self.http.request(method, SEEONE + path, timeout=(min(SEEONE_CONNECT_S, deadline / 2), deadline), **kw)
+            except Exception as e:
+                out["e"] = e
+
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        th.join(deadline)
+        if th.is_alive():
+            raise requests.Timeout(f"{path} 超過 {deadline}s 未回應")
+        if "e" in out:
+            raise out["e"]
+        return out["r"]
+
+    def request(self, method: str, path: str, deadline: float = HTTP_DEADLINE_S, tries: int = 2, **kw):
+        if time.time() < self.open_until:
+            raise SeeOneDown(f"See One 連線異常 ({self.last_error})，暫停呼叫 {self.open_until - time.time():.0f}s")
+        for attempt in range(tries):
+            try:
+                r = self._call(method, path, deadline, **kw)
+                if r.status_code >= 500:
+                    raise requests.HTTPError(f"{r.status_code} {path}")
+                r.raise_for_status()
+                data = r.json()
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code < 500:
+                    raise
+                err = e
+            except (requests.ConnectionError, requests.Timeout, requests.JSONDecodeError) as e:
+                self._new_session()
+                err = e
+            else:
+                self._ok()
+                return data
+            if attempt == tries - 1:
+                self._fail(path, err)
+                raise err
+            time.sleep(2)
+
+    def _ok(self):
+        if self.down_since is not None:
+            self.log("SEEONE_UP", down_s=int(time.time() - self.down_since), last_error=self.last_error,
+                     note="See One 連線恢復，恢復開新倉")
+        self.fails, self.open_until, self.down_since = 0, 0.0, None
+
+    def _fail(self, path: str, err: Exception):
+        self.fails += 1
+        self.last_error = f"{path}: {repr(err)[:160]}"
+        if self.fails >= BREAKER_FAILS:
+            self.open_until = time.time() + BREAKER_COOLDOWN_S
+            if self.down_since is None:
+                self.down_since = time.time()
+                self.log("SEEONE_DOWN", fails=self.fails, last_error=self.last_error,
+                         note=f"See One 連續 {self.fails} 次請求失敗，每 {BREAKER_COOLDOWN_S}s 試一次；"
+                              "期間持倉照常管理 (交易所止損/止盈 + 移動止損)，不開新倉")
 
     def _get(self, path: str, **params):
-        for attempt in range(3):
-            try:
-                # The socket timeout alone once left a read hanging for 11 hours; enforce a wall-clock deadline too.
-                fut = _HTTP_POOL.submit(self.http.get, SEEONE + path, params=params or None, timeout=20)
-                try:
-                    r = fut.result(timeout=HTTP_DEADLINE_S)
-                except concurrent.futures.TimeoutError:
-                    raise requests.Timeout(f"{path} 超過 {HTTP_DEADLINE_S}s 未回應")
-                if r.status_code >= 500 and attempt < 2:
-                    raise requests.HTTPError(f"{r.status_code}")
-                r.raise_for_status()
-                return r.json()
-            except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
-                if attempt == 2:
-                    raise
-                time.sleep(2 * (attempt + 1))
+        return self.request("GET", path, params=params or None)
 
     def me(self):
         return self._get("/api/account/me")
