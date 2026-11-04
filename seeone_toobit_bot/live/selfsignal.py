@@ -33,6 +33,10 @@ MAX_PER_SCAN = 3
 # high trade quality, 1H agreement, and the coin is on the strength board or potential board top 10.
 HIGH_MIN_EDGE, HIGH_MIN_PROB, HIGH_MIN_QUALITY, HIGH_MIN_1H = 35.0, 68.0, 75.0, 60.0
 EXT_BARS = 8                     # 2h of 15m bars
+RANGE_BARS = 12                  # 3h of closed 15m bars for the entry range position
+# Range position in the trade direction (1 = at the 3h extreme the trade is moving toward); the entry cap is
+# the top of the highest contiguous bucket that still passes, same rules as the 15m cap.
+RPOS_BUCKETS = [(0.85, 0.95), (0.95, 1.05), (1.05, 1.3), (1.3, 99.0)]
 BTC_COUNTER_ATR = 2.0            # BTC off its 2h extreme against the trade by this many ATRs = market turning
 EXT_TAG_R = 2.0
 MIN_QUALITY = 60.0
@@ -82,15 +86,30 @@ def move_before(symbol: str, end_ms: int, side: str, risk: float) -> float | Non
     return round((float(rows[-1][4]) - float(rows[-EXT_BARS][1])) * sgn / risk, 2)
 
 
+def range_pos(rows: list, price: float) -> float | None:
+    """Where price sits in the high-low range of the closed bars before the current one: 0 = low, 1 = high."""
+    prior = rows[-RANGE_BARS - 1:-1]
+    if len(prior) < RANGE_BARS:
+        return None
+    hi, lo = max(float(r[2]) for r in prior), min(float(r[3]) for r in prior)
+    return None if hi <= lo else round((price - lo) / (hi - lo), 3)
+
+
+def in_side(rpos_long: float, side: str) -> float:
+    return rpos_long if side == "LONG" else 1 - rpos_long
+
+
 def move_2h(symbol: str) -> dict | None:
-    """Price move over the last 2h, in percent and in self-signal stop distances (1.5×ATR15m, floor 0.8%)."""
+    """Price move over the last 2h, in percent and in self-signal stop distances (1.5×ATR15m, floor 0.8%),
+    plus the price's position in the 3h range."""
     a = atr(symbol)
     if not a:
         return None
     atr_v, rows = a
     price, start = float(rows[-1][4]), float(rows[-EXT_BARS][1])
     dist = max(ATR_MULT * atr_v, MIN_STOP_PCT * price)
-    return {"pct": round((price - start) / start * 100, 2), "r": round((price - start) / dist, 2)}
+    return {"pct": round((price - start) / start * 100, 2), "r": round((price - start) / dist, 2),
+            "rpos": range_pos(rows, price)}
 
 
 class SelfScanner:
@@ -133,12 +152,13 @@ class SelfScanner:
         return self.learner.p.get("self_min_prob", DEFAULT_MIN_PROB)
 
     def record(self, symbol: str, tsym: str, side: str, entry: float, stop: float, tp1: float, prob: float,
-               m15: float | None = None, htf: float | None = None):
+               m15: float | None = None, htf: float | None = None, rpos_long: float | None = None):
         sgn = 1 if side == "LONG" else -1
         self.d["pending"].append({"symbol": symbol, "tsym": tsym, "side": side, "entry": entry, "stop": stop,
                                   "tp1": tp1, "prob": prob, "ts": time.time(),
                                   "m15": None if m15 is None else round(m15 * sgn, 2),
-                                  "htf": None if htf is None else round(htf * sgn, 2)})
+                                  "htf": None if htf is None else round(htf * sgn, 2),
+                                  "rpos": None if rpos_long is None else round(in_side(rpos_long, side), 2)})
 
     def resolve(self):
         still, new = [], 0
@@ -199,6 +219,7 @@ class SelfScanner:
                  note="分析驗算預估機率 vs 實際先到 TP1 的比例；樣本足夠時自動調整最低機率門檻")
         self.calibrate_m15(rows)
         self.calibrate_htf(rows)
+        self.calibrate_rpos(rows)
 
     def _gate_ready(self, rows: list, key: str, param: str, default: float) -> bool:
         hours = len({int(r["ts"] // 3600) for r in rows if r.get(key) is not None})
@@ -257,6 +278,29 @@ class SelfScanner:
                      buckets=[{"m15_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
                      note="順方向 15m 動能越強進場，先到 TP1 比例越低；自動設定可進場的 15m 動能上限")
 
+    def calibrate_rpos(self, rows: list):
+        if not self._gate_ready(rows, "rpos", "range_pos_max", S.MAX_RANGE_POS):
+            return
+        table = []
+        for lo, hi in RPOS_BUCKETS:
+            b = [r["hit"] for r in rows if r.get("rpos") is not None and lo <= r["rpos"] < hi]
+            table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
+        if any(n < M15_MIN_N for _, _, n, _ in table[:2]):
+            return
+        cap = RPOS_BUCKETS[0][1]
+        for _, hi, n, rate in table:
+            if n < M15_MIN_N or rate < M15_PASS:
+                break
+            cap = hi
+        old = self.learner.p.get("range_pos_max", S.MAX_RANGE_POS)
+        self.learner.p["range_pos_max"] = cap
+        self.learner.save()
+        if cap != old or not self.learner.p.get("rpos_logged"):
+            self.learner.p["rpos_logged"] = True
+            self.log("SELF_RPOS_CALIBRATE", range_pos_max_old=old, range_pos_max_new=cap,
+                     buckets=[{"range_pos_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
+                     note="進場價已超出近 3 小時區間時先到 TP1 比例偏低；自動設定可進場的區間位置上限")
+
     # ------------------------------------------------------------------ scanning
     def universe(self, regime_label: str, rhits: dict) -> list:
         boards = self.so._get("/api/dashboard/boards")
@@ -295,7 +339,8 @@ class SelfScanner:
         sgn = 1 if side == "LONG" else -1
         move = (price - float(rows[-EXT_BARS][1])) / dist
         return {"price": price, "atr": atr_v, "stop": price - sgn * dist,
-                "tps": [price + sgn * dist * r for r in TP_R], "dist": dist, "move_r": round(move, 2)}
+                "tps": [price + sgn * dist * r for r in TP_R], "dist": dist, "move_r": round(move, 2),
+                "rpos": range_pos(rows, price)}
 
     def btc_counter(self) -> dict:
         """How far BTC has moved off its recent low and high, in BTC 15m ATRs."""
@@ -362,7 +407,8 @@ class SelfScanner:
             prob = round(raw[side] - bias, 1)
             edge = round(raw[side] - raw[other], 1)
             for sd, plx in (("LONG", pl_long), ("SHORT", pl_short)):
-                self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf)
+                self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf,
+                            pl_long.get("rpos"))
             if side == "LONG" and regime[0] < -S.REGIME_VETO or side == "SHORT" and regime[0] > S.REGIME_VETO:
                 continue
             r = rv[side]

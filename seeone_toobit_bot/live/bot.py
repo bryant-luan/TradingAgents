@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .learner import Learner
 from .shadow import Shadow
-from .selfsignal import SelfScanner, move_2h, move_before
+from .selfsignal import SelfScanner, in_side, move_2h, move_before
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -326,7 +326,8 @@ class Bot:
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
             "tier": tier, "m15_at_entry": getattr(self, "m15", None),
             "htf_at_entry": getattr(self, "htf", None), "ext_r_at_entry": getattr(self, "ext", None),
-            "pre_signal_r": getattr(self, "pre", None),
+            "pre_signal_r": getattr(self, "pre", None), "range_pos_at_entry": getattr(self, "rpos", None),
+            "dirs_at_entry": getattr(self, "dirs", None),
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
@@ -633,7 +634,7 @@ class Bot:
         if len(self.st["trades"]) >= S.MAX_POSITIONS:
             return
 
-        dirs = self.so.directions()
+        dirs = self.dirs = self.so.directions()
         reg = S.regime(dirs)
         board_rows = self.so.strength_board()
         board = {b["symbol"]: b for b in board_rows}
@@ -721,6 +722,12 @@ class Bot:
                                     f"{'做多' if sgn > 0 else '做空'}會追在走勢末端，等回檔再進")
                 continue
             self.ext = mv["r"] * sgn if mv else None
+            self.rpos = in_side(mv["rpos"], sig["side"]) if mv and mv.get("rpos") is not None else None
+            rpos_max = self.learner.p.get("range_pos_max", S.MAX_RANGE_POS)
+            if self.rpos is not None and self.rpos > rpos_max:
+                self.note_skip(sig, f"{sig['symbol']} 現價已超出近 3 小時{'高點' if sgn > 0 else '低點'} "
+                                    f"(區間位置 {self.rpos:.2f} > {rpos_max:.2f})，追在突破延伸段，等回到區間內再進")
+                continue
             same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
             if len(same) >= S.MAX_SAME_SIDE:
                 self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")

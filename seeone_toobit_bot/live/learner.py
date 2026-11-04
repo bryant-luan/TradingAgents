@@ -146,6 +146,12 @@ class Learner:
             htf = tr.get("htf_at_entry")
             if htf is not None and htf * sgn < 0:
                 diagnosis.append(f"進場時 1h/4h 大方向 {htf:+.1f}，屬逆大勢交易")
+            rpos = tr.get("range_pos_at_entry")
+            if rpos is not None and rpos > 1.0:
+                diagnosis.append(f"進場價已超出近 3 小時區間 (位置 {rpos:.2f})，追在突破延伸段")
+            h4 = (tr.get("dirs_at_entry") or {}).get("4h")
+            if h4 is not None and h4 * sgn < 0:
+                diagnosis.append(f"See One 4h 方向 {h4:+.1f} 與{'做多' if sgn > 0 else '做空'}相反")
             ext = tr.get("ext_r_at_entry")
             if ext is not None and ext >= 2.0:
                 diagnosis.append(f"進場前 2 小時本幣已順方向走 {ext:+.1f}R，追在走勢末端")
