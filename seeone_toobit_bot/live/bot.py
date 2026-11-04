@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .learner import Learner
 from .shadow import Shadow
-from .selfsignal import SelfScanner, move_2h
+from .selfsignal import SelfScanner, move_2h, move_before
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -81,6 +81,7 @@ class Bot:
         self.shadow = Shadow(SHADOW_FILE, self.learner, log_event)
         self.selfscan = SelfScanner(self.so, self.tb, self.learner, CALIB_FILE, log_event)
         self.last_history = 0.0
+        self.pre_moves: dict[str, float | None] = {}
 
     # ------------------------------------------------------------------ helpers
     def equity(self) -> tuple[float, float]:
@@ -318,6 +319,7 @@ class Bot:
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
             "tier": tier, "m15_at_entry": getattr(self, "m15", None),
             "htf_at_entry": getattr(self, "htf", None), "ext_r_at_entry": getattr(self, "ext", None),
+            "pre_signal_r": getattr(self, "pre", None),
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
@@ -539,6 +541,17 @@ class Bot:
             return False, f"1h/4h 順方向 {0 if htf is None else htf * sgn:+.1f} < {S.POST_LOCK_HTF_MIN:+.1f}"
         return True, f"{quality}，1h/4h 順方向 {htf * sgn:+.1f}，以一般 3% 風險進場"
 
+    def pre_move(self, sig: dict) -> float | None:
+        if sig["id"] not in self.pre_moves:
+            try:
+                end = int(datetime.fromisoformat(sig["entry_at"].replace("Z", "+00:00")).timestamp() * 1000)
+                risk = abs(float(sig["entry_price"]) - float(sig["stop_price"]))
+                self.pre_moves[sig["id"]] = move_before(S.to_toobit(sig["symbol"]), end, sig["side"], risk)
+            except Exception as e:
+                log_event("ERROR", where="pre_move", symbol=sig["symbol"], error=repr(e)[:200])
+                return None
+        return self.pre_moves[sig["id"]]
+
     def note_skip(self, sig: dict, why: str):
         key = sig["id"]
         kind = re.sub(r"[-+]?\d+(\.\d+)?", "#", why)
@@ -667,6 +680,13 @@ class Bot:
                 self.note_skip(sig, f"{sig['symbol']} 近期虧損冷卻中 (至台北 "
                                     f"{datetime.fromtimestamp(cd + 8 * 3600, timezone.utc):%H:%M})")
                 continue
+            self.pre = None
+            if src != SELF_SOURCE:
+                self.pre = self.pre_move(sig)
+                if self.pre is not None and self.pre >= S.FRESH_MAX_R:
+                    self.note_skip(sig, f"See One 訊號發出前 2 小時本幣已順方向走 {self.pre:+.2f}R "
+                                        f"(≥ {S.FRESH_MAX_R}R)，不是走勢前端，不追")
+                    continue
             if m15 * sgn >= m15_max:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                     f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")

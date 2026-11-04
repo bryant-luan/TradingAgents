@@ -71,6 +71,17 @@ def atr(symbol: str, n: int = 14) -> tuple[float, list] | None:
     return sum(trs) / len(trs), rows
 
 
+def move_before(symbol: str, end_ms: int, side: str, risk: float) -> float | None:
+    """Move over the 2h before end_ms in the trade direction, in units of the given stop distance."""
+    rows = requests.get("https://api.toobit.com/quote/v1/klines",
+                        params={"symbol": symbol, "interval": "15m", "limit": EXT_BARS + 1, "endTime": end_ms - 1},
+                        timeout=10).json()
+    if len(rows) < EXT_BARS or not risk:
+        return None
+    sgn = 1 if side == "LONG" else -1
+    return round((float(rows[-1][4]) - float(rows[-EXT_BARS][1])) * sgn / risk, 2)
+
+
 def move_2h(symbol: str) -> dict | None:
     """Price move over the last 2h, in percent and in self-signal stop distances (1.5×ATR15m, floor 0.8%)."""
     a = atr(symbol)
