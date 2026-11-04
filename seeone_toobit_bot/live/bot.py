@@ -268,7 +268,9 @@ class Bot:
         high_open = sum(1 for t in self.st["trades"].values() if t.get("tier") == "HIGH")
         tier = ("HIGH" if ev.get("tier") == "HIGH" and high_open < S.MAX_HIGH_POSITIONS
                 and not self.st.get("day_lock_armed") else "NORMAL")
-        if tier == "HIGH":
+        if tier == "HIGH" and not self.learner.p.get("high_size_ok"):
+            ev["reasons"] = ev["reasons"] + ["高機率評估的實測先到 TP1 比例未優於一般評估，高信心單以一般風險開倉"]
+        elif tier == "HIGH":
             risk_pct = S.HIGH_RISK_PCT
             margin_cap = S.HIGH_MARGIN_CAP_PCT
         room_pct = getattr(self, "day_room", equity * risk_pct) / equity

@@ -32,6 +32,9 @@ MAX_PER_SCAN = 3
 # High-conviction tier = setups like the CLANKER trade: strong two-sided edge, high de-biased probability,
 # high trade quality, 1H agreement, and the coin is on the strength board or potential board top 10.
 HIGH_MIN_EDGE, HIGH_MIN_PROB, HIGH_MIN_QUALITY, HIGH_MIN_1H = 35.0, 68.0, 75.0, 60.0
+# The enlarged size is only used while gated reviews at HIGH_MIN_PROB+ actually beat the rest.
+HIGH_SIZE_PASS = 0.55
+HIGH_SIZE_MARGIN = 0.05
 EXT_BARS = 8                     # 2h of 15m bars
 RANGE_BARS = 12                  # 3h of closed 15m bars for the entry range position
 # Range position in the trade direction (1 = at the 3h extreme the trade is moving toward); the entry cap is
@@ -220,6 +223,29 @@ class SelfScanner:
         self.calibrate_m15(rows)
         self.calibrate_htf(rows)
         self.calibrate_rpos(rows)
+        self.calibrate_high(rows)
+
+    def calibrate_high(self, rows: list):
+        p = self.learner.p
+        g = [r for r in rows
+             if (r.get("m15") is None or r["m15"] <= p.get("m15_max", S.M15_MAX_DEFAULT))
+             and (r.get("htf") is None or r["htf"] >= p.get("htf_min", S.HTF_MIN_DEFAULT))
+             and (r.get("rpos") is None or r["rpos"] <= p.get("range_pos_max", S.MAX_RANGE_POS))]
+        hi = [r for r in g if r["prob"] >= HIGH_MIN_PROB]
+        lo = [r for r in g if self.min_prob() <= r["prob"] < HIGH_MIN_PROB]
+        hours = len({int(r["ts"] // 3600) for r in hi})
+        rate_hi = sum(r["hit"] for r in hi) / len(hi) if hi else None
+        rate_lo = sum(r["hit"] for r in lo) / len(lo) if lo else None
+        ok = (len(hi) >= M15_MIN_N and hours >= GATE_MIN_HOURS and len(lo) >= M15_MIN_N
+              and rate_hi >= HIGH_SIZE_PASS and rate_hi >= rate_lo + HIGH_SIZE_MARGIN)
+        old = p.get("high_size_ok")
+        p["high_size_ok"] = ok
+        self.learner.save()
+        if ok != old:
+            self.log("SELF_HIGH_CALIBRATE", high_size_ok=ok, hours=hours,
+                     high={"prob": f">={HIGH_MIN_PROB}", "n": len(hi), "tp1_first_rate": rate_hi and round(rate_hi, 3)},
+                     rest={"prob": f"{self.min_prob()}-{HIGH_MIN_PROB}", "n": len(lo), "tp1_first_rate": rate_lo and round(rate_lo, 3)},
+                     note=f"高機率評估須比一般評估先到 TP1 比例高 {HIGH_SIZE_MARGIN:.0%} 且 ≥{HIGH_SIZE_PASS:.0%} 才放大部位；否則高信心單以一般風險開倉")
 
     def _gate_ready(self, rows: list, key: str, param: str, default: float) -> bool:
         hours = len({int(r["ts"] // 3600) for r in rows if r.get(key) is not None})
