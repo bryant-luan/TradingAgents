@@ -15,11 +15,13 @@ MAX_SIGNAL_AGE_MIN = 240
 ENTRY_R_WINDOW = (-0.30, 0.50)  # current price must sit within this R band of the signal entry
 MIN_SCORE = 50
 RISK_PCT = 0.03                 # equity risked per trade at the stop
+MIN_RISK_PCT = 0.03             # never open below this risk: a trade that can't be sized this big is skipped
 MAX_MIN_SIZE_RISK_PCT = 0.045   # allow exchange-minimum size only up to this risk
 MAX_LEVERAGE = 25
 MAX_POSITIONS = 3
 MAX_TOTAL_MARGIN_PCT = 0.70
 MARGIN_PER_TRADE_PCT = 0.07
+NORMAL_MARGIN_CAP_PCT = 0.16       # lets a 0.8% stop at 25x still reach the 3% minimum risk
 HIGH_RISK_PCT = 0.10            # high-conviction tier (CLANKER-type setups): equity at risk at the stop
 HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
@@ -265,6 +267,10 @@ def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct
     sl_pct = dist / price
     risk_usdt = equity * risk_pct
     contracts = math.floor(risk_usdt / (dist * mult))
+    if contracts * dist * mult < equity * MIN_RISK_PCT:
+        up = math.ceil(equity * MIN_RISK_PCT / (dist * mult))
+        if up * dist * mult <= equity * MAX_MIN_SIZE_RISK_PCT:
+            contracts = up
     if contracts < spec["min_contracts"]:
         min_risk = spec["min_contracts"] * dist * mult
         if min_risk > equity * MAX_MIN_SIZE_RISK_PCT:
@@ -280,6 +286,8 @@ def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct
             return None
         notional = contracts * mult * price
         margin = notional / leverage
+    if contracts * mult * dist < equity * MIN_RISK_PCT * 0.95:
+        return None
     return {
         "contracts": contracts,
         "leverage": leverage,

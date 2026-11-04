@@ -8,7 +8,7 @@ from . import strategy as S
 MIN_SCORE_CAP, MIN_SCORE_FLOOR = 70, 48
 LOSS_SCORE_STEP, WIN_SCORE_STEP = 2, 1
 LOSS_COOLDOWN_H = 12
-HALF_RISK_AFTER_LOSSES = 3
+STREAK_PAUSE_LOSSES, STREAK_PAUSE_H = 3, 6
 FACTOR_MIN_N = 3
 FACTOR_GAIN, FACTOR_ADJ_MIN, FACTOR_ADJ_MAX = 8.0, -15.0, 10.0
 CHASE_R = 0.25
@@ -124,9 +124,9 @@ class Learner:
             sym = tr["tsym"].replace("-SWAP-USDT", "USDT")
             p["symbol_cooldown"][sym] = time.time() + LOSS_COOLDOWN_H * 3600
             changes.append(f"{sym} 冷卻 {LOSS_COOLDOWN_H} 小時")
-            if p["consec_losses"] >= HALF_RISK_AFTER_LOSSES and p["risk_pct"] > S.RISK_PCT / 2:
-                p["risk_pct"] = S.RISK_PCT / 2
-                changes.append(f"連續虧損 {p['consec_losses']} 筆，單筆風險降為 {p['risk_pct']:.1%}")
+            if p["consec_losses"] >= STREAK_PAUSE_LOSSES:
+                p["pause_until"] = time.time() + STREAK_PAUSE_H * 3600
+                changes.append(f"連續虧損 {p['consec_losses']} 筆，暫停開新倉 {STREAK_PAUSE_H} 小時 (不縮小部位)")
             if entry_r > CHASE_R and p["chased_losses"] >= 2 and p["entry_r_window"][1] > 0.2:
                 old_hi = p["entry_r_window"][1]
                 p["entry_r_window"][1] = round(max(0.2, old_hi - 0.1), 2)
@@ -137,9 +137,6 @@ class Learner:
         elif win:
             p["wins"] += 1
             p["consec_losses"] = 0
-            if p["risk_pct"] < S.RISK_PCT:
-                p["risk_pct"] = S.RISK_PCT
-                changes.append(f"獲利後單筆風險恢復 {S.RISK_PCT:.0%}")
             old = p["min_score"]
             p["min_score"] = max(MIN_SCORE_FLOOR, old - WIN_SCORE_STEP)
             if p["min_score"] != old:

@@ -85,6 +85,7 @@ class Bot:
     # ------------------------------------------------------------------ helpers
     def equity(self) -> tuple[float, float]:
         b = self.tb.balance()
+        self.realized = float(b["balance"])
         eq = float(b["balance"]) + float(b.get("crossUnRealizedPnl") or 0) + float(b.get("isolatedUnRealizedPnl") or 0)
         return eq, float(b["availableBalance"])
 
@@ -144,6 +145,15 @@ class Bot:
                         self.replace_stop(tr, target, why)
                     except ToobitError as e:
                         log_event("ERROR", trade_id=tid, where="replace_stop", error=str(e))
+
+            ref_eq = self.st.get("day_start_equity") or 0
+            if (not tr.get("exit_reason") and not any(tp["filled"] for tp in tr["tps"])
+                    and tr["risk_usdt"] < ref_eq * S.MIN_RISK_PCT * 0.5):
+                tr["exit_reason"] = (f"小倉位清理: 風險僅 {tr['risk_usdt']:.2f}u "
+                                     f"(< {S.MIN_RISK_PCT:.0%} 權益的一半)，釋出倉位給正常尺寸的單")
+                log_event("SMALL_CLOSE", trade_id=tid, symbol=sym, side=side, reason=tr["exit_reason"])
+                self.maker_close(tr)
+                continue
 
             if not tr.get("exit_reason"):
                 try:
@@ -253,19 +263,17 @@ class Bot:
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):
             self.note_skip(sig, f"現價 {price} 已貼近/穿越止損 {stop}")
             return False
-        risk_pct = self.learner.p["risk_pct"]
-        margin_cap = S.MARGIN_PER_TRADE_PCT * 1.5
+        risk_pct = max(S.MIN_RISK_PCT, self.learner.p["risk_pct"])
+        margin_cap = S.NORMAL_MARGIN_CAP_PCT
         high_open = sum(1 for t in self.st["trades"].values() if t.get("tier") == "HIGH")
         tier = ("HIGH" if ev.get("tier") == "HIGH" and high_open < S.MAX_HIGH_POSITIONS
                 and not self.st.get("day_lock_armed") else "NORMAL")
         if tier == "HIGH":
-            risk_pct = S.HIGH_RISK_PCT * (0.5 if self.learner.p["consec_losses"] >= 3 else 1)
+            risk_pct = S.HIGH_RISK_PCT
             margin_cap = S.HIGH_MARGIN_CAP_PCT
-        elif source == SELF_SOURCE and not self.selfscan.calibrated():
-            risk_pct /= 2
         sz = S.size_position(equity, price, stop, spec, risk_pct, margin_cap)
         if not sz:
-            self.note_skip(sig, "以 1% 風險無法達到交易所最小下單量 (或保證金過大)")
+            self.note_skip(sig, f"無法以至少 {S.MIN_RISK_PCT:.0%} 風險建立部位 (槓桿/保證金上限或最小下單量)，不開小倉")
             return False
         used = sum(t["margin"] for t in self.st["trades"].values())
         if used + sz["margin"] > equity * S.MAX_TOTAL_MARGIN_PCT:
@@ -537,26 +545,33 @@ class Bot:
 
         equity, avail = self.equity()
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if self.st["day"] != day:
-            self.st["day"], self.st["day_start_equity"] = day, equity
-            self.st["day_peak_equity"] = equity
-            for k in ("halted", "day_lock_armed", "day_lock_hit"):
+        bal = self.realized
+        if self.st["day"] != day or "day_start_balance" not in self.st:
+            today = 0.0
+            if self.st["day"] != day:
+                self.st["day"], self.st["day_start_equity"] = day, equity
+            else:
+                today = sum(c["pnl"] or 0 for c in self.st["closed"] if c["closed_at"].startswith(day))
+            self.st["day_start_balance"] = bal - today
+            self.st["day_peak_balance"] = bal
+            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity"):
                 self.st.pop(k, None)
         self.st.setdefault("principal", equity)
-        start = self.st["day_start_equity"]
-        peak = self.st["day_peak_equity"] = max(self.st.get("day_peak_equity") or equity, equity)
+        # Profit lock tracks realized balance only, so a floating profit that is later given back can't trip it.
+        start = self.st["day_start_balance"]
+        peak = self.st["day_peak_balance"] = max(self.st["day_peak_balance"], bal)
         if peak - start >= start * S.DAY_LOCK_TRIGGER_PCT and not self.st.get("day_lock_armed"):
             self.st["day_lock_armed"] = True
-            log_event("DAY_LOCK_ARMED", day_start_equity=round(start, 2), equity=round(equity, 2),
-                      reason=f"當日獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，今日停用高信心放大單；"
-                             f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高獲利則停止開新倉")
+            log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
+                      reason=f"當日已實現獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，今日停用高信心放大單；"
+                             f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則停止開新倉")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
-        if self.st.get("day_lock_armed") and equity < floor:
+        if self.st.get("day_lock_armed") and bal < floor:
             if not self.st.get("day_lock_hit"):
                 self.st["day_lock_hit"] = True
-                log_event("DAY_LOCK_HIT", day_start_equity=round(start, 2), day_peak_equity=round(peak, 2),
-                          equity=round(equity, 2), floor=round(floor, 2),
-                          reason="當日獲利回吐過半，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
+                log_event("DAY_LOCK_HIT", day_start_balance=round(start, 2), day_peak_balance=round(peak, 2),
+                          balance=round(bal, 2), floor=round(floor, 2),
+                          reason="當日已實現獲利回吐過半，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
             return
         if equity < self.st["day_start_equity"] * (1 - DAILY_LOSS_PCT):
             if not self.st.get("halted"):
@@ -564,7 +579,7 @@ class Bot:
                 log_event("HALT", reason=f"當日虧損達 {DAILY_LOSS_PCT:.0%}，今日停止開新倉",
                           day_start_equity=self.st["day_start_equity"], equity=equity)
             return
-        if PAUSE_FILE.exists():
+        if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
             return
         if len(self.st["trades"]) >= S.MAX_POSITIONS:
             return
