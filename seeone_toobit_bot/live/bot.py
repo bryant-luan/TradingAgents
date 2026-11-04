@@ -636,6 +636,11 @@ class Bot:
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
                 break
             sgn = 1 if sig["side"] == "LONG" else -1
+            cd = self.learner.p.get("symbol_cooldown", {}).get(sig["symbol"], 0)
+            if cd > time.time():
+                self.note_skip(sig, f"{sig['symbol']} 近期虧損冷卻中 (至台北 "
+                                    f"{datetime.fromtimestamp(cd + 8 * 3600, timezone.utc):%H:%M})")
+                continue
             if m15 * sgn >= S.EXHAUSTION_15M:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f} 已極端 (≥{S.EXHAUSTION_15M})，"
                                     f"順勢{'做多' if sgn > 0 else '做空'}易追在末端，等回檔")
