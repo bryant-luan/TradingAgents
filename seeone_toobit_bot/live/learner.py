@@ -31,6 +31,11 @@ DEFAULTS = {
 }
 
 
+def _aligned(tr: dict, factors: dict) -> bool:
+    label = (tr.get("regime") or [0, "?"])[1]
+    return "regime:aligned" in factors or (label, tr["side"]) in (("BULL", "LONG"), ("BEAR", "SHORT"))
+
+
 class Learner:
     def __init__(self, path: Path, insight_log: Path, log_event):
         self.path, self.insight_log, self.log = path, insight_log, log_event
@@ -102,7 +107,7 @@ class Learner:
             p["consec_losses"] += 1
             diagnosis = []
             reg = tr.get("regime") or [0, "?"]
-            if "regime:aligned" not in factors:
+            if not _aligned(tr, factors):
                 diagnosis.append(f"進場時大盤 {reg[1]} ({reg[0]:+}) 未與方向一致")
             if entry_r > CHASE_R:
                 diagnosis.append(f"進場已在 {entry_r:+.2f}R，偏追價")
@@ -111,6 +116,11 @@ class Learner:
                 diagnosis.append(f"{held_min:.0f} 分鐘內直接止損，進場時機/止損過近")
             if not tps_filled and held_min >= 30:
                 diagnosis.append("未達 TP1 即止損，訊號方向判斷失準")
+            m15, sgn = tr.get("m15_at_entry"), 1 if tr["side"] == "LONG" else -1
+            if m15 is not None and m15 * sgn >= 2.0:
+                diagnosis.append(f"進場時 See One 15m 方向已達 {m15:+.1f}，順勢追在走勢末端")
+            if tr.get("same_side_at_entry"):
+                diagnosis.append(f"進場時已有 {tr['same_side_at_entry']} 筆同方向持倉，風險集中")
             negs = [f"{k}({v:+})" for k, v in factors.items() if v < 0]
             if negs:
                 diagnosis.append("進場時已有扣分因子: " + ", ".join(negs))
@@ -146,7 +156,7 @@ class Learner:
             if pos:
                 why.append("主要加分因子: " + "、".join(f"{k}({v:+})" for k, v in pos))
             reg = tr.get("regime") or [0, "?"]
-            why.append(f"進場時大盤 {reg[1]} ({reg[0]:+})" + ("，順勢" if "regime:aligned" in factors else ""))
+            why.append(f"進場時大盤 {reg[1]} ({reg[0]:+})" + ("，順勢" if _aligned(tr, factors) else ""))
             why.append(f"進場位置 {entry_r:+.2f}R" + ("，未追價" if entry_r <= CHASE_R else "，雖有追價仍獲利"))
             if tps_filled:
                 why.append(f"打到 {', '.join(tps_filled)}，分批止盈" + ("並移動止損鎖利" if len(tps_filled) < 5 else "全部完成"))

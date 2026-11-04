@@ -316,7 +316,8 @@ class Bot:
             "leverage": sz["leverage"], "path": sig.get("signal_path"), "opened_ts": time.time(),
             "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
-            "tier": tier,
+            "tier": tier, "m15_at_entry": getattr(self, "m15", None),
+            "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=order.get("orderId"),
@@ -630,9 +631,23 @@ class Bot:
 
         principal = self.st["principal"]
         size_eq = equity - S.PROFIT_RESERVE * max(0.0, equity - principal)
+        m15 = self.m15 = dirs.get("15m") or 0.0
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
                 break
+            sgn = 1 if sig["side"] == "LONG" else -1
+            if m15 * sgn >= S.EXHAUSTION_15M:
+                self.note_skip(sig, f"See One 15m 方向 {m15:+.1f} 已極端 (≥{S.EXHAUSTION_15M})，"
+                                    f"順勢{'做多' if sgn > 0 else '做空'}易追在末端，等回檔")
+                continue
+            same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
+            if len(same) >= S.MAX_SAME_SIDE:
+                self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
+                continue
+            last = max((t["opened_ts"] for t in same), default=0)
+            if time.time() - last < S.SAME_SIDE_GAP_MIN * 60:
+                self.note_skip(sig, f"同方向 {S.SAME_SIDE_GAP_MIN} 分鐘內已開倉，分散進場時間")
+                continue
             try:
                 self.open_trade(sig, ev, src, reg, size_eq)
             except ToobitError as e:
