@@ -961,9 +961,17 @@ class Bot:
         signal.signal(signal.SIGTERM, self.request_stop)
         if not once:
             threading.Thread(target=self.watchdog, daemon=True).start()
-        me = self.so.me()
-        self.shadow.ingest(self.so.signals())
-        self.shadow.ingest(self.so.history())
+        try:
+            me = self.so.me()
+        except Exception as e:
+            me = {}
+            log_event("ERROR", where="seeone_me", error=repr(e)[:200],
+                      note="See One 登入失效或無法連線；既有持倉照常管理，恢復登入前不開新倉")
+        try:
+            self.shadow.ingest(self.so.signals())
+            self.shadow.ingest(self.so.history())
+        except Exception as e:
+            log_event("ERROR", where="seeone_startup", error=repr(e)[:200])
         self.last_history = time.time()
         self.shadow.optimize(force=True)
         log_event("START", dry_run=self.dry, seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
