@@ -199,8 +199,55 @@ class SeeOne:
         except Exception:
             return None
 
+    def _save_env(self, updates: dict):
+        text = ENV_FILE.read_text() if ENV_FILE.exists() else ""
+        lines, seen = [], set()
+        for line in text.splitlines(True):
+            key = line.split("=", 1)[0]
+            if key in updates:
+                lines.append(key + "=" + updates[key] + ("\n" if line.endswith("\n") else ""))
+                seen.add(key)
+            else:
+                lines.append(line)
+        for key, value in updates.items():
+            if key not in seen:
+                lines.append(key + "=" + value + "\n")
+        ENV_FILE.write_text("".join(lines))
+        ENV_FILE.chmod(0o600)
+
+    def _adopt(self, session: str, refresh: str | None, note: str):
+        self.rt_session = session
+        self._new_session()
+        saved = {"SEEONE_RT_SESSION": session}
+        if refresh:
+            saved["SEEONE_RT_REFRESH"] = refresh
+        self._save_env(saved)
+        self.log("SEEONE_LOGIN", note=note)
+
+    def _refresh_cookie(self) -> bool:
+        """A still-valid rt_refresh cookie (about 30 days) mints a new rt_session."""
+        from dotenv import load_dotenv
+        load_dotenv(ENV_FILE, override=True)
+        refresh = os.environ.get("SEEONE_RT_REFRESH") or ""
+        if not refresh:
+            return False
+        try:
+            r = requests.get(f"{SEEONE}/api/account/me",
+                             cookies={"rt_refresh": refresh},
+                             headers={"User-Agent": self.http.headers.get("User-Agent", ""), "Accept": "application/json"},
+                             timeout=20)
+        except requests.RequestException as e:
+            self.log("SEEONE_LOGIN_FAIL", error=repr(e)[:160])
+            return False
+        session = r.cookies.get("rt_session")
+        if r.status_code >= 400 or not session:
+            self.log("SEEONE_LOGIN_FAIL", status=r.status_code, note="用長期登入換發失敗，需要在瀏覽器重新登入一次")
+            return False
+        self._adopt(session, r.cookies.get("rt_refresh") or refresh, "已用長期登入換發 rt_session")
+        return True
+
     def ensure_session(self):
-        """Renew rt_session from SEEONE_EMAIL/SEEONE_USERNAME and SEEONE_PASSWORD before it expires."""
+        """Renew rt_session before it expires. The refresh cookie is tried before the email password."""
         exp = self.token_exp()
         if exp and exp - time.time() > 600:
             return
@@ -208,45 +255,27 @@ class SeeOne:
         if now < getattr(self, "_login_next", 0):
             return
         self._login_next = now + 300
+        if self._refresh_cookie():
+            return
         from dotenv import load_dotenv
         load_dotenv(ENV_FILE, override=True)
         email = os.environ.get("SEEONE_EMAIL") or os.environ.get("SEEONE_USERNAME") or ""
         password = os.environ.get("SEEONE_PASSWORD") or ""
         if not email or not password:
-            self.log("SEEONE_LOGIN_NEED",
-                     note="rt_session 即將到期或已失效，.env 還沒有 email 和密碼，無法自動換發")
+            self.log("SEEONE_LOGIN_NEED", note="rt_session 即將到期，沒有可用的長期登入或密碼")
             return
         try:
             r = requests.post(f"{SEEONE}/api/account/login", json={"email": email, "password": password},
                               headers={"User-Agent": self.http.headers.get("User-Agent", ""), "Accept": "application/json"},
                               timeout=20)
             token = r.cookies.get("rt_session")
-            if not token and r.content[:1:] in (b"{", b"["):
-                body = r.json()
-                token = body.get("rt_session") or body.get("token") if isinstance(body, dict) else None
             if r.status_code >= 400 or not token:
-                self.log("SEEONE_LOGIN_FAIL", status=r.status_code,
-                         note="自動重登失敗。請確認 .env 的 SEEONE_USERNAME（email）和 SEEONE_PASSWORD")
+                self.log("SEEONE_LOGIN_FAIL", status=r.status_code, note="帳號密碼登入失敗")
                 return
         except (requests.RequestException, ValueError) as e:
             self.log("SEEONE_LOGIN_FAIL", error=repr(e)[:160])
             return
-        self.rt_session = token
-        self._new_session()
-        text = ENV_FILE.read_text() if ENV_FILE.exists() else ""
-        lines = []
-        found = False
-        for line in text.splitlines(True):
-            if line.startswith("SEEONE_RT_SESSION="):
-                lines.append("SEEONE_RT_SESSION=" + token + ("\n" if line.endswith("\n") else ""))
-                found = True
-            else:
-                lines.append(line)
-        if not found:
-            lines.append("SEEONE_RT_SESSION=" + token + "\n")
-        ENV_FILE.write_text("".join(lines))
-        ENV_FILE.chmod(0o600)
-        self.log("SEEONE_LOGIN", note="已用帳號密碼換發 rt_session")
+        self._adopt(token, r.cookies.get("rt_refresh"), "已用帳號密碼換發 rt_session")
 
     def flow(self) -> dict:
         """Current 15m price change and open-interest change by See One symbol, from the visual screener."""
