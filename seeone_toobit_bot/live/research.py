@@ -43,6 +43,7 @@ LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "th
 }
 # Features already gated live (BTC 4h measured redundant with BTC 1h inside the live gates).
 LIVE_FEATURES = {"htf", "btc1h_dir_pct", "m15", "rpos", "prob", "rsi15_dir"}
+REDUNDANT = {"btc4h_dir_pct": "與 BTC 1h 重複，現行條件內無額外效果 (11-05 驗證)"}
 NAMES = {
     "prob": "分析驗算機率", "m15": "See One 15m 方向", "htf": "1h/4h 大方向", "rpos": "3h 區間位置",
     "stop_pct": "止損距離 %", "ret1h_R": "本幣 1h 走勢 (R)", "ret4h_R": "本幣 4h 走勢 (R)",
@@ -275,7 +276,7 @@ def main():
     runs = [{key(c) for c in h.get("robust", [])} for h in prev] + [{key(c) for c in robust}]
     persistent = set.intersection(*runs) if len(runs) == 3 else set()
     lines.append("連續 3 次穩健 (指標+方向): " + ("、".join(
-        f"{NAMES[f]} {d}" + (" [已上線]" if f in LIVE_FEATURES else "") for f, d in sorted(persistent)) or "無"))
+        f"{NAMES[f]} {d}" + (" [已上線]" if f in LIVE_FEATURES else f" [{REDUNDANT[f]}]" if f in REDUNDANT else "") for f, d in sorted(persistent)) or "無"))
     lines.append("接近但未達穩健:")
     for c in near:
         lines.append(f"  {NAMES[c['feature']]} {c['rule']}: 被擋 {c['skip_n']} 筆/{c['skip_hours']} 小時 平均 {c['skip_r']:+.2f}R "
