@@ -682,6 +682,13 @@ class SelfScanner:
         adj = self.learner.p.get("factor_adj", {})
         learned = sum(adj.get(t, 0.0) for t in factors)
         score = round(50 + ev_r * 40 + edge * 0.2 + learned, 1)
+        aux = 0
+        px15 = pl.get("px15")
+        if side == "SHORT" and px15 is not None:
+            # Inside the ELSA rules, shorts that had not already fallen 0.46% in 15 minutes
+            # were the only customized-style split that stayed positive in both halves.
+            aux = 4 if -px15 < 0.46 else -6
+            score += aux
         reasons = [
             f"自選訊號來源: {', '.join(c['tags'])}",
             f"分析驗算 15M 雙向: 做多 {raw['LONG']}% / 做空 {raw['SHORT']}% (模型偏差 {bias:+.1f})",
@@ -696,6 +703,8 @@ class SelfScanner:
         ]
         if learned:
             reasons.append(f"實單優化權重合計 {learned:+.1f}")
+        if aux:
+            reasons.append(f"空頭預備輔助（不決定進場）: 近15分鐘漲跌 {px15:+.2f}%，分數 {aux:+d}")
         if high:
             reasons.append(f"高信心單 (CLANKER 型): 優勢 ≥{HIGH_MIN_EDGE}、機率 ≥{HIGH_MIN_PROB}%、品質 ≥{HIGH_MIN_QUALITY}、"
                            f"1H ≥{HIGH_MIN_1H}%、在強勢榜或潛力榜前 10 → 放大部位")
