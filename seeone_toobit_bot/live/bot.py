@@ -687,6 +687,23 @@ class Bot:
                 return None
         return self.pre_moves[sig["id"]]
 
+    def record_signal_snapshots(self, signals: list):
+        """Score every fresh official signal for the threshold calibration, including cycles where no new entry is
+        allowed (book full, daily lock, halt, pause). snapshot() keeps only signals seen within 60 minutes of entry."""
+        try:
+            dirs = self.so.directions()
+            reg = S.regime(dirs)
+            board = {b["symbol"]: b for b in self.so.strength_board()}
+            rhits = S.recipe_hits(self.so.recipes())
+            pexp = S.path_expectancy(signals, self.st["closed"])
+        except Exception as e:
+            log_event("ERROR", where="snapshot", error=repr(e)[:200])
+            return
+        for sig in signals:
+            if sig.get("status") == "ACTIVE":
+                ev = S.evaluate(sig, "官方訊號", reg[0], reg[1], board, rhits, pexp, self.learner.p)
+                self.shadow.snapshot(sig, ev, S._age_min(sig["entry_at"]))
+
     def note_skip(self, sig: dict, why: str):
         key = sig["id"]
         kind = re.sub(r"[-+]?\d+(\.\d+)?", "#", why)
@@ -759,6 +776,8 @@ class Bot:
                 log_event("DAY_LOCK_HIT", day_start_balance=round(start, 2), day_peak_balance=round(peak, 2),
                           balance=round(bal, 2), floor=round(floor, 2),
                           reason="當日已實現獲利回吐過半，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
+            if signals is not None:
+                self.record_signal_snapshots(signals)
             return
         loss_floor = self.st["day_start_equity"] * (1 - S.DAILY_STOP_PCT)
         if equity < loss_floor:
@@ -766,13 +785,17 @@ class Bot:
                 self.st["halted"] = True
                 log_event("HALT", reason=f"當日虧損達 {S.DAILY_STOP_PCT:.0%}，今日停止開新倉",
                           day_start_equity=self.st["day_start_equity"], equity=equity)
+            if signals is not None:
+                self.record_signal_snapshots(signals)
             return
         self.day_room = equity - loss_floor - self.open_risk()
         if sigmap is None:
             return
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
+            self.record_signal_snapshots(signals)
             return
         if len(self.st["trades"]) >= S.MAX_POSITIONS:
+            self.record_signal_snapshots(signals)
             return
 
         dirs = self.dirs = self.so.directions()
