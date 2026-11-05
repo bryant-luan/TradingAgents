@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .learner import Learner
 from .shadow import Shadow
-from .selfsignal import SelfScanner, in_side, move_2h, move_before, rsi_side
+from .selfsignal import SelfScanner, btc_ret1h, in_side, move_2h, move_before, rsi_side
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -827,6 +827,11 @@ class Bot:
         htf = self.htf = S.htf_score(dirs)
         htf_min = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
         htf_max = self.learner.p.get("htf_max", S.HTF_MAX_DEFAULT)
+        btc1h_min = self.learner.p.get("btc1h_min", S.BTC1H_MIN_DEFAULT)
+        try:
+            btc1h = btc_ret1h()
+        except Exception:
+            btc1h = None
         moves = {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
@@ -855,6 +860,10 @@ class Bot:
             if htf is not None and htf * sgn >= htf_max:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
                                     f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
+                continue
+            if btc1h is not None and btc1h * sgn < btc1h_min:
+                self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
+                                    f"(順方向 {btc1h * sgn:+.2f}% < 下限 {btc1h_min:+.2f}%)，等大盤同向再進")
                 continue
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in moves:

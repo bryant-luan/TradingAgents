@@ -69,6 +69,8 @@ HTF_BUCKETS = [(-99.0, -0.5), (-0.5, 0.5), (0.5, 99.0)]
 HTF_CAP_BUCKETS = [(-99.0, 0.5), (0.5, 1.5), (1.5, 2.5), (2.5, 99.0)]
 # 15m RSI in the trade direction; the floor is the bottom of the lowest bucket that still passes, scanning down.
 RSI_BUCKETS = [(0.0, 40.0), (40.0, 50.0), (50.0, 60.0), (60.0, 101.0)]
+# BTC 1h move in the trade direction, percent.
+BTC1H_BUCKETS = [(-99.0, -0.3), (-0.3, 0.0), (0.0, 0.3), (0.3, 99.0)]
 # Reviews taken in the same scan all ride the same market move, so sample counts overstate the evidence.
 # The gates keep their defaults until the records span this many distinct hours.
 GATE_MIN_HOURS = 24
@@ -122,6 +124,16 @@ def rsi_long(rows: list) -> float | None:
     up = sum(max(0.0, b - a) for a, b in zip(c, c[1:]))
     dn = sum(max(0.0, a - b) for a, b in zip(c, c[1:]))
     return 50.0 if up + dn == 0 else round(100 * up / (up + dn), 1)
+
+
+def btc_ret1h() -> float | None:
+    """BTC's move over the last hour (4 closed-or-current 15m closes back), percent, long perspective."""
+    a = atr("BTC-SWAP-USDT")
+    if not a:
+        return None
+    rows = a[1]
+    ref = float(rows[-5][4])
+    return round((float(rows[-1][4]) - ref) / ref * 100, 3)
 
 
 def rsi_side(rsi_l: float | None, side: str) -> float | None:
@@ -287,6 +299,7 @@ class SelfScanner:
         self.calibrate_htf_max(rows)
         self.calibrate_rpos(rows)
         self.calibrate_rsi(rows)
+        self.calibrate_btc1h(rows)
         self.calibrate_high(rows)
 
     def calibrate_high(self, rows: list):
@@ -296,7 +309,8 @@ class SelfScanner:
              and (r.get("htf") is None or p.get("htf_min", S.HTF_MIN_DEFAULT) <= r["htf"]
                   < p.get("htf_max", S.HTF_MAX_DEFAULT))
              and (r.get("rpos") is None or r["rpos"] <= p.get("range_pos_max", S.MAX_RANGE_POS))
-             and (r.get("rsi") is None or r["rsi"] >= p.get("rsi_min", S.RSI_MIN_DEFAULT))]
+             and (r.get("rsi") is None or r["rsi"] >= p.get("rsi_min", S.RSI_MIN_DEFAULT))
+             and (r.get("btc1h") is None or r["btc1h"] >= p.get("btc1h_min", S.BTC1H_MIN_DEFAULT))]
         hi = [r for r in g if r["prob"] >= HIGH_MIN_PROB]
         lo = [r for r in g if self.min_prob() <= r["prob"] < HIGH_MIN_PROB]
         hours = len({int(r["ts"] // 3600) for r in hi})
@@ -426,27 +440,37 @@ class SelfScanner:
                      note="進場價已超出近 3 小時區間時先到 TP1 比例偏低；自動設定可進場的區間位置上限")
 
     def calibrate_rsi(self, rows: list):
-        if not self._gate_ready(rows, "rsi", "rsi_min", S.RSI_MIN_DEFAULT):
+        self._calibrate_floor(rows, "rsi", RSI_BUCKETS, "rsi_min", S.RSI_MIN_DEFAULT, "SELF_RSI_CALIBRATE",
+                              "15m RSI 在交易方向偏弱 (做多 RSI 低、做空 RSI 高) 時先到 TP1 比例偏低；自動設定可進場的 RSI 下限")
+
+    def calibrate_btc1h(self, rows: list):
+        self._calibrate_floor(rows, "btc1h", BTC1H_BUCKETS, "btc1h_min", S.BTC1H_MIN_DEFAULT, "SELF_BTC1H_CALIBRATE",
+                              "BTC 近 1 小時與交易方向相反時先到 TP1 比例偏低；自動設定 BTC 1h 順方向漲跌幅下限")
+
+    def _calibrate_floor(self, rows: list, key: str, buckets: list, param: str, default: float, event: str, note: str):
+        """Floor = bottom of the lowest bucket reached scanning down from the top while every bucket passes;
+        the lowest bucket's bottom (no floor) when all pass."""
+        if not self._gate_ready(rows, key, param, default):
             return
         table = []
-        for lo, hi in RSI_BUCKETS:
-            b = [r["hit"] for r in rows if r.get("rsi") is not None and lo <= r["rsi"] < hi]
+        for lo, hi in buckets:
+            b = [r["hit"] for r in rows if r.get(key) is not None and lo <= r[key] < hi]
             table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
         if any(n < M15_MIN_N for _, _, n, _ in table[-2:]):
             return
-        floor = RSI_BUCKETS[-1][0]
+        floor = buckets[-1][0]
         for lo, _, n, rate in reversed(table):
             if n < M15_MIN_N or rate < M15_PASS:
                 break
             floor = lo
-        old = self.learner.p.get("rsi_min", S.RSI_MIN_DEFAULT)
-        self.learner.p["rsi_min"] = floor
+        old = self.learner.p.get(param, default)
+        self.learner.p[param] = floor
         self.learner.save()
-        if floor != old or not self.learner.p.get("rsi_logged"):
-            self.learner.p["rsi_logged"] = True
-            self.log("SELF_RSI_CALIBRATE", rsi_min_old=old, rsi_min_new=floor,
-                     buckets=[{"rsi15_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
-                     note="15m RSI 在交易方向偏弱 (做多 RSI 低、做空 RSI 高) 時先到 TP1 比例偏低；自動設定可進場的 RSI 下限")
+        if floor != old or not self.learner.p.get(f"{param}_logged"):
+            self.learner.p[f"{param}_logged"] = True
+            self.log(event, **{f"{param}_old": old, f"{param}_new": floor},
+                     buckets=[{f"{key}_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
+                     note=note)
 
     # ------------------------------------------------------------------ scanning
     def universe(self, regime_label: str, rhits: dict) -> list:
