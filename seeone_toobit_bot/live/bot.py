@@ -655,16 +655,15 @@ class Bot:
         return out
 
     def lock_pass(self, sig: dict, ev: dict, src: str, htf: float | None, sgn: int) -> tuple[bool, str]:
-        """After the daily profit lock arms, only high-conviction, trend-aligned signals get through, one at a time."""
+        """After the daily profit lock arms, only signals in the best-measured 1h/4h band get through, one at a time."""
         armed_ts = self.st.get("day_lock_ts", 0)
         post = [t for t in self.st["trades"].values() if t["opened_ts"] >= armed_ts]
         if len(post) >= S.POST_LOCK_MAX_OPEN:
             return False, f"鎖利後已有 {len(post)} 筆放行單持倉中"
-        if ev.get("tier") != "HIGH":
-            return False, "非高信心單"
-        if htf is None or htf * sgn < S.POST_LOCK_HTF_MIN:
-            return False, f"1h/4h 順方向 {0 if htf is None else htf * sgn:+.1f} < {S.POST_LOCK_HTF_MIN:+.1f}"
-        return True, f"高信心單，1h/4h 順方向 {htf * sgn:+.1f}，以一般 3% 風險進場"
+        if htf is None or not S.POST_LOCK_HTF_MIN <= htf * sgn < S.POST_LOCK_HTF_MAX:
+            return False, (f"1h/4h 順方向 {0 if htf is None else htf * sgn:+.1f} 不在實測最佳區間 "
+                           f"{S.POST_LOCK_HTF_MIN:+.1f}~{S.POST_LOCK_HTF_MAX:+.1f}")
+        return True, f"1h/4h 順方向 {htf * sgn:+.1f} 在實測最佳區間，以一般 3% 風險進場"
 
     def open_risk(self) -> float:
         specs = self.tb.specs()
@@ -741,7 +740,7 @@ class Bot:
             self.st["day_lock_armed"] = True
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
-                      reason=f"當日已實現獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，鎖利：只放行高信心且順 1h/4h 大勢的單 "
+                      reason=f"當日已實現獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，鎖利：只放行 1h/4h 大方向在實測最佳區間的單 "
                              f"(3% 風險、同時最多 {S.POST_LOCK_MAX_OPEN} 筆)；"
                              f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則全部停止開新倉")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
@@ -884,7 +883,7 @@ class Bot:
             if self.st.get("day_lock_armed"):
                 ok, why = self.lock_pass(sig, ev, src, htf, sgn)
                 if not ok:
-                    self.note_skip(sig, f"當日已鎖利 {S.DAY_LOCK_TRIGGER_PCT:.0%}，只放行高信心單: {why}")
+                    self.note_skip(sig, f"當日已鎖利 {S.DAY_LOCK_TRIGGER_PCT:.0%}，限制放行: {why}")
                     continue
                 ev["reasons"] = ev["reasons"] + [f"鎖利後放行: {why}"]
             try:

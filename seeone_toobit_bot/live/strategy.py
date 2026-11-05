@@ -65,7 +65,10 @@ DAY_LOCK_TRIGGER_PCT = 0.05     # day realized gain at which only high-convictio
 DAILY_STOP_PCT = 0.12           # day loss (realized + floating, incl. open risk to stops) that ends the day
 DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
 POST_LOCK_MAX_OPEN = 1          # after the lock arms: positions opened since then that may be open at once
-POST_LOCK_HTF_MIN = 0.5         # and the 1h/4h direction clearly with the trade
+# After the lock arms, only the 1h/4h band with the best measured TP1-first rate may open (neutral, not already
+# strongly aligned: aligned entries arrive late). High-probability reviews are not required: they measured no better.
+POST_LOCK_HTF_MIN = -0.5
+POST_LOCK_HTF_MAX = 0.5
 PROFIT_RESERVE = 0.5            # share of gains above principal kept out of position sizing
 
 
