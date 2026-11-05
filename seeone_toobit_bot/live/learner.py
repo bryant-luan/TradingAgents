@@ -149,6 +149,9 @@ class Learner:
             rpos = tr.get("range_pos_at_entry")
             if rpos is not None and rpos > 1.0:
                 diagnosis.append(f"進場價已超出近 3 小時區間 (位置 {rpos:.2f})，追在突破延伸段")
+            rsi = tr.get("rsi15_at_entry")
+            if rsi is not None and rsi < 50:
+                diagnosis.append(f"進場時 15m RSI 在交易方向只有 {rsi:.0f}，短線動能與方向相反")
             h4 = (tr.get("dirs_at_entry") or {}).get("4h")
             if h4 is not None and h4 * sgn < 0:
                 diagnosis.append(f"See One 4h 方向 {h4:+.1f} 與{'做多' if sgn > 0 else '做空'}相反")

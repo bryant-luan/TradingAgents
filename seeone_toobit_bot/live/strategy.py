@@ -42,6 +42,7 @@ M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the 
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
 MAX_RANGE_POS = 1.05            # no entry once price is past the 3h high (long) / low (short) by 5% of that range
+RSI_MIN_DEFAULT = 50.0          # floor on the 15m RSI in the trade's direction (short: 100 - RSI); recalibrated live
 MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
 MAX_SAME_SIDE = 2               # open positions on one side
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side

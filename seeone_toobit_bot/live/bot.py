@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .learner import Learner
 from .shadow import Shadow
-from .selfsignal import SelfScanner, in_side, move_2h, move_before
+from .selfsignal import SelfScanner, in_side, move_2h, move_before, rsi_side
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -325,7 +325,8 @@ class Bot:
             "source": source, "regime": list(regime), "tier": tier, "sz": sz, "stop": stop, "price": price,
             "entry_info": entry_info, "ts": time.time(),
             "ctx": {"m15": getattr(self, "m15", None), "htf": getattr(self, "htf", None), "ext": getattr(self, "ext", None),
-                    "pre": getattr(self, "pre", None), "rpos": getattr(self, "rpos", None), "dirs": getattr(self, "dirs", None)},
+                    "pre": getattr(self, "pre", None), "rpos": getattr(self, "rpos", None), "dirs": getattr(self, "dirs", None),
+                    "rsi": getattr(self, "rsi", None)},
         }
         save_state(self.st)
         # An exception below leaves pending_entry in place; the next cycle's recover_pending_entry() adopts it.
@@ -362,6 +363,7 @@ class Bot:
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
             "tier": p["tier"], "m15_at_entry": ctx["m15"], "htf_at_entry": ctx["htf"], "ext_r_at_entry": ctx["ext"],
             "pre_signal_r": ctx["pre"], "range_pos_at_entry": ctx["rpos"], "dirs_at_entry": ctx["dirs"],
+            "rsi15_at_entry": ctx.get("rsi"),
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": p["regime"],
         }
@@ -858,6 +860,12 @@ class Bot:
             if self.rpos is not None and self.rpos > rpos_max:
                 self.note_skip(sig, f"{sig['symbol']} 現價已超出近 3 小時{'高點' if sgn > 0 else '低點'} "
                                     f"(區間位置 {self.rpos:.2f} > {rpos_max:.2f})，追在突破延伸段，等回到區間內再進")
+                continue
+            self.rsi = rsi = rsi_side(mv.get("rsi"), sig["side"]) if mv else None
+            rsi_min = self.learner.p.get("rsi_min", S.RSI_MIN_DEFAULT)
+            if rsi is not None and rsi < rsi_min:
+                self.note_skip(sig, f"{sig['symbol']} 15m RSI 在{'做多' if sgn > 0 else '做空'}方向只有 {rsi:.0f} "
+                                    f"(< 下限 {rsi_min:.0f})，短線動能與方向相反，等轉強再進")
                 continue
             same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
             if len(same) >= S.MAX_SAME_SIDE:

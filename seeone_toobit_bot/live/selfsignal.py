@@ -65,6 +65,8 @@ M15_PASS = 0.50
 # Average of the 1h and 4h See One direction scores, signed to the trade side; the entry floor is the
 # bottom of the lowest bucket that passes, with the same sample and pass-rate rules.
 HTF_BUCKETS = [(-99.0, -0.5), (-0.5, 0.5), (0.5, 99.0)]
+# 15m RSI in the trade direction; the floor is the bottom of the lowest bucket that still passes, scanning down.
+RSI_BUCKETS = [(0.0, 40.0), (40.0, 50.0), (50.0, 60.0), (60.0, 101.0)]
 # Reviews taken in the same scan all ride the same market move, so sample counts overstate the evidence.
 # The gates keep their defaults until the records span this many distinct hours.
 GATE_MIN_HOURS = 24
@@ -110,6 +112,20 @@ def in_side(rpos_long: float, side: str) -> float:
     return rpos_long if side == "LONG" else 1 - rpos_long
 
 
+def rsi_long(rows: list) -> float | None:
+    """RSI over the 15m closes in rows (long perspective; a short's RSI in its own direction is 100 - this)."""
+    c = [float(r[4]) for r in rows]
+    if len(c) < 15:
+        return None
+    up = sum(max(0.0, b - a) for a, b in zip(c, c[1:]))
+    dn = sum(max(0.0, a - b) for a, b in zip(c, c[1:]))
+    return 50.0 if up + dn == 0 else round(100 * up / (up + dn), 1)
+
+
+def rsi_side(rsi_l: float | None, side: str) -> float | None:
+    return None if rsi_l is None else (rsi_l if side == "LONG" else round(100 - rsi_l, 1))
+
+
 def move_2h(symbol: str) -> dict | None:
     """Price move over the last 2h, in percent and in self-signal stop distances (1.5×ATR15m, floor 0.8%),
     plus the price's position in the 3h range."""
@@ -120,7 +136,7 @@ def move_2h(symbol: str) -> dict | None:
     price, start = float(rows[-1][4]), float(rows[-EXT_BARS][1])
     dist = max(ATR_MULT * atr_v, MIN_STOP_PCT * price)
     return {"pct": round((price - start) / start * 100, 2), "r": round((price - start) / dist, 2),
-            "rpos": range_pos(rows, price)}
+            "rpos": range_pos(rows, price), "rsi": rsi_long(rows)}
 
 
 class SelfScanner:
@@ -195,13 +211,16 @@ class SelfScanner:
         return self.learner.p.get("self_min_prob", DEFAULT_MIN_PROB)
 
     def record(self, symbol: str, tsym: str, side: str, entry: float, stop: float, tp1: float, prob: float,
-               m15: float | None = None, htf: float | None = None, rpos_long: float | None = None):
+               m15: float | None = None, htf: float | None = None, rpos_long: float | None = None,
+               rsi_l: float | None = None, btc1h_long: float | None = None):
         sgn = 1 if side == "LONG" else -1
         self.d["pending"].append({"symbol": symbol, "tsym": tsym, "side": side, "entry": entry, "stop": stop,
                                   "tp1": tp1, "prob": prob, "ts": time.time(),
                                   "m15": None if m15 is None else round(m15 * sgn, 2),
                                   "htf": None if htf is None else round(htf * sgn, 2),
-                                  "rpos": None if rpos_long is None else round(in_side(rpos_long, side), 2)})
+                                  "rpos": None if rpos_long is None else round(in_side(rpos_long, side), 2),
+                                  "rsi": rsi_side(rsi_l, side),
+                                  "btc1h": None if btc1h_long is None else round(btc1h_long * sgn, 3)})
 
     def resolve(self):
         still, new = [], 0
@@ -264,6 +283,7 @@ class SelfScanner:
         self.calibrate_m15(rows)
         self.calibrate_htf(rows)
         self.calibrate_rpos(rows)
+        self.calibrate_rsi(rows)
         self.calibrate_high(rows)
 
     def calibrate_high(self, rows: list):
@@ -271,7 +291,8 @@ class SelfScanner:
         g = [r for r in rows
              if (r.get("m15") is None or r["m15"] <= p.get("m15_max", S.M15_MAX_DEFAULT))
              and (r.get("htf") is None or r["htf"] >= p.get("htf_min", S.HTF_MIN_DEFAULT))
-             and (r.get("rpos") is None or r["rpos"] <= p.get("range_pos_max", S.MAX_RANGE_POS))]
+             and (r.get("rpos") is None or r["rpos"] <= p.get("range_pos_max", S.MAX_RANGE_POS))
+             and (r.get("rsi") is None or r["rsi"] >= p.get("rsi_min", S.RSI_MIN_DEFAULT))]
         hi = [r for r in g if r["prob"] >= HIGH_MIN_PROB]
         lo = [r for r in g if self.min_prob() <= r["prob"] < HIGH_MIN_PROB]
         hours = len({int(r["ts"] // 3600) for r in hi})
@@ -377,6 +398,29 @@ class SelfScanner:
                      buckets=[{"range_pos_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
                      note="進場價已超出近 3 小時區間時先到 TP1 比例偏低；自動設定可進場的區間位置上限")
 
+    def calibrate_rsi(self, rows: list):
+        if not self._gate_ready(rows, "rsi", "rsi_min", S.RSI_MIN_DEFAULT):
+            return
+        table = []
+        for lo, hi in RSI_BUCKETS:
+            b = [r["hit"] for r in rows if r.get("rsi") is not None and lo <= r["rsi"] < hi]
+            table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
+        if any(n < M15_MIN_N for _, _, n, _ in table[-2:]):
+            return
+        floor = RSI_BUCKETS[-1][0]
+        for lo, _, n, rate in reversed(table):
+            if n < M15_MIN_N or rate < M15_PASS:
+                break
+            floor = lo
+        old = self.learner.p.get("rsi_min", S.RSI_MIN_DEFAULT)
+        self.learner.p["rsi_min"] = floor
+        self.learner.save()
+        if floor != old or not self.learner.p.get("rsi_logged"):
+            self.learner.p["rsi_logged"] = True
+            self.log("SELF_RSI_CALIBRATE", rsi_min_old=old, rsi_min_new=floor,
+                     buckets=[{"rsi15_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
+                     note="15m RSI 在交易方向偏弱 (做多 RSI 低、做空 RSI 高) 時先到 TP1 比例偏低；自動設定可進場的 RSI 下限")
+
     # ------------------------------------------------------------------ scanning
     def universe(self, regime_label: str, rhits: dict) -> list:
         boards = self.so._get("/api/dashboard/boards")
@@ -416,7 +460,7 @@ class SelfScanner:
         move = (price - float(rows[-EXT_BARS][1])) / dist
         return {"price": price, "atr": atr_v, "stop": price - sgn * dist,
                 "tps": [price + sgn * dist * r for r in TP_R], "dist": dist, "move_r": round(move, 2),
-                "rpos": range_pos(rows, price)}
+                "rpos": range_pos(rows, price), "rsi": rsi_long(rows)}
 
     def btc_counter(self) -> dict:
         """How far BTC has moved off its recent low and high, in BTC 15m ATRs."""
@@ -427,7 +471,9 @@ class SelfScanner:
         recent = rows[-EXT_BARS:]
         last = float(recent[-1][4])
         lo, hi = min(float(r[3]) for r in recent), max(float(r[2]) for r in recent)
-        return {"up": round((last - lo) / atr_v, 2), "down": round((hi - last) / atr_v, 2)}
+        ref = float(rows[-5][4])
+        return {"up": round((last - lo) / atr_v, 2), "down": round((hi - last) / atr_v, 2),
+                "ret1h": round((last - ref) / ref * 100, 3)}
 
     def expected_r(self, rv: dict, split: list, sl_pct: float, bias: float = 0.0) -> float:
         probs = [max(0.0, t["estimatedHitProbability"] - bias) / 100 for t in rv["geometry"]["targets"]]
@@ -484,7 +530,7 @@ class SelfScanner:
             edge = round(raw[side] - raw[other], 1)
             for sd, plx in (("LONG", pl_long), ("SHORT", pl_short)):
                 self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf,
-                            pl_long.get("rpos"))
+                            pl_long.get("rpos"), pl_long.get("rsi"), self.btc.get("ret1h"))
             if side == "LONG" and regime[0] < -S.REGIME_VETO or side == "SHORT" and regime[0] > S.REGIME_VETO:
                 continue
             r = rv[side]
