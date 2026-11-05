@@ -139,7 +139,7 @@ class Bot:
                 tp["filled_at"] = now_iso()
                 log_event("TP_HIT", trade_id=tid, symbol=sym, side=side, label=tp["label"], price=tp["price"],
                           qty=tp["qty"], reason=f"{tp['label']} ({tp['r']}R) 觸發，部分平倉 {tp['qty']} 張")
-            if newly:
+            if newly and S.TP_STOP_MOVES:
                 filled = [i for i, tp in enumerate(tr["tps"]) if tp["filled"]]
                 k = max(filled)
                 if k == 0:

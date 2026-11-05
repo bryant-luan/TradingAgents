@@ -51,8 +51,11 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 
 # Break-even / profit lock, driven by the best price reached (MFE) rather than by TP fills.
 # (MFE in R reached, R locked by the stop); 0.0 = break-even plus round-trip fees.
-LOCK_LADDER = ((0.8, 0.0), (1.3, 0.3), (2.0, 0.8), (3.0, 1.6))
-HIGH_BE_TRIGGER_R = 0.6         # high-conviction trades risk 10%, so they go risk-free earlier
+# Replaying gated reviews on 5m bars, tightening before +2R cut the average result roughly in half
+# (+0.10R vs +0.20R): early break-even stops were wicked out ahead of the bigger moves.
+LOCK_LADDER = ((2.0, 0.0), (3.0, 1.6))
+HIGH_BE_TRIGGER_R = 2.0
+TP_STOP_MOVES = False           # moving the stop to break-even / the previous TP on each TP fill (same finding)
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
 TRAIL_GAP_R = 1.2               # beyond the ladder, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
