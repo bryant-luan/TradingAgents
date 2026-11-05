@@ -52,9 +52,16 @@ def events_since(path: Path, since: str) -> list:
 def btc_trend() -> str:
     rows = requests.get("https://api.toobit.com/quote/v1/klines",
                         params={"symbol": "BTC-SWAP-USDT", "interval": "1h", "limit": 25}, timeout=10).json()
-    c = [float(r[4]) for r in rows]
-    ch = lambda n: (c[-1] - c[-1 - n]) / c[-1 - n] * 100
-    return f"BTC {c[-1]:.0f}  1h {ch(1):+.2f}%  4h {ch(4):+.2f}%  24h {ch(24):+.2f}%"
+    c = [float(r[4]) for r in rows] if isinstance(rows, list) else []
+    if len(c) < 2:
+        return "BTC 價格暫時取不到"
+    def ch(n):
+        return None if len(c) <= n or not c[-1 - n] else (c[-1] - c[-1 - n]) / c[-1 - n] * 100
+    parts = [f"BTC {c[-1]:.0f}"]
+    for n, label in ((1, "1h"), (4, "4h"), (24, "24h")):
+        v = ch(n)
+        parts.append(f"{label} {v:+.2f}%" if v is not None else f"{label} —")
+    return "  ".join(parts)
 
 
 def main():
