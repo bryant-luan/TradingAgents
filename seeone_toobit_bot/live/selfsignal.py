@@ -614,6 +614,14 @@ class SelfScanner:
             pl = pl_long if side == "LONG" else pl_short
             prob = round(raw[side] - bias, 1)
             edge = round(raw[side] - raw[other], 1)
+            base = sym[:-4] if sym.endswith("USDT") else sym
+            prep = S.recipe_for(rhits, base, "SHORT")
+            if prep and prep[0] == "空頭預備" and prep[2] == prep[3]:
+                side, other = "SHORT", "LONG"
+                pl = pl_short
+                prob = round(raw[side] - bias, 1)
+                edge = round(raw[side] - raw[other], 1)
+                c = {**c, "side": "SHORT", "tags": c["tags"] + [f"客製化:空頭預備 {prep[2]}/{prep[3]}"]}
             try:
                 snap = self.so.flow().get(sym) or {}
             except Exception:
