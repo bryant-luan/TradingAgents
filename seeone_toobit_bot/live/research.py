@@ -51,7 +51,8 @@ NAMES = {
     "ema50_dist_atr": "距 15m EMA50 (ATR)", "atr_pct": "15m ATR %", "atr_ratio": "近 1h / 24h 波動比",
     "btc1h_dir_pct": "BTC 1h (方向) %", "btc4h_dir_pct": "BTC 4h (方向) %", "rs1h_vs_btc": "1h 相對 BTC 強弱 %",
     "dist24h_hi_atr": "距 24h 極值 (ATR)", "wick_dir": "近 3 根逆向影線比", "streak_dir": "15m 連續順向根數",
-    "quote_vol_24h": "24h 成交額", "side_long": "做多=1",
+            "quote_vol_24h": "24h 成交額", "side_long": "做多=1",
+    "px15_dir_pct": "15m 漲跌 (方向) %", "oi15": "15m 持倉量變化 %",
 }
 
 
@@ -171,6 +172,7 @@ class Lab:
             else:
                 break
         ret1h_pct = (e - c[-12]) / c[-12] * 100
+        px15 = (c[-1] - c[-4]) / c[-4] * 100 * sgn if len(c) >= 4 and c[-4] else None
         return {
             "prob": r["prob"], "m15": r.get("m15"), "htf": r.get("htf"), "rpos": r.get("rpos"),
             "stop_pct": d / e * 100,
@@ -189,6 +191,8 @@ class Lab:
             "streak_dir": streak,
             "quote_vol_24h": sum(qv[-288:]),
             "side_long": 1 if sgn > 0 else 0,
+            "px15_dir_pct": None if px15 is None else round(px15, 3),
+            "oi15": r.get("oi15"),
         }
 
 

@@ -716,6 +716,10 @@ class Bot:
         if not self.dry:
             self.recover_pending_entry()
         try:
+            self.so.ensure_session()
+        except Exception as e:
+            log_event("ERROR", where="seeone_session", error=repr(e)[:200])
+        try:
             signals = self.so.signals()
         except Exception as e:
             signals = None

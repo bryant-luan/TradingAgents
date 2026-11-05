@@ -226,7 +226,8 @@ class SelfScanner:
 
     def record(self, symbol: str, tsym: str, side: str, entry: float, stop: float, tp1: float, prob: float,
                m15: float | None = None, htf: float | None = None, rpos_long: float | None = None,
-               rsi_l: float | None = None, btc1h_long: float | None = None):
+               rsi_l: float | None = None, btc1h_long: float | None = None,
+               px15_long: float | None = None, oi15: float | None = None):
         sgn = 1 if side == "LONG" else -1
         self.d["pending"].append({"symbol": symbol, "tsym": tsym, "side": side, "entry": entry, "stop": stop,
                                   "tp1": tp1, "prob": prob, "ts": time.time(),
@@ -234,7 +235,9 @@ class SelfScanner:
                                   "htf": None if htf is None else round(htf * sgn, 2),
                                   "rpos": None if rpos_long is None else round(in_side(rpos_long, side), 2),
                                   "rsi": rsi_side(rsi_l, side),
-                                  "btc1h": None if btc1h_long is None else round(btc1h_long * sgn, 3)})
+                                  "btc1h": None if btc1h_long is None else round(btc1h_long * sgn, 3),
+                                  "px15": None if px15_long is None else round(px15_long * sgn, 3),
+                                  "oi15": None if oi15 is None else round(oi15, 3)})
 
     def resolve(self):
         still, new = [], 0
@@ -509,9 +512,11 @@ class SelfScanner:
             return None
         sgn = 1 if side == "LONG" else -1
         move = (price - float(rows[-EXT_BARS][1])) / dist
+        prev = float(rows[-2][4]) if len(rows) >= 2 else 0.0
+        px15 = (price - prev) / prev * 100 if prev else None
         return {"price": price, "atr": atr_v, "stop": price - sgn * dist,
                 "tps": [price + sgn * dist * r for r in TP_R], "dist": dist, "move_r": round(move, 2),
-                "rpos": range_pos(rows, price), "rsi": rsi_long(rows)}
+                "rpos": range_pos(rows, price), "rsi": rsi_long(rows), "px15": None if px15 is None else round(px15, 3)}
 
     def btc_counter(self) -> dict:
         """How far BTC has moved off its recent low and high, in BTC 15m ATRs."""
@@ -579,9 +584,17 @@ class SelfScanner:
             pl = pl_long if side == "LONG" else pl_short
             prob = round(raw[side] - bias, 1)
             edge = round(raw[side] - raw[other], 1)
+            try:
+                snap = self.so.flow().get(sym) or {}
+            except Exception:
+                snap = {}
+            px15 = snap.get("px15")
+            if px15 is None:
+                px15 = pl_long.get("px15")
+            oi15 = snap.get("oi15")
             for sd, plx in (("LONG", pl_long), ("SHORT", pl_short)):
                 self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf,
-                            pl_long.get("rpos"), pl_long.get("rsi"), self.btc.get("ret1h"))
+                            pl_long.get("rpos"), pl_long.get("rsi"), self.btc.get("ret1h"), px15, oi15)
             if side == "LONG" and regime[0] < -S.REGIME_VETO or side == "SHORT" and regime[0] > S.REGIME_VETO:
                 continue
             r = rv[side]

@@ -1,10 +1,16 @@
 """See One data + decision logic: market regime, candidate scoring, position sizing."""
+import base64
+import json
 import math
+import os
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
+
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 SEEONE = "https://seeone.club"
 # See One normally answers in well under a second (analysis-review included).
@@ -184,6 +190,76 @@ class SeeOne:
 
     def me(self):
         return self._get("/api/account/me")
+
+    def token_exp(self) -> float | None:
+        try:
+            payload = self.rt_session.split(".")[0]
+            payload += "=" * ((4 - len(payload) % 4) % 4)
+            return float(json.loads(base64.urlsafe_b64decode(payload)).get("exp"))
+        except Exception:
+            return None
+
+    def ensure_session(self):
+        """Renew rt_session from SEEONE_EMAIL/SEEONE_USERNAME and SEEONE_PASSWORD before it expires."""
+        exp = self.token_exp()
+        if exp and exp - time.time() > 600:
+            return
+        now = time.time()
+        if now < getattr(self, "_login_next", 0):
+            return
+        self._login_next = now + 300
+        from dotenv import load_dotenv
+        load_dotenv(ENV_FILE, override=True)
+        email = os.environ.get("SEEONE_EMAIL") or os.environ.get("SEEONE_USERNAME") or ""
+        password = os.environ.get("SEEONE_PASSWORD") or ""
+        if not email or not password:
+            self.log("SEEONE_LOGIN_NEED",
+                     note="rt_session 即將到期或已失效，.env 還沒有 email 和密碼，無法自動換發")
+            return
+        try:
+            r = requests.post(f"{SEEONE}/api/account/login", json={"email": email, "password": password},
+                              headers={"User-Agent": self.http.headers.get("User-Agent", ""), "Accept": "application/json"},
+                              timeout=20)
+            token = r.cookies.get("rt_session")
+            if not token and r.content[:1:] in (b"{", b"["):
+                body = r.json()
+                token = body.get("rt_session") or body.get("token") if isinstance(body, dict) else None
+            if r.status_code >= 400 or not token:
+                self.log("SEEONE_LOGIN_FAIL", status=r.status_code,
+                         note="自動重登失敗。請確認 .env 的 SEEONE_USERNAME（email）和 SEEONE_PASSWORD")
+                return
+        except (requests.RequestException, ValueError) as e:
+            self.log("SEEONE_LOGIN_FAIL", error=repr(e)[:160])
+            return
+        self.rt_session = token
+        self._new_session()
+        text = ENV_FILE.read_text() if ENV_FILE.exists() else ""
+        lines = []
+        found = False
+        for line in text.splitlines(True):
+            if line.startswith("SEEONE_RT_SESSION="):
+                lines.append("SEEONE_RT_SESSION=" + token + ("\n" if line.endswith("\n") else ""))
+                found = True
+            else:
+                lines.append(line)
+        if not found:
+            lines.append("SEEONE_RT_SESSION=" + token + "\n")
+        ENV_FILE.write_text("".join(lines))
+        ENV_FILE.chmod(0o600)
+        self.log("SEEONE_LOGIN", note="已用帳號密碼換發 rt_session")
+
+    def flow(self) -> dict:
+        """Current 15m price change and open-interest change by See One symbol, from the visual screener."""
+        if time.time() - getattr(self, "_flow_at", 0) < 60 and getattr(self, "_flow", None) is not None:
+            return self._flow
+        data = self._get("/api/intelligence")
+        out = {}
+        for row in data.get("visualScreener") or []:
+            sym = row.get("symbol")
+            if sym:
+                out[sym] = {"px15": row.get("priceChange15mPct"), "oi15": row.get("oiChange15mPct")}
+        self._flow, self._flow_at = out, time.time()
+        return out
 
     def directions(self) -> dict:
         d = self._get("/app/api/market-pulse", part="direction")
