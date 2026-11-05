@@ -24,6 +24,10 @@ REGIME_WEIGHTS = {"15m": 0.25, "1h": 0.35, "4h": 0.40}
 REGIME_BULL, REGIME_BEAR = 1.5, -1.5
 REGIME_VETO = 1.0               # no longs below -1.0, no shorts above +1.0
 MAX_SIGNAL_AGE_MIN = 240
+# Official signals whose 15m CVD buy/sell volume ratio is at or above this are skipped: across 168 closed See One
+# signals (159 distinct hours) those below 1.5 averaged +0.72R in both halves of the period, those above averaged
+# -0.31R. Recalibrated by the shadow optimizer.
+CVD_RATIO_MAX_DEFAULT = 1.5
 ENTRY_R_WINDOW = (-0.30, 0.50)  # current price must sit within this R band of the signal entry
 MIN_SCORE = 50
 RISK_PCT = 0.03                 # equity risked per trade at the stop
@@ -247,6 +251,12 @@ def path_expectancy(signals: list, own_trades: list) -> dict:
     }
 
 
+def cvd_ratio_of(sig: dict) -> float | None:
+    """Buy/sell volume ratio from the signal's own CVD snapshot (None when See One didn't record one)."""
+    ratio = ((sig.get("indicator_snapshot") or {}).get("cvd") or {}).get("ratio")
+    return None if ratio is None else float(ratio)
+
+
 def intrinsic_tags(sig: dict) -> list:
     """Traits known at signal time, independent of market context; used by the shadow optimizer."""
     snap = sig.get("scanner_snapshot") or {}
@@ -296,6 +306,12 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         skip = f"大盤偏空 {regime_score:+.2f}，否決做多"
     elif side == "SHORT" and regime_score > REGIME_VETO:
         skip = f"大盤偏多 {regime_score:+.2f}，否決做空"
+    else:
+        ratio = cvd_ratio_of(sig)
+        cvd_max = learned.get("cvd_ratio_max", CVD_RATIO_MAX_DEFAULT)
+        if ratio is not None and ratio >= cvd_max:
+            skip = (f"CVD 買賣量比 {ratio:.2f} ≥ {cvd_max:.2f}，買盤已遠大於賣盤 (擁擠)，"
+                    f"這類訊號歷史上平均虧損，等買賣量接近均衡再進")
 
     def add(tag: str, pts: float, text: str):
         factors[tag] = round(pts, 1)

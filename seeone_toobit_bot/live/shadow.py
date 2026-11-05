@@ -65,7 +65,7 @@ class Shadow:
             self.d["archive"][s["id"]] = {
                 "symbol": s["symbol"], "r": float(s["realized_r"]), "tags": S.intrinsic_tags(s),
                 "highest_tp": highest_tp(s), "closed_at": s.get("closed_at"), "exit": s.get("exit_reason"),
-                "snap": snap,
+                "cvd_ratio": S.cvd_ratio_of(s), "snap": snap,
             }
             new += 1
         self.d["since_opt"] += new
@@ -135,6 +135,31 @@ class Shadow:
         return split, ("各 TP 到達率 " + " ".join(f"TP{i + 1}={p:.0%}" for i, p in enumerate(reach))
                        + " | 每單位期望 " + " ".join(f"{e:+.2f}R" for e in ev))
 
+    def _calibrate_cvd(self, rows: list) -> tuple[float, str]:
+        """Largest buy/sell ratio cut whose skipped side lost in both halves of the archive."""
+        rows = sorted((r for r in rows if r.get("cvd_ratio") is not None), key=lambda r: r.get("closed_at") or "")
+        if len(rows) < 100:
+            return S.CVD_RATIO_MAX_DEFAULT, f"CVD 門檻樣本 {len(rows)}/100，用預設 {S.CVD_RATIO_MAX_DEFAULT}"
+        mid = len(rows) // 2
+        best = None
+        for cut in (1.0, 1.25, 1.5, 2.0):
+            skip = [r for r in rows if r["cvd_ratio"] >= cut]
+            keep = [r for r in rows if r["cvd_ratio"] < cut]
+            if len(skip) < 30 or len(keep) < 20:
+                continue
+            mean = lambda xs: sum(r["r"] for r in xs) / len(xs)
+            h1 = [r for r in rows[:mid] if r["cvd_ratio"] >= cut]
+            h2 = [r for r in rows[mid:] if r["cvd_ratio"] >= cut]
+            if not h1 or not h2 or mean(h1) >= 0 or mean(h2) >= 0 or mean(skip) >= mean(keep):
+                continue
+            total = sum(r["r"] for r in keep)
+            if best is None or total > best[0]:
+                best = (total, cut, len(keep), mean(keep), len(skip), mean(skip))
+        if best is None:
+            return S.CVD_RATIO_MAX_DEFAULT, "CVD 門檻: 沒有切點通過 (前後兩段被擋的都要是虧的)，用預設"
+        _, cut, nk, mk, ns, ms = best
+        return cut, (f"CVD 買賣量比 < {cut}: 放行 {nk} 筆平均 {mk:+.2f}R、擋下 {ns} 筆平均 {ms:+.2f}R")
+
     def optimize(self, force: bool = False):
         if not force and self.d["since_opt"] < REOPT_EVERY:
             return
@@ -156,6 +181,11 @@ class Shadow:
             changes.append(f"校準門檻 {p.get('calibrated_min_score')} → {cal}")
         p["calibrated_min_score"] = cal
 
+        cvd_cut, cvd_note = self._calibrate_cvd(rows)
+        if cvd_cut != p.get("cvd_ratio_max", S.CVD_RATIO_MAX_DEFAULT):
+            changes.append(f"CVD 買賣量比上限 {p.get('cvd_ratio_max', S.CVD_RATIO_MAX_DEFAULT)} → {cvd_cut}")
+        p["cvd_ratio_max"] = cvd_cut
+
         split, split_note = self._tp_split(rows)
         if split and split != p.get("tp_split"):
             changes.append(f"TP1-5 倉位分配 {p.get('tp_split') or S.TP_SPLIT} → {split}")
@@ -167,6 +197,6 @@ class Shadow:
         wins = sum(1 for r in rows if r["r"] > 0)
         self.log("SHADOW_OPTIMIZE", samples=len(rows), win_rate=round(wins / len(rows), 3),
                  avg_r=round(sum(r["r"] for r in rows) / len(rows), 3), changes=changes or ["無變動"],
-                 evidence=evidence, threshold=cal_note, tp_split=split_note,
+                 evidence=evidence, threshold=cal_note, cvd_ratio=cvd_note, tp_split=split_note,
                  effective_min_score=p["effective_min_score"])
         self.learner.save()
