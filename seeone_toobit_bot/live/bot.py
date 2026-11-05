@@ -34,6 +34,10 @@ INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 CALIB_FILE = ROOT / "logs" / "self_calib.json"
 SELF_SOURCE = "自選驗算"
+ADOPT_SOURCE = "接管持倉"
+RECONCILE_S = 60
+ADOPT_TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
+ADOPT_MAX_STOP_PCT = 0.06
 LOOP_SECONDS = 30
 # A normal cycle with several maker entries/exits stays well under this.
 WATCHDOG_S = 1200
@@ -169,7 +173,7 @@ class Bot:
                 if tr.get("exit_reason"):
                     continue
 
-            if tr.get("source") == SELF_SOURCE and not tr.get("exit_reason"):
+            if tr.get("source") in (SELF_SOURCE, ADOPT_SOURCE) and not tr.get("exit_reason"):
                 close, why = self.selfscan.recheck(tr)
                 if close:
                     tr["exit_reason"] = why
@@ -262,7 +266,8 @@ class Bot:
                                   "pnl": pnl, "r_result": r_result, "closed_at": now_iso(), "reason": reason})
         del self.st["trades"][tid]
         save_state(self.st)
-        self.learner.on_close(tr, r_result, pnl, reason, filled, round((time.time() - tr["opened_ts"]) / 60, 1))
+        if tr.get("source") != ADOPT_SOURCE:
+            self.learner.on_close(tr, r_result, pnl, reason, filled, round((time.time() - tr["opened_ts"]) / 60, 1))
 
     # ------------------------------------------------------------------ entries
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
@@ -342,7 +347,7 @@ class Bot:
         entry = float(pos.get("avgPrice") or p["price"])
         contracts = fill["filled"] or sz["contracts"]
         plan = S.tp_plan(sig, contracts, spec["min_contracts"], self.learner.p.get("tp_split"))
-        tps = self.place_tps(sym, side, entry, plan)
+        tps = self.place_tps(sym, side, p.get("tp_ref", entry), plan)
         sz = {**sz, "contracts": contracts}
         entry_fee = S.MAKER_FEE if fill["maker"] >= fill["taker"] else S.TAKER_FEE
         tid = f"{sym}:{side}:{int(time.time())}"
@@ -364,6 +369,64 @@ class Bot:
                   tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **p["entry_info"])
         if hasattr(self, "day_room"):
             self.day_room -= self.st["trades"][tid]["risk_usdt"]
+
+    def reconcile(self, positions: dict):
+        """Every RECONCILE_S: every exchange position must be managed by the bot and carry an exchange stop."""
+        if time.time() - getattr(self, "last_reconcile", 0) < RECONCILE_S:
+            return
+        self.last_reconcile = time.time()
+        tracked = {(t["tsym"], t["side"]): t for t in self.st["trades"].values()}
+        for (sym, side), pos in positions.items():
+            tr = tracked.get((sym, side))
+            try:
+                if tr is None:
+                    self.adopt_external(sym, side, pos)
+                elif not tr.get("exit_reason") and not any(
+                        str(o.get("clientOrderId", "")).startswith(f"STOP_{side}_LOSS")
+                        for o in self.tb.open_orders(sym, "STOP_PROFIT_LOSS")):
+                    self.tb.set_position_stop(sym, side, self.tb.fmt_price(sym, tr["stop"]))
+                    log_event("STOP_RESTORED", trade_id=tr["id"], symbol=sym, side=side, stop=tr["stop"],
+                              reason="每分鐘巡檢發現交易所上沒有止損，已補掛")
+            except ToobitError as e:
+                log_event("ERROR", where="reconcile", symbol=sym, side=side, error=str(e))
+                if tr is not None and "stop" in str(e).lower():
+                    tr["exit_reason"] = "巡檢補掛止損失敗 (價格可能已穿越止損)，平倉"
+                    self.maker_close(tr)
+
+    def adopt_external(self, sym: str, side: str, pos: dict):
+        """Take over a position the bot did not open: See One-style ATR stop and TP ladder from the current price."""
+        qty = int(float(pos["position"]))
+        px = self.tb.price(sym)
+        pl = self.selfscan.plan(sym, side)
+        dist = pl["dist"] if pl else ADOPT_MAX_STOP_PCT * px
+        sgn = 1 if side == "LONG" else -1
+        stop = px - sgn * dist
+        for kind in ("LIMIT", "STOP"):
+            for o in self.tb.open_orders(sym, kind):
+                if str(o.get("side", "")).endswith("CLOSE"):
+                    self.cancel_quiet(str(o["orderId"]), kind)
+        try:
+            self.tb.set_position_stop(sym, side, self.tb.fmt_price(sym, stop))
+        except ToobitError as e:
+            log_event("ADOPT_CLOSE", symbol=sym, side=side, contracts=qty, error=str(e), reason="接管時無法設定止損，直接平倉")
+            self.tb.flash_close(sym, side)
+            return
+        so_sym = sym.replace("-SWAP-USDT", "USDT")
+        sig = {"id": f"adopt:{so_sym}:{side}:{int(time.time())}", "symbol": so_sym, "side": side, "entry_price": px,
+               "stop_price": stop, "signal_path": "ADOPTED", "levels": [
+                   {"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": r, "price": px + sgn * dist * r}
+                   for i, r in enumerate(ADOPT_TP_R)]}
+        reason = (f"接管非機器人開立的持倉 {qty} 張 (均價 {pos.get('avgPrice')}、{pos.get('leverage')}x)：止損設於現價 "
+                  f"{px} 外 {dist / px:.2%} (1.5×ATR15m)，止盈 {ADOPT_TP_R[0]}R～{ADOPT_TP_R[-1]}R，之後依 See One 分析驗算重評")
+        p = {"sig": sig, "ev": {"analysis": None, "factors": {}, "cur_r": 0.0, "score": None},
+             "source": ADOPT_SOURCE, "regime": [0.0, "N/A"], "tier": "NORMAL", "stop": stop, "price": px, "tp_ref": px,
+             "sz": {"contracts": qty, "margin": float(pos.get("margin") or 0), "leverage": int(float(pos.get("leverage") or 1))},
+             "entry_info": {"signal_id": sig["id"], "source": ADOPT_SOURCE, "symbol": sym, "side": side, "price": px,
+                            "stop": stop, "reasons": [reason]},
+             "ctx": {"m15": None, "htf": None, "ext": None, "pre": None, "rpos": None, "dirs": None}}
+        log_event("ADOPT", symbol=sym, side=side, contracts=qty, entry=pos.get("avgPrice"), stop=stop, reason=reason)
+        self.record_entry(p, {"filled": qty, "maker": qty, "taker": 0, "order_ids": [], "note": "接管"}, pos)
+        save_state(self.st)
 
     def recover_pending_entry(self):
         """After a crash/kill mid-entry: cancel the resting maker entry and adopt any filled position."""
@@ -653,6 +716,7 @@ class Bot:
         if not self.dry:
             self.manage(positions, sigmap)
             positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
+            self.reconcile(positions)
 
         equity, avail = self.equity()
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
