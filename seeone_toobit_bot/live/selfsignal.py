@@ -364,6 +364,10 @@ class SelfScanner:
             if n < M15_MIN_N or rate < M15_PASS:
                 break
             floor = lo
+        # Don't raise the floor above the approved default: that plus a tight cap blocked every short
+        # through the overnight drop. A floor at or above the cap is an empty band.
+        if floor > S.HTF_MIN_DEFAULT or floor >= self.learner.p.get("htf_max", S.HTF_MAX_DEFAULT):
+            floor = S.HTF_MIN_DEFAULT
         old = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
         self.learner.p["htf_min"] = floor
         self.learner.save()
@@ -382,11 +386,17 @@ class SelfScanner:
             table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
         if any(n < M15_MIN_N for _, _, n, _ in table[:2]):
             return
-        cap = HTF_CAP_BUCKETS[0][1]
+        # Keep the default unless a bucket actually passes. The old start value was the first boundary,
+        # so a failing first bucket still installed that boundary and could meet htf_min, blocking every entry.
+        cap = S.HTF_MAX_DEFAULT
         for _, hi, n, rate in table:
             if n < M15_MIN_N or rate < M15_PASS:
                 break
-            cap = hi
+            if hi >= S.HTF_MAX_DEFAULT:
+                cap = hi
+        floor = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
+        if cap <= floor or cap < S.HTF_MAX_DEFAULT:
+            cap = S.HTF_MAX_DEFAULT
         old = self.learner.p.get("htf_max", S.HTF_MAX_DEFAULT)
         self.learner.p["htf_max"] = cap
         self.learner.save()
@@ -405,11 +415,13 @@ class SelfScanner:
             table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
         if any(n < M15_MIN_N for _, _, n, _ in table[:2]):
             return
-        cap = M15_BUCKETS[0][1]
+        cap = S.M15_MAX_DEFAULT
         for _, hi, n, rate in table:
             if n < M15_MIN_N or rate < M15_PASS:
                 break
-            cap = hi
+            # A cap below the default, including a negative one, blocks ordinary and waterfall shorts.
+            if hi >= S.M15_MAX_DEFAULT:
+                cap = hi
         old = self.learner.p.get("m15_max", S.M15_MAX_DEFAULT)
         self.learner.p["m15_max"] = cap
         self.learner.save()
@@ -443,12 +455,16 @@ class SelfScanner:
                      note="進場價已超出近 3 小時區間時先到 TP1 比例偏低；自動設定可進場的區間位置上限")
 
     def calibrate_rsi(self, rows: list):
-        self._calibrate_floor(rows, "rsi", RSI_BUCKETS, "rsi_min", S.RSI_MIN_DEFAULT, "SELF_RSI_CALIBRATE",
-                              "15m RSI 在交易方向偏弱 (做多 RSI 低、做空 RSI 高) 時先到 TP1 比例偏低；自動設定可進場的 RSI 下限")
+        # The measured best set leaves this off. Don't let a short sample turn it back on.
+        if self.learner.p.get("rsi_min", S.RSI_MIN_DEFAULT) != S.RSI_MIN_DEFAULT:
+            self.learner.p["rsi_min"] = S.RSI_MIN_DEFAULT
+            self.learner.save()
 
     def calibrate_btc1h(self, rows: list):
-        self._calibrate_floor(rows, "btc1h", BTC1H_BUCKETS, "btc1h_min", S.BTC1H_MIN_DEFAULT, "SELF_BTC1H_CALIBRATE",
-                              "BTC 近 1 小時與交易方向相反時先到 TP1 比例偏低；自動設定 BTC 1h 順方向漲跌幅下限")
+        # The measured best set is "BTC 1h must not be against the trade" (floor 0). Keep that floor.
+        if self.learner.p.get("btc1h_min", S.BTC1H_MIN_DEFAULT) != S.BTC1H_MIN_DEFAULT:
+            self.learner.p["btc1h_min"] = S.BTC1H_MIN_DEFAULT
+            self.learner.save()
 
     def _calibrate_floor(self, rows: list, key: str, buckets: list, param: str, default: float, event: str, note: str):
         """Floor = bottom of the lowest bucket reached scanning down from the top while every bucket passes;
