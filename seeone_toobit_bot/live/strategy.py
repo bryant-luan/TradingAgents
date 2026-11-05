@@ -320,26 +320,64 @@ def regime(directions: dict) -> tuple[float, str]:
     return round(score, 2), label
 
 
-def recipe_direction(name: str) -> str | None:
+def recipe_direction(name: str, rules: list | None = None) -> str | None:
     n = name.lower()
     if "short" in n or "空" in name or "暴跌" in name:
         return "SHORT"
     if "long" in n or "squeeze" in n or "爆漲" in name or "多" in name:
         return "LONG"
+    if rules:
+        bear = sum(1 for r in rules if r.get("operator") in ("lte", "lt") and (r.get("score") or 0) < 0)
+        bull = sum(1 for r in rules if r.get("operator") in ("gte", "gt") and (r.get("score") or 0) > 0)
+        if bear > bull:
+            return "SHORT"
+        if bull > bear:
+            return "LONG"
     return None
 
 
+def _rule_pass(rule: dict, reading: dict | None) -> bool:
+    if not isinstance(reading, dict) or reading.get("score") is None or rule.get("score") is None:
+        return False
+    score, thr, op = reading["score"], rule["score"], rule.get("operator")
+    return {"lte": score <= thr, "gte": score >= thr, "lt": score < thr, "gt": score > thr, "eq": score == thr}.get(op, False)
+
+
 def recipe_hits(recipes: list) -> dict:
-    """base asset -> list of (recipe name, implied direction) currently matching."""
+    """base asset -> (recipe name, side, rules passed, rule count). Includes partial matches, not only full hits."""
     out: dict[str, list] = {}
     for r in recipes:
-        if not r.get("recipe", {}).get("enabled", True):
+        rec = r.get("recipe") or {}
+        if not rec.get("enabled", True):
             continue
-        name = r["recipe"]["name"]
+        rules = rec.get("rules") or []
+        name = rec.get("name") or "?"
+        side = recipe_direction(name, rules)
+        if not side or not rules:
+            continue
+        seen = set()
+        for row in (r.get("evaluation") or {}).get("results") or []:
+            base = str(row.get("asset") or "").upper()
+            if not base:
+                continue
+            readings = row.get("readings") or {}
+            passed = sum(_rule_pass(rule, readings.get(rule.get("metric"))) for rule in rules)
+            if row.get("match"):
+                passed = len(rules)
+            if passed <= 0:
+                continue
+            seen.add(base)
+            out.setdefault(base, []).append((name, side, passed, len(rules)))
         for base, hit in (r.get("members") or {}).items():
-            if hit:
-                out.setdefault(base, []).append((name, recipe_direction(name)))
+            if hit and str(base).upper() not in seen:
+                out.setdefault(str(base).upper(), []).append((name, side, len(rules), len(rules)))
     return out
+
+
+def recipe_for(hits: dict, base: str, side: str) -> tuple | None:
+    """Best same-direction recipe progress for this asset, or None."""
+    rows = [h for h in hits.get(base, []) if h[1] == side]
+    return max(rows, key=lambda h: h[2] / h[3]) if rows else None
 
 
 def path_expectancy(signals: list, own_trades: list) -> dict:
@@ -449,11 +487,13 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
     if hint and hint != side:
         add("hint:opposite", -10, f"掃描方向提示 {hint} 與訊號相反")
 
-    for name, d in rhits.get(base, []):
-        if d == side:
-            add(f"recipe:{name}", 15, f"客製化訊號「{name}」同向命中")
-        elif d:
-            add(f"recipe_opp:{name}", -15, f"客製化訊號「{name}」反向命中")
+    for name, d, passed, total in rhits.get(base, []):
+        if d == side and passed == total:
+            add(f"recipe:{name}", 15, f"客製化訊號「{name}」{passed}/{total} 條全中")
+        elif d == side and passed * 2 >= total:
+            add(f"recipe:{name}", 8, f"客製化訊號「{name}」過半 {passed}/{total}")
+        elif d and d != side and passed * 2 >= total:
+            add(f"recipe_opp:{name}", -15, f"客製化訊號「{name}」反向已過半 {passed}/{total}")
 
     path = sig.get("signal_path") or "?"
     exp, n = pexp["seeone"].get(path, (0.0, 0))

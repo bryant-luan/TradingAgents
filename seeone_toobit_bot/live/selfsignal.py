@@ -503,10 +503,12 @@ class SelfScanner:
             c["side"] = c["side"] or hint
             c["tags"].append(f"潛力榜#{x['rank']}({x.get('state')})")
         for base, hits in rhits.items():
-            for name, d in hits:
-                c = cands.setdefault(base + "USDT", {"side": d, "tags": []})
-                c["side"] = c["side"] or d
-                c["tags"].append(f"客製化:{name}")
+            best = max(hits, key=lambda h: h[2] / h[3])
+            if best[2] * 2 < best[3]:
+                continue
+            c = cands.setdefault(base + "USDT", {"side": best[1], "tags": []})
+            c["side"] = best[1]
+            c["tags"].append(f"客製化:{best[0]} {best[2]}/{best[3]}")
         default = "LONG" if regime_label == "BULL" else "SHORT" if regime_label == "BEAR" else None
         for m in MAJORS:
             cands.setdefault(m, {"side": default, "tags": ["主流幣"]})
