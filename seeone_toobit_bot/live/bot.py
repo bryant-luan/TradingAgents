@@ -769,6 +769,7 @@ class Bot:
 
         dirs = self.dirs = self.so.directions()
         reg = S.regime(dirs)
+        self.st["market"] = {"ts": now_iso(), "dirs": dirs, "regime": list(reg), "htf": S.htf_score(dirs)}
         board_rows = self.so.strength_board()
         board = {b["symbol"]: b for b in board_rows}
         rhits = S.recipe_hits(self.so.recipes())
@@ -893,8 +894,15 @@ class Bot:
                 log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
 
     def watchdog(self):
+        tick = time.time()
         while True:
             time.sleep(30)
+            if time.time() - tick > 120:
+                # This thread itself overslept: the host was paused, not the main loop. Restart the stall clock.
+                log_event("HOST_RESUMED", paused_s=int(time.time() - tick - 30),
+                          note="主機暫停後恢復；重設看門狗計時，不把暫停誤判為主迴圈卡住")
+                self.beat = time.time()
+            tick = time.time()
             stalled = time.time() - self.beat
             if stalled > WATCHDOG_S:
                 frame = sys._current_frames().get(threading.main_thread().ident)

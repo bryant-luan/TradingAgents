@@ -1,0 +1,15 @@
+[Unit]
+Description=See One -> Toobit once-a-minute safety monitor
+After=network-online.target seeone-bot.service
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@DIR@
+Environment=PATH=@DIR@/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@DIR@/live/run_monitor.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

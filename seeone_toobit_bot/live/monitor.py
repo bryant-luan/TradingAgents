@@ -49,13 +49,23 @@ class Monitor:
         load_dotenv(ROOT / ".env")
         self.tb = Toobit(os.environ["TOOBIT_API_KEY"], os.environ["TOOBIT_API_SECRET"])
         self.no_proc_since = None
+        self.last_tick = time.time()
+        self.resumed_at = 0.0
         self.origin: dict[tuple, str] = {}   # (sym, side, avgPrice) -> "bot" | "manual"
         self.reported: set = set()
 
     # ------------------------------------------------------------------ bot process health
     def check_process(self) -> dict:
         bot, loop = pids("python3 -u -m live.bot"), pids("run_forever.sh")
-        age = time.time() - STATE_FILE.stat().st_mtime if STATE_FILE.exists() else None
+        now = time.time()
+        if now - self.last_tick > 3 * CHECK_S:
+            # The monitor itself overslept, so the whole host was paused; the bot was frozen too, not hung.
+            self.resumed_at = now
+            self.no_proc_since = None
+            log("MON_HOST_RESUMED", paused_s=int(now - self.last_tick),
+                note="主機暫停後恢復；狀態檔停更期間不算卡住，從恢復時重新計時")
+        self.last_tick = now
+        age = now - max(STATE_FILE.stat().st_mtime, self.resumed_at) if STATE_FILE.exists() else None
         if not bot:
             self.no_proc_since = self.no_proc_since or time.time()
             if time.time() - self.no_proc_since > NO_PROCESS_S:
