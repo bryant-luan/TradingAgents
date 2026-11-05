@@ -111,7 +111,9 @@ class SeeOne:
         old = self.http
         self.http = requests.Session()
         self.http.cookies.set("rt_session", self.rt_session, domain="seeone.club")
-        self.http.headers["User-Agent"] = "Mozilla/5.0 seeone-toobit-bot"
+        self.http.headers["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         if old is not None:
             old.close()
 
