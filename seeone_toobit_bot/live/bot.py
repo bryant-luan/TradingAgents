@@ -8,6 +8,7 @@ import argparse
 import json
 import re
 import os
+import signal
 import sys
 import threading
 import time
@@ -312,41 +313,86 @@ class Bot:
         self.tb.set_isolated(sym)
         self.tb.set_leverage(sym, sz["leverage"])
         self.st["traded_ids"].append(sig["id"])
+        # Journal the entry before any order goes out: if the process dies while the maker order rests, the
+        # restart adopts whatever filled (stop + TPs) instead of leaving a naked position.
+        self.st["pending_entry"] = {
+            "sig": sig, "ev": {k: ev.get(k) for k in ("analysis", "factors", "cur_r", "score")},
+            "source": source, "regime": list(regime), "tier": tier, "sz": sz, "stop": stop, "price": price,
+            "entry_info": entry_info, "ts": time.time(),
+            "ctx": {"m15": getattr(self, "m15", None), "htf": getattr(self, "htf", None), "ext": getattr(self, "ext", None),
+                    "pre": getattr(self, "pre", None), "rpos": getattr(self, "rpos", None), "dirs": getattr(self, "dirs", None)},
+        }
+        save_state(self.st)
+        # An exception below leaves pending_entry in place; the next cycle's recover_pending_entry() adopts it.
         fill = self.maker_entry(sym, side, sz["contracts"], stop, sig, spec)
         pos = next((p for p in self.tb.positions(sym) if p.get("side") == side), None)
         if not pos:
             log_event("SKIP" if not fill["filled"] else "ERROR", signal_id=sig["id"], symbol=sym, side=side,
                       reason=fill.get("note") or "下單後查無持倉", fill=fill)
-            return False
-        entry = float(pos.get("avgPrice") or price)
+        else:
+            self.record_entry(self.st["pending_entry"], fill, pos)
+        self.st.pop("pending_entry", None)
+        save_state(self.st)
+        return bool(pos)
+
+    def record_entry(self, p: dict, fill: dict, pos: dict):
+        sig, ev, sz, stop = p["sig"], p["ev"], p["sz"], p["stop"]
+        sym, side = S.to_toobit(sig["symbol"]), sig["side"]
+        spec = self.tb.specs()[sym]
+        entry = float(pos.get("avgPrice") or p["price"])
         contracts = fill["filled"] or sz["contracts"]
-        if contracts != sz["contracts"]:
-            plan = S.tp_plan(sig, contracts, spec["min_contracts"], self.learner.p.get("tp_split"))
+        plan = S.tp_plan(sig, contracts, spec["min_contracts"], self.learner.p.get("tp_split"))
         tps = self.place_tps(sym, side, entry, plan)
         sz = {**sz, "contracts": contracts}
         entry_fee = S.MAKER_FEE if fill["maker"] >= fill["taker"] else S.TAKER_FEE
-        order = {"orderId": fill.get("order_ids")}
         tid = f"{sym}:{side}:{int(time.time())}"
         mult = float(spec["multiplier"])
+        ctx = p["ctx"]
         self.st["trades"][tid] = {
-            "id": tid, "signal_id": sig["id"], "source": source, "tsym": sym, "side": side,
+            "id": tid, "signal_id": sig["id"], "source": p["source"], "tsym": sym, "side": side,
             "contracts": sz["contracts"], "entry": entry, "stop": stop, "tps": tps,
             "risk_usdt": round(sz["contracts"] * mult * abs(entry - stop), 4), "margin": sz["margin"],
             "leverage": sz["leverage"], "path": sig.get("signal_path"), "opened_ts": time.time(),
             "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
-            "tier": tier, "m15_at_entry": getattr(self, "m15", None),
-            "htf_at_entry": getattr(self, "htf", None), "ext_r_at_entry": getattr(self, "ext", None),
-            "pre_signal_r": getattr(self, "pre", None), "range_pos_at_entry": getattr(self, "rpos", None),
-            "dirs_at_entry": getattr(self, "dirs", None),
+            "tier": p["tier"], "m15_at_entry": ctx["m15"], "htf_at_entry": ctx["htf"], "ext_r_at_entry": ctx["ext"],
+            "pre_signal_r": ctx["pre"], "range_pos_at_entry": ctx["rpos"], "dirs_at_entry": ctx["dirs"],
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
-            "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": list(regime),
+            "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": p["regime"],
         }
-        log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=order.get("orderId"),
-                  tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **entry_info)
+        log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=fill.get("order_ids"),
+                  tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **p["entry_info"])
         if hasattr(self, "day_room"):
             self.day_room -= self.st["trades"][tid]["risk_usdt"]
-        return True
+
+    def recover_pending_entry(self):
+        """After a crash/kill mid-entry: cancel the resting maker entry and adopt any filled position."""
+        p = self.st.get("pending_entry")
+        if not p:
+            return
+        sym, side = S.to_toobit(p["sig"]["symbol"]), p["sig"]["side"]
+        for o in self.tb.open_orders(sym, "LIMIT"):
+            if str(o.get("clientOrderId", "")).startswith("mo"):
+                self.cancel_quiet(str(o["orderId"]), "LIMIT")
+        time.sleep(1)
+        pos = next((x for x in self.tb.positions(sym) if x.get("side") == side), None)
+        tracked = any(t["tsym"] == sym and t["side"] == side for t in self.st["trades"].values())
+        if pos and not tracked:
+            qty = int(float(pos["position"]))
+            fill = {"filled": qty, "maker": qty, "taker": 0, "order_ids": [],
+                    "note": "程式中斷時進場掛單已成交，重啟後接管並補掛止損/止盈"}
+            try:
+                self.tb.set_position_stop(sym, side, self.tb.fmt_price(sym, p["stop"]))
+            except ToobitError as e:
+                log_event("ADOPT_CLOSE", symbol=sym, side=side, contracts=qty, error=str(e),
+                          reason="接管時無法設定止損 (價格可能已穿越止損)，直接平倉")
+                self.tb.flash_close(sym, side)
+            else:
+                log_event("ADOPT", symbol=sym, side=side, contracts=qty, entry=pos.get("avgPrice"), stop=p["stop"],
+                          reason=fill["note"])
+                self.record_entry(p, fill, pos)
+        self.st.pop("pending_entry", None)
+        save_state(self.st)
 
     def _entry_ok(self, px: float, sig: dict, stop: float) -> bool:
         side, entry = sig["side"], float(sig["entry_price"])
@@ -584,6 +630,8 @@ class Bot:
 
     # ------------------------------------------------------------------ cycle
     def cycle(self):
+        if not self.dry:
+            self.recover_pending_entry()
         try:
             signals = self.so.signals()
         except Exception as e:
@@ -778,8 +826,14 @@ class Bot:
                           note=f"主迴圈超過 {WATCHDOG_S // 60} 分鐘沒有完成一輪，強制結束由外層自動重啟；交易所止損/止盈掛單不受影響")
                 os._exit(3)
 
+    def request_stop(self, signum, frame):
+        self.stopping = True
+        log_event("STOP_REQUESTED", signal=signum, note="收到停止訊號，完成這一輪 (含進行中的下單) 後結束")
+
     def run(self, once: bool):
         self.beat = time.time()
+        self.stopping = False
+        signal.signal(signal.SIGTERM, self.request_stop)
         if not once:
             threading.Thread(target=self.watchdog, daemon=True).start()
         me = self.so.me()
@@ -805,9 +859,12 @@ class Bot:
                 if not self.dry:
                     save_state(self.st)
                     self.shadow.save()
-            if once:
+            if once or self.stopping:
                 return
-            time.sleep(LOOP_SECONDS)
+            for _ in range(LOOP_SECONDS):
+                if self.stopping:
+                    return
+                time.sleep(1)
 
 
 def main():
