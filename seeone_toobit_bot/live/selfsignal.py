@@ -274,6 +274,15 @@ class SelfScanner:
         rate_lo = sum(r["hit"] for r in lo) / len(lo) if lo else None
         ok = (len(hi) >= M15_MIN_N and hours >= GATE_MIN_HOURS and len(lo) >= M15_MIN_N
               and rate_hi >= HIGH_SIZE_PASS and rate_hi >= rate_lo + HIGH_SIZE_MARGIN)
+        # Overconfidence cap: once the high-probability bucket has enough independent hours and still reaches TP1
+        # first less often than the gate pass rate, those reviews are not traded at all.
+        cap = (HIGH_MIN_PROB if len(hi) >= M15_MIN_N and hours >= GATE_MIN_HOURS and rate_hi < M15_PASS else None)
+        if cap != p.get("self_max_prob"):
+            self.log("SELF_MAXPROB_CALIBRATE", self_max_prob_old=p.get("self_max_prob"), self_max_prob_new=cap,
+                     hours=hours, n=len(hi), tp1_first_rate=rate_hi and round(rate_hi, 3),
+                     note=f"分析驗算機率 ≥{HIGH_MIN_PROB}% 的評估實測先到 TP1 比例 < {M15_PASS:.0%}，視為模型過度自信，不進場"
+                     if cap else "高機率評估實測已不低於門檻 (或樣本不足)，取消過度自信上限")
+        p["self_max_prob"] = cap
         old = p.get("high_size_ok")
         p["high_size_ok"] = ok
         self.learner.save()
@@ -476,6 +485,9 @@ class SelfScanner:
             r = rv[side]
             quality = float(r.get("tradeQuality") or 0)
             ev = self.expected_r(r, split, d / px, bias)
+            max_prob = self.learner.p.get("self_max_prob")
+            if max_prob is not None and prob >= max_prob:
+                continue
             if prob < min_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < MIN_EV_R:
                 continue
             try:
