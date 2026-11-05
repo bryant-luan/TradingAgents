@@ -502,33 +502,22 @@ class SelfScanner:
             c = cands.setdefault(x["symbol"], {"side": hint, "tags": []})
             c["side"] = c["side"] or hint
             c["tags"].append(f"潛力榜#{x['rank']}({x.get('state')})")
-        short_first = []
         for base, hits in rhits.items():
+            sym = base + "USDT"
+            if sym not in cands:
+                continue
             for name, side, passed, total in hits:
-                if passed * 2 < total:
+                if passed * 2 < total or side != cands[sym].get("side"):
                     continue
-                sym = base + "USDT"
-                c = cands.setdefault(sym, {"side": None, "tags": [], "extra": set()})
-                c.setdefault("extra", set()).add(side)
-                c["tags"].append(f"客製化:{name} {passed}/{total}")
-                if side == "SHORT" and "空" in name:
-                    c["side"] = "SHORT"
-                    short_first.append(sym)
+                cands[sym]["tags"].append(f"客製化:{name} {passed}/{total}")
         default = "LONG" if regime_label == "BULL" else "SHORT" if regime_label == "BEAR" else None
         for m in MAJORS:
             cands.setdefault(m, {"side": default, "tags": ["主流幣"]})
         out = []
-        ordered = list(dict.fromkeys(short_first + list(cands)))
-        for sym in ordered:
-            c = cands[sym]
-            sides = set(c.get("extra") or [])
-            if c.get("side"):
-                sides.add(c["side"])
-            if not sides:
-                sides = {"LONG", "SHORT"}
-            for sd in ("SHORT", "LONG"):
-                if sd in sides:
-                    out.append({"symbol": sym, "side": sd, "tags": c["tags"]})
+        for sym, c in cands.items():
+            sides = [c["side"]] if c.get("side") else ["LONG", "SHORT"]
+            for sd in sides:
+                out.append({"symbol": sym, "side": sd, "tags": c["tags"]})
         return out[:MAX_CANDIDATES * 2]
 
     def plan(self, tsym: str, side: str) -> dict | None:
@@ -614,14 +603,6 @@ class SelfScanner:
             pl = pl_long if side == "LONG" else pl_short
             prob = round(raw[side] - bias, 1)
             edge = round(raw[side] - raw[other], 1)
-            base = sym[:-4] if sym.endswith("USDT") else sym
-            prep = S.recipe_for(rhits, base, "SHORT")
-            if prep and prep[0] == "空頭預備" and prep[2] == prep[3]:
-                side, other = "SHORT", "LONG"
-                pl = pl_short
-                prob = round(raw[side] - bias, 1)
-                edge = round(raw[side] - raw[other], 1)
-                c = {**c, "side": "SHORT", "tags": c["tags"] + [f"客製化:空頭預備 {prep[2]}/{prep[3]}"]}
             try:
                 snap = self.so.flow().get(sym) or {}
             except Exception:

@@ -888,15 +888,6 @@ class Bot:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
                                     f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
                 continue
-            base = sig["symbol"][:-4] if sig["symbol"].endswith("USDT") else sig["symbol"]
-            same = S.recipe_for(rhits, base, sig["side"])
-            other = "SHORT" if sig["side"] == "LONG" else "LONG"
-            opp = S.recipe_for(rhits, base, other)
-            short_ready = same and same[1] == "SHORT" and "空" in same[0] and same[2] * 2 >= same[3]
-            if opp and opp[2] * 2 >= opp[3] and not short_ready and (not same or same[2] < opp[2]):
-                self.note_skip(sig, f"客製化「{opp[0]}」已過 {opp[2]}/{opp[3]} 條，指向"
-                                    f"{'做空' if other == 'SHORT' else '做多'}，與這筆方向相反")
-                continue
             if btc1h is not None and btc1h * sgn < btc1h_min:
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
                                     f"(順方向 {btc1h * sgn:+.2f}% < 下限 {btc1h_min:+.2f}%)，等大盤同向再進")
