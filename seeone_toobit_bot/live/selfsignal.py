@@ -68,6 +68,10 @@ HTF_BUCKETS = [(-99.0, -0.5), (-0.5, 0.5), (0.5, 99.0)]
 # Reviews taken in the same scan all ride the same market move, so sample counts overstate the evidence.
 # The gates keep their defaults until the records span this many distinct hours.
 GATE_MIN_HOURS = 24
+# ~190 resolved reviews per active hour: keep several days so the gates can ever reach GATE_MIN_HOURS,
+# and calibrate on a time window instead of a fixed record count.
+RESOLVED_KEEP = 20000
+CAL_WINDOW_H = 72
 
 
 def atr(symbol: str, n: int = 14) -> tuple[float, list] | None:
@@ -130,7 +134,7 @@ class SelfScanner:
         self.basis: dict[str, tuple[float, float]] = {}
 
     def save(self):
-        self.d["resolved"] = self.d["resolved"][-2000:]
+        self.d["resolved"] = self.d["resolved"][-RESOLVED_KEEP:]
         cutoff = time.time() - 86400
         self.d["last_review"] = {k: v for k, v in self.d["last_review"].items() if v > cutoff}
         tmp = self.path.with_suffix(".tmp")
@@ -236,7 +240,8 @@ class SelfScanner:
             self.calibrate()
 
     def calibrate(self):
-        rows = self.d["resolved"][-600:]
+        cutoff = time.time() - CAL_WINDOW_H * 3600
+        rows = [r for r in self.d["resolved"] if r["ts"] >= cutoff]
         table, chosen = [], None
         for lo, hi in CAL_BUCKETS:
             b = [r["hit"] for r in rows if lo <= r["prob"] < hi]
