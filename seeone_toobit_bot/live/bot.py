@@ -817,6 +817,7 @@ class Bot:
         m15_max = self.learner.p.get("m15_max", S.M15_MAX_DEFAULT)
         htf = self.htf = S.htf_score(dirs)
         htf_min = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
+        htf_max = self.learner.p.get("htf_max", S.HTF_MAX_DEFAULT)
         moves = {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
@@ -841,6 +842,10 @@ class Bot:
             if htf is not None and htf * sgn < htf_min:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                     f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
+                continue
+            if htf is not None and htf * sgn >= htf_max:
+                self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
+                                    f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
                 continue
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in moves:

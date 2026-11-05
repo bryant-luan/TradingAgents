@@ -40,6 +40,7 @@ MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
+HTF_MAX_DEFAULT = 1.5           # cap on it too: entries with the 1h/4h already strongly aligned arrive late; recalibrated live
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
 MAX_RANGE_POS = 1.05            # no entry once price is past the 3h high (long) / low (short) by 5% of that range
 RSI_MIN_DEFAULT = 50.0          # floor on the 15m RSI in the trade's direction (short: 100 - RSI); recalibrated live

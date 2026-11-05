@@ -65,6 +65,8 @@ M15_PASS = 0.50
 # Average of the 1h and 4h See One direction scores, signed to the trade side; the entry floor is the
 # bottom of the lowest bucket that passes, with the same sample and pass-rate rules.
 HTF_BUCKETS = [(-99.0, -0.5), (-0.5, 0.5), (0.5, 99.0)]
+# Cap side of the same score: the cap is the top of the highest bucket reached while every bucket below passes.
+HTF_CAP_BUCKETS = [(-99.0, 0.5), (0.5, 1.5), (1.5, 2.5), (2.5, 99.0)]
 # 15m RSI in the trade direction; the floor is the bottom of the lowest bucket that still passes, scanning down.
 RSI_BUCKETS = [(0.0, 40.0), (40.0, 50.0), (50.0, 60.0), (60.0, 101.0)]
 # Reviews taken in the same scan all ride the same market move, so sample counts overstate the evidence.
@@ -282,6 +284,7 @@ class SelfScanner:
                  note="分析驗算預估機率 vs 實際先到 TP1 的比例；樣本足夠時自動調整最低機率門檻")
         self.calibrate_m15(rows)
         self.calibrate_htf(rows)
+        self.calibrate_htf_max(rows)
         self.calibrate_rpos(rows)
         self.calibrate_rsi(rows)
         self.calibrate_high(rows)
@@ -290,7 +293,8 @@ class SelfScanner:
         p = self.learner.p
         g = [r for r in rows
              if (r.get("m15") is None or r["m15"] <= p.get("m15_max", S.M15_MAX_DEFAULT))
-             and (r.get("htf") is None or r["htf"] >= p.get("htf_min", S.HTF_MIN_DEFAULT))
+             and (r.get("htf") is None or p.get("htf_min", S.HTF_MIN_DEFAULT) <= r["htf"]
+                  < p.get("htf_max", S.HTF_MAX_DEFAULT))
              and (r.get("rpos") is None or r["rpos"] <= p.get("range_pos_max", S.MAX_RANGE_POS))
              and (r.get("rsi") is None or r["rsi"] >= p.get("rsi_min", S.RSI_MIN_DEFAULT))]
         hi = [r for r in g if r["prob"] >= HIGH_MIN_PROB]
@@ -351,6 +355,29 @@ class SelfScanner:
             self.log("SELF_HTF_CALIBRATE", htf_min_old=old, htf_min_new=floor,
                      buckets=[{"htf_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
                      note="1h/4h 大方向與交易方向相反時先到 TP1 比例偏低；自動設定可進場的大週期方向下限")
+
+    def calibrate_htf_max(self, rows: list):
+        if not self._gate_ready(rows, "htf", "htf_max", S.HTF_MAX_DEFAULT):
+            return
+        table = []
+        for lo, hi in HTF_CAP_BUCKETS:
+            b = [r["hit"] for r in rows if r.get("htf") is not None and lo <= r["htf"] < hi]
+            table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
+        if any(n < M15_MIN_N for _, _, n, _ in table[:2]):
+            return
+        cap = HTF_CAP_BUCKETS[0][1]
+        for _, hi, n, rate in table:
+            if n < M15_MIN_N or rate < M15_PASS:
+                break
+            cap = hi
+        old = self.learner.p.get("htf_max", S.HTF_MAX_DEFAULT)
+        self.learner.p["htf_max"] = cap
+        self.learner.save()
+        if cap != old or not self.learner.p.get("htf_max_logged"):
+            self.learner.p["htf_max_logged"] = True
+            self.log("SELF_HTF_MAX_CALIBRATE", htf_max_old=old, htf_max_new=cap,
+                     buckets=[{"htf_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
+                     note="1h/4h 大方向已強烈順著交易方向時先到 TP1 比例偏低 (進場偏晚)；自動設定可進場的大週期方向上限")
 
     def calibrate_m15(self, rows: list):
         if not self._gate_ready(rows, "m15", "m15_max", S.M15_MAX_DEFAULT):

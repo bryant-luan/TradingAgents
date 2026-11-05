@@ -146,6 +146,8 @@ class Learner:
             htf = tr.get("htf_at_entry")
             if htf is not None and htf * sgn < 0:
                 diagnosis.append(f"進場時 1h/4h 大方向 {htf:+.1f}，屬逆大勢交易")
+            if htf is not None and htf * sgn >= self.p.get("htf_max", S.HTF_MAX_DEFAULT):
+                diagnosis.append(f"進場時 1h/4h 大方向 {htf:+.1f} 已強烈順勢，大週期走勢已走一段，進場偏晚")
             rpos = tr.get("range_pos_at_entry")
             if rpos is not None and rpos > 1.0:
                 diagnosis.append(f"進場價已超出近 3 小時區間 (位置 {rpos:.2f})，追在突破延伸段")
