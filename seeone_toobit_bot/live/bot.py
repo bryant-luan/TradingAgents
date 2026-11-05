@@ -29,6 +29,8 @@ LOG_DIR = ROOT / "logs" / "trades"
 TRADE_LOG = LOG_DIR / "live_trades.jsonl"
 STATE_FILE = ROOT / "logs" / "live_state.json"
 PAUSE_FILE = ROOT / "logs" / "PAUSE"
+# Holds a UTC date: on that day the daily profit lock and its give-back stop are off (daily loss stop still applies).
+LOCK_OFF_FILE = ROOT / "logs" / "DAY_LOCK_OFF"
 LEARN_FILE = ROOT / "logs" / "learned_params.json"
 INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
@@ -736,7 +738,14 @@ class Bot:
         # Profit lock tracks realized balance only, so a floating profit that is later given back can't trip it.
         start = self.st["day_start_balance"]
         peak = self.st["day_peak_balance"] = max(self.st["day_peak_balance"], bal)
-        if peak - start >= start * S.DAY_LOCK_TRIGGER_PCT and not self.st.get("day_lock_armed"):
+        override = LOCK_OFF_FILE.exists() and LOCK_OFF_FILE.read_text().strip() == day
+        if override and self.st.get("day_lock_off_logged") != day:
+            for k in ("day_lock_armed", "day_lock_hit", "day_lock_ts"):
+                self.st.pop(k, None)
+            self.st["day_lock_off_logged"] = day
+            log_event("DAY_LOCK_OVERRIDE", day=day,
+                      reason="使用者指示今日照常開一般倉：解除當日鎖利與回吐停止 (UTC 日界前有效)；當日虧損上限仍有效")
+        if not override and peak - start >= start * S.DAY_LOCK_TRIGGER_PCT and not self.st.get("day_lock_armed"):
             self.st["day_lock_armed"] = True
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
