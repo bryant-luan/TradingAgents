@@ -41,6 +41,8 @@ LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "th
     "BTC 1h 方向 < 0": ("2026-11-05T08:00:00+00:00",
                         lambda f: f["btc1h_dir_pct"] is not None and f["btc1h_dir_pct"] < 0),
 }
+# Features already gated live (BTC 4h measured redundant with BTC 1h inside the live gates).
+LIVE_FEATURES = {"htf", "btc1h_dir_pct", "m15", "rpos", "prob", "rsi15_dir"}
 NAMES = {
     "prob": "分析驗算機率", "m15": "See One 15m 方向", "htf": "1h/4h 大方向", "rpos": "3h 區間位置",
     "stop_pct": "止損距離 %", "ret1h_R": "本幣 1h 走勢 (R)", "ret4h_R": "本幣 4h 走勢 (R)",
@@ -268,6 +270,12 @@ def main():
     for c in robust[:8]:
         lines.append(f"  {NAMES[c['feature']]} {c['rule']}: 被擋 {c['skip_n']} 筆/{c['skip_hours']} 小時 平均 {c['skip_r']:+.2f}R "
                      f"(前後 {c['skip_halves']}) → 放行平均 {c['keep_r']:+.2f}R，多空 {c['sides_agree']}，總省 {c['gain_total_r']}R")
+    prev = [json.loads(x) for x in HISTORY.read_text(encoding="utf-8").splitlines()[-2:]] if HISTORY.exists() else []
+    key = lambda c: (c["feature"], c["rule"].split()[0])  # feature + direction; the cut value drifts between runs
+    runs = [{key(c) for c in h.get("robust", [])} for h in prev] + [{key(c) for c in robust}]
+    persistent = set.intersection(*runs) if len(runs) == 3 else set()
+    lines.append("連續 3 次穩健 (指標+方向): " + ("、".join(
+        f"{NAMES[f]} {d}" + (" [已上線]" if f in LIVE_FEATURES else "") for f, d in sorted(persistent)) or "無"))
     lines.append("接近但未達穩健:")
     for c in near:
         lines.append(f"  {NAMES[c['feature']]} {c['rule']}: 被擋 {c['skip_n']} 筆/{c['skip_hours']} 小時 平均 {c['skip_r']:+.2f}R "
