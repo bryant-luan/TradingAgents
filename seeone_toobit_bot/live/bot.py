@@ -892,7 +892,8 @@ class Bot:
             same = S.recipe_for(rhits, base, sig["side"])
             other = "SHORT" if sig["side"] == "LONG" else "LONG"
             opp = S.recipe_for(rhits, base, other)
-            if opp and opp[2] * 2 >= opp[3] and (not same or same[2] < opp[2]):
+            short_ready = same and same[1] == "SHORT" and "空" in same[0] and same[2] * 2 >= same[3]
+            if opp and opp[2] * 2 >= opp[3] and not short_ready and (not same or same[2] < opp[2]):
                 self.note_skip(sig, f"客製化「{opp[0]}」已過 {opp[2]}/{opp[3]} 條，指向"
                                     f"{'做空' if other == 'SHORT' else '做多'}，與這筆方向相反")
                 continue

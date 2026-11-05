@@ -502,21 +502,33 @@ class SelfScanner:
             c = cands.setdefault(x["symbol"], {"side": hint, "tags": []})
             c["side"] = c["side"] or hint
             c["tags"].append(f"潛力榜#{x['rank']}({x.get('state')})")
+        short_first = []
         for base, hits in rhits.items():
-            best = max(hits, key=lambda h: h[2] / h[3])
-            if best[2] * 2 < best[3]:
-                continue
-            c = cands.setdefault(base + "USDT", {"side": best[1], "tags": []})
-            c["side"] = best[1]
-            c["tags"].append(f"客製化:{best[0]} {best[2]}/{best[3]}")
+            for name, side, passed, total in hits:
+                if passed * 2 < total:
+                    continue
+                sym = base + "USDT"
+                c = cands.setdefault(sym, {"side": None, "tags": [], "extra": set()})
+                c.setdefault("extra", set()).add(side)
+                c["tags"].append(f"客製化:{name} {passed}/{total}")
+                if side == "SHORT" and "空" in name:
+                    c["side"] = "SHORT"
+                    short_first.append(sym)
         default = "LONG" if regime_label == "BULL" else "SHORT" if regime_label == "BEAR" else None
         for m in MAJORS:
             cands.setdefault(m, {"side": default, "tags": ["主流幣"]})
         out = []
-        for sym, c in cands.items():
-            sides = [c["side"]] if c["side"] else ["LONG", "SHORT"]
-            for sd in sides:
-                out.append({"symbol": sym, "side": sd, "tags": c["tags"]})
+        ordered = list(dict.fromkeys(short_first + list(cands)))
+        for sym in ordered:
+            c = cands[sym]
+            sides = set(c.get("extra") or [])
+            if c.get("side"):
+                sides.add(c["side"])
+            if not sides:
+                sides = {"LONG", "SHORT"}
+            for sd in ("SHORT", "LONG"):
+                if sd in sides:
+                    out.append({"symbol": sym, "side": sd, "tags": c["tags"]})
         return out[:MAX_CANDIDATES * 2]
 
     def plan(self, tsym: str, side: str) -> dict | None:
