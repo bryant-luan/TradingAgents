@@ -18,6 +18,7 @@ from pathlib import Path
 import requests
 
 from . import strategy as S
+from .localreview import LocalReview
 
 SCAN_EVERY_S = 300
 MAJORS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
@@ -192,6 +193,8 @@ class SelfScanner:
             self.d.update(json.loads(calib_path.read_text()))
         self.last_scan = 0.0
         self.basis: dict[str, tuple[float, float]] = {}
+        self.local = LocalReview(calib_path)
+        self.sim_log = calib_path.parent / "local_review_sim.jsonl"
 
     def save(self):
         self.d["resolved"] = self.d["resolved"][-RESOLVED_KEEP:]
@@ -608,6 +611,32 @@ class SelfScanner:
         fee_r = (S.MAKER_FEE * (1 + p1) + S.TAKER_FEE * (1 - p1)) / sl_pct
         return round(ev - fee_r, 3)
 
+    def _emit_shadow(self, sym: str, pl_long: dict, htf: float | None, seeone_prob: float | None, seeone_side: str | None):
+        """Log what our own TP1-before-stop table would say. Never opens a trade."""
+        btc = (self.btc or {}).get("ret1h")
+        rpos_long = pl_long.get("rpos")
+        est = {}
+        for side in ("LONG", "SHORT"):
+            rpos = None if rpos_long is None else (rpos_long if side == "LONG" else round(1 - rpos_long, 3))
+            htf_dir = None if htf is None else htf * (1 if side == "LONG" else -1)
+            btc_dir = None if btc is None else btc * (1 if side == "LONG" else -1)
+            est[side] = {**self.local.estimate(side, rpos, btc_dir, htf_dir), "rpos": rpos, "htf_dir": htf_dir}
+        side = max(est, key=lambda s: est[s]["prob"] if est[s]["prob"] is not None else -1)
+        other = "SHORT" if side == "LONG" else "LONG"
+        prob, other_prob = est[side]["prob"], est[other]["prob"]
+        edge = None if prob is None or other_prob is None else round(prob - other_prob, 1)
+        htf_dir, rpos = est[side]["htf_dir"], est[side]["rpos"]
+        would = (prob is not None and prob >= DEFAULT_MIN_PROB and edge is not None and edge >= MIN_EDGE
+                 and rpos is not None and rpos <= S.MAX_RANGE_POS
+                 and htf_dir is not None and S.HTF_MIN_DEFAULT <= htf_dir < S.HTF_MAX_DEFAULT)
+        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "symbol": sym, "side": side,
+               "prob": prob, "other_prob": other_prob, "edge": edge, "n": est[side]["n"],
+               "level": est[side]["level"], "rpos": rpos, "htf_dir": None if htf_dir is None else round(htf_dir, 2),
+               "would_pass": would, "seeone_prob": seeone_prob, "seeone_side": seeone_side}
+        with self.sim_log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self.log("LOCAL_SIM", **rec, note="自建驗算模擬，不下單")
+
     def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
              htf: float | None = None) -> list:
         """Review every candidate both LONG and SHORT on mirrored geometry. 分析驗算 is direction-biased
@@ -615,8 +644,7 @@ class SelfScanner:
         a trade needs a clear edge over the opposite side, not just a high raw probability."""
         if time.time() - self.last_scan < SCAN_EVERY_S:
             return []
-        if self.so.review_not_before > time.time():
-            return []
+        seeone_open = self.so.review_not_before <= time.time()
         self.last_scan = time.time()
         self.resolve()
         split = self.learner.p.get("tp_split") or S.TP_SPLIT
@@ -656,12 +684,27 @@ class SelfScanner:
                 ordered.append(rest.pop(0))
         # A full scan used to finish about twenty names. After the 11:52 burst, capping
         # each round keeps us under the pace See One was answering before the penalty.
+        shadowed = 0
+        if not seeone_open:
+            fresh = self.d.setdefault("last_shadow", {})
+            ordered = [c for c in ordered if now - fresh.get(c["symbol"], 0) >= REVIEW_COOLDOWN_S]
+        pl_long = None
         for c in ordered[:6]:
             sym = c["symbol"]
             tsym = S.to_toobit(sym)
             if tsym not in specs or tsym in held:
                 continue
+            if not seeone_open:
+                if now - self.d.setdefault("last_shadow", {}).get(sym, 0) < REVIEW_COOLDOWN_S:
+                    continue
+                pl_long = self.plan(tsym, "LONG")
+                if pl_long:
+                    self._emit_shadow(sym, pl_long, htf, None, None)
+                    self.d["last_shadow"][sym] = time.time()
+                    shadowed += 1
+                continue
             try:
+                pl_long = None
                 pl_long = self.plan(tsym, "LONG")
                 if not pl_long:
                     continue
@@ -684,6 +727,8 @@ class SelfScanner:
                 # still open). The clock lives on the client, so this scan just stops.
                 if isinstance(e, S.SeeOneLimited):
                     self.d["last_review"][sym] = time.time()
+                    if pl_long:
+                        self._emit_shadow(sym, pl_long, htf, None, None)
                     break
                 if isinstance(e, S.SeeOneDown):
                     break
@@ -710,6 +755,7 @@ class SelfScanner:
             pl = pl_long if side == "LONG" else pl_short
             prob = round(raw[side] - bias, 1)
             edge = round(raw[side] - raw[other], 1)
+            self._emit_shadow(sym, pl_long, htf, prob, side)
             try:
                 snap = self.so.flow().get(sym) or {}
             except Exception:
@@ -755,7 +801,7 @@ class SelfScanner:
             time.sleep(0.3)
         found.sort(key=lambda f: -f["ev"]["score"])
         self.save()
-        self.log("SELF_SCAN", reviewed_symbols=reviewed,
+        self.log("SELF_SCAN", reviewed_symbols=reviewed, shadow=shadowed, seeone_open=seeone_open,
                  universe=len(by_symbol),
                  tradefi=sum(1 for c in by_symbol.values() if "TradFi" in c["tags"]),
                  watched=[(w["symbol"], w["side"], w["prob"], w["edge"]) for w in watched],
