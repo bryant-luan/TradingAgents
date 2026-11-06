@@ -732,14 +732,15 @@ class SelfScanner:
                 if now - self.d.setdefault("last_shadow", {}).get(sym, 0) < REVIEW_COOLDOWN_S:
                     continue
                 pl_long = self.plan(tsym, "LONG")
-                if pl_long:
-                    self._emit_shadow(sym, pl_long, htf, None, None)
-                    if sum(1 for x in found if x.get("source") == "安靜期強勢空") == 0:
-                        item = self._quiet_short(c, pl_long, regime, htf)
-                        if item:
-                            found.append(item)
-                    self.d["last_shadow"][sym] = time.time()
-                    shadowed += 1
+                self.d["last_shadow"][sym] = time.time()
+                if not pl_long:
+                    continue
+                self._emit_shadow(sym, pl_long, htf, None, None)
+                if sum(1 for x in found if x.get("source") == "安靜期強勢空") == 0:
+                    item = self._quiet_short(c, pl_long, regime, htf)
+                    if item:
+                        found.append(item)
+                shadowed += 1
                 continue
             try:
                 pl_long = None
