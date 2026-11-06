@@ -535,7 +535,7 @@ class SelfScanner:
 
     # ------------------------------------------------------------------ scanning
     def universe(self, regime_label: str, rhits: dict) -> list:
-        boards = self.so._get("/api/dashboard/boards")
+        boards = self.so.boards()
         cands: dict[str, dict] = {}
         for t in boards.get("turtleActive", []):
             cands.setdefault(t["symbol"], {"side": t["side"], "tags": []})["tags"].append(f"強勢榜#{t.get('rank')}")
@@ -615,7 +615,7 @@ class SelfScanner:
         a trade needs a clear edge over the opposite side, not just a high raw probability."""
         if time.time() - self.last_scan < SCAN_EVERY_S:
             return []
-        if time.time() < getattr(self, "review_pause_until", 0):
+        if self.so.review_not_before > time.time():
             return []
         self.last_scan = time.time()
         self.resolve()
@@ -667,23 +667,10 @@ class SelfScanner:
                 rv["SHORT"] = self.review(sym, "SHORT", pl_short["stop"], pl_short["tps"])
             except Exception as e:
                 self.log("ERROR", where="self_review", symbol=sym, error=repr(e)[:300])
-                # A 429 means the budget is spent. Park this symbol at the back of the queue and
-                # wait before the next analysis-review, instead of retrying it at the front forever.
-                if "429" in repr(e):
+                # SeeOneLimited is raised only after a real 429 (or when the shared cooldown is
+                # still open). The clock lives on the client, so this scan just stops.
+                if isinstance(e, S.SeeOneLimited):
                     self.d["last_review"][sym] = time.time()
-                    retry = None
-                    resp = getattr(e, "response", None)
-                    raw = resp.headers.get("Retry-After") if resp is not None else None
-                    if raw and str(raw).isdigit():
-                        retry = int(raw)
-                    if retry is None or not 30 <= retry <= 1800:
-                        self.review_backoff = min(1200, getattr(self, "review_backoff", 300) * 2)
-                        retry = self.review_backoff
-                    else:
-                        self.review_backoff = retry
-                    self.review_pause_until = time.time() + retry
-                    self.log("SEEONE_RATE_LIMIT", symbol=sym, pause_s=retry,
-                             note=f"分析驗算被限流，這個幣先排到後面，{retry // 60} 分鐘後再試下一個")
                     break
                 if isinstance(e, S.SeeOneDown):
                     break
@@ -691,7 +678,6 @@ class SelfScanner:
                     self.d.setdefault("unsupported", {})[sym] = time.time() + 6 * 3600
                 continue
             reviewed += 1
-            self.review_backoff = 300
             self.d["last_review"][sym] = time.time()
             time.sleep(1.5)
             if any(len((r.get("geometry") or {}).get("targets") or []) != len(TP_R) for r in rv.values()):

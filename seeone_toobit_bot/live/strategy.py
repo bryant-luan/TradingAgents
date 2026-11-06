@@ -25,6 +25,20 @@ BREAKER_COOLDOWN_S = 60
 class SeeOneDown(requests.ConnectionError):
     pass
 
+
+class SeeOneLimited(Exception):
+    """analysis-review is in a local cooldown after HTTP 429. No request was sent."""
+
+    def __init__(self, wait_s: float):
+        self.wait_s = wait_s
+        super().__init__(f"分析驗算限流中，{wait_s:.0f} 秒內不再打")
+
+
+# Minimum space between analysis-review posts, and how long to stay silent after a 429
+# when See One does not send Retry-After. Five minutes was still inside the penalty.
+REVIEW_GAP_S = 15
+REVIEW_PENALTY_S = 900
+
 # --- tunables -------------------------------------------------------------
 REGIME_WEIGHTS = {"15m": 0.25, "1h": 0.35, "4h": 0.40}
 REGIME_BULL, REGIME_BEAR = 1.5, -1.5
@@ -131,6 +145,9 @@ class SeeOne:
         self.rt_session = rt_session
         self.log = lambda event, **kw: None
         self.fails, self.open_until, self.down_since, self.last_error = 0, 0.0, None, None
+        self.review_not_before = 0.0
+        self.last_review_post = 0.0
+        self._cache: dict = {}
         self.http = None
         self._new_session()
 
@@ -164,14 +181,42 @@ class SeeOne:
             raise out["e"]
         return out["r"]
 
+    def _cached(self, key: str, ttl: float, path: str, **params):
+        now = time.time()
+        hit = self._cache.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+        data = self._get(path, **params)
+        self._cache[key] = (now, data)
+        return data
+
+    def _review_penalty(self, response) -> int:
+        raw = response.headers.get("Retry-After") if response is not None else None
+        if raw and str(raw).isdigit() and 30 <= int(raw) <= 1800:
+            return int(raw)
+        return REVIEW_PENALTY_S
+
     def request(self, method: str, path: str, deadline: float = HTTP_DEADLINE_S, tries: int = 2, **kw):
         if time.time() < self.open_until:
             raise SeeOneDown(f"See One 連線異常 ({self.last_error})，暫停呼叫 {self.open_until - time.time():.0f}s")
+        is_review = path.endswith("analysis-review")
+        if is_review:
+            wait = self.review_not_before - time.time()
+            if wait > 0:
+                raise SeeOneLimited(wait)
+            gap = REVIEW_GAP_S - (time.time() - self.last_review_post)
+            if gap > 0:
+                time.sleep(gap)
         for attempt in range(tries):
             try:
                 r = self._call(method, path, deadline, **kw)
+                if r.status_code == 429 and is_review:
+                    pause = self._review_penalty(r)
+                    self.review_not_before = time.time() + pause
+                    self.log("SEEONE_RATE_LIMIT", pause_s=pause, path=path,
+                             note=f"分析驗算 429，{pause // 60} 分鐘內這支完全不打，避免處罰被延續")
+                    raise SeeOneLimited(pause)
                 if r.status_code == 429:
-                    # One limited call is enough. A second attempt a few seconds later keeps the penalty open.
                     raise requests.HTTPError(f"429 {path}", response=r)
                 if r.status_code >= 500:
                     raise requests.HTTPError(f"{r.status_code} {path}")
@@ -188,6 +233,8 @@ class SeeOne:
                 self._new_session()
                 err = e
             else:
+                if is_review:
+                    self.last_review_post = time.time()
                 self._ok()
                 return data
             if attempt == tries - 1:
@@ -318,8 +365,11 @@ class SeeOne:
         return out
 
     def directions(self) -> dict:
-        d = self._get("/app/api/market-pulse", part="direction")
+        d = self._cached("directions", 90, "/app/api/market-pulse", part="direction")
         return {x["horizon"]: float(x["score"]) for x in d.get("directions", []) if x.get("score") is not None}
+
+    def boards(self) -> dict:
+        return self._cached("boards", 90, "/api/dashboard/boards")
 
     def signals(self) -> list:
         return self._get("/api/signals")
@@ -328,10 +378,10 @@ class SeeOne:
         return self._get("/api/history/signals", limit=limit)
 
     def strength_board(self) -> list:
-        return self._get("/api/turtle-active")
+        return self._cached("turtle", 90, "/api/turtle-active")
 
     def recipes(self) -> list:
-        return self._get("/app/api/customized-signals").get("recipes", [])
+        return self._cached("recipes", 180, "/app/api/customized-signals").get("recipes", [])
 
     def core_trend_metrics(self) -> dict:
         return self._get("/api/metrics", path="CORE TREND")
