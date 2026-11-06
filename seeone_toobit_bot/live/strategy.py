@@ -40,6 +40,7 @@ class SeeOneLimited(Exception):
 # that used to let a normal scan through.
 REVIEW_GAP_S = 15
 REVIEW_PENALTY_S = 3600
+REVIEW_PENALTY_LONG_S = 6 * 3600
 REVIEW_PAUSE_FILE = ENV_FILE.parent / "logs" / "seeone_review_pause.json"
 
 # --- tunables -------------------------------------------------------------
@@ -148,7 +149,7 @@ class SeeOne:
         self.rt_session = rt_session
         self.log = lambda event, **kw: None
         self.fails, self.open_until, self.down_since, self.last_error = 0, 0.0, None, None
-        self.review_not_before = self._load_review_pause()
+        self.review_not_before, self._review_streak = self._load_review_pause()
         self.last_review_post = 0.0
         self._cache: dict = {}
         self.http = None
@@ -193,17 +194,17 @@ class SeeOne:
         self._cache[key] = (now, data)
         return data
 
-    def _load_review_pause(self) -> float:
+    def _load_review_pause(self) -> tuple[float, int]:
         try:
             data = json.loads(REVIEW_PAUSE_FILE.read_text())
-            return float(data.get("until") or 0)
+            return float(data.get("until") or 0), int(data.get("streak") or 0)
         except (OSError, ValueError):
-            return 0.0
+            return 0.0, 0
 
-    def _save_review_pause(self, until: float):
+    def _save_review_pause(self, until: float, streak: int):
         REVIEW_PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = REVIEW_PAUSE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"until": until}))
+        tmp.write_text(json.dumps({"until": until, "streak": streak}))
         tmp.replace(REVIEW_PAUSE_FILE)
 
     def _review_penalty(self, response) -> int:
@@ -227,10 +228,13 @@ class SeeOne:
             try:
                 r = self._call(method, path, deadline, **kw)
                 if r.status_code == 429 and is_review:
+                    self._review_streak = getattr(self, "_review_streak", 0) + 1
                     pause = self._review_penalty(r)
+                    if pause == REVIEW_PENALTY_S and self._review_streak >= 2:
+                        pause = REVIEW_PENALTY_LONG_S
                     self.review_not_before = time.time() + pause
-                    self._save_review_pause(self.review_not_before)
-                    self.log("SEEONE_RATE_LIMIT", pause_s=pause, path=path,
+                    self._save_review_pause(self.review_not_before, self._review_streak)
+                    self.log("SEEONE_RATE_LIMIT", pause_s=pause, streak=self._review_streak, path=path,
                              note=f"分析驗算 429，{pause // 60} 分鐘內這支完全不打，避免處罰被延續")
                     raise SeeOneLimited(pause)
                 if r.status_code == 429:
@@ -252,6 +256,7 @@ class SeeOne:
             else:
                 if is_review:
                     self.last_review_post = time.time()
+                    self._review_streak = 0
                     if REVIEW_PAUSE_FILE.exists():
                         REVIEW_PAUSE_FILE.unlink()
                 self._ok()
