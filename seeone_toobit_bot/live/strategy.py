@@ -102,6 +102,9 @@ QUOTE_VOL_MIN_DEFAULT = 1.14e8
 PX15_DIR_MIN_DEFAULT = -0.484
 MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
 MAX_SAME_SIDE = 2               # open positions on one side
+# Quiet-period shorts may fill the whole book. The live sample was still a handful of
+# trades after XAG and XAU; three concurrent names is the cap the account already allows.
+QUIET_MAX_SAME_SIDE = 3
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
 MAKER_FEE, TAKER_FEE = 0.0002, 0.0006

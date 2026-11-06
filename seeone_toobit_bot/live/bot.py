@@ -972,7 +972,8 @@ class Bot:
                                     f"(< 下限 {rsi_min:.0f})，短線動能與方向相反，等轉強再進")
                 continue
             same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
-            if len(same) >= S.MAX_SAME_SIDE:
+            same_cap = S.QUIET_MAX_SAME_SIDE if sig.get("quiet_strong_short") else S.MAX_SAME_SIDE
+            if len(same) >= same_cap:
                 self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
                 continue
             last = max((t["opened_ts"] for t in same), default=0)

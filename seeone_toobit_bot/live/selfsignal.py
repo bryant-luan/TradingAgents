@@ -776,7 +776,8 @@ class SelfScanner:
                     continue
                 self._emit_shadow(sym, pl_long, htf, None, None)
                 shadowed += 1
-                if sum(1 for x in found if x.get("source") == "安靜期強勢空") < 2:
+                quiet_n = sum(1 for x in found if x.get("source") == "安靜期強勢空")
+                if quiet_n < S.QUIET_MAX_SAME_SIDE:
                     item = self._quiet_short(c, pl_long, regime, htf)
                     if item:
                         why = self._quiet_blocked(tsym, btc_5m, qv_map.get(tsym))
@@ -784,7 +785,8 @@ class SelfScanner:
                             self.log("QUIET_GATE", symbol=sym, side="SHORT", reason=why)
                         else:
                             found.append(item)
-                if sum(1 for x in found if x.get("source") == "安靜期強勢空") >= 2:
+                            quiet_n += 1
+                if quiet_n >= S.QUIET_MAX_SAME_SIDE:
                     break
                 continue
             try:
