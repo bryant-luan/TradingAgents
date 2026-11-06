@@ -645,10 +645,13 @@ class SelfScanner:
                         key=lambda c: self.d["last_review"].get(c["symbol"], 0))
         rest = sorted((c for c in by_symbol.values() if not priority(c) and due(c["symbol"])),
                       key=lambda c: self.d["last_review"].get(c["symbol"], 0))
+        # The analysis-review budget is a few calls per cooldown. Spend three of every four
+        # on names already on a See One board; the fourth keeps TradFi and the rest of the book moving.
         ordered = []
         while boards or rest:
-            if boards:
-                ordered.append(boards.pop(0))
+            for _ in range(3):
+                if boards:
+                    ordered.append(boards.pop(0))
             if rest:
                 ordered.append(rest.pop(0))
         for c in ordered:
@@ -662,9 +665,17 @@ class SelfScanner:
                     continue
                 d, px = pl_long["dist"], pl_long["price"]
                 pl_short = {**pl_long, "stop": px + d, "tps": [px - d * r for r in TP_R]}
-                rv = {"LONG": self.review(sym, "LONG", pl_long["stop"], pl_long["tps"])}
-                time.sleep(1.2)
-                rv["SHORT"] = self.review(sym, "SHORT", pl_short["stop"], pl_short["tps"])
+                plans = {"LONG": pl_long, "SHORT": pl_short}
+                hint = c.get("side") if c.get("side") in ("LONG", "SHORT") else ("SHORT" if regime[0] < 0 else "LONG")
+                # Both sides are only needed to measure the model's long/short bias. Once that bias is known,
+                # one call plus the saved bias matches the old de-bias math and cuts the request in half.
+                # Every fourth name still reviews both sides so the bias can move.
+                samples = self.d.setdefault("bias_samples", [])
+                both = (reviewed + 1) % 4 == 0
+                rv = {hint: self.review(sym, hint, plans[hint]["stop"], plans[hint]["tps"])}
+                if both:
+                    other_side = "SHORT" if hint == "LONG" else "LONG"
+                    rv[other_side] = self.review(sym, other_side, plans[other_side]["stop"], plans[other_side]["tps"])
             except Exception as e:
                 self.log("ERROR", where="self_review", symbol=sym, error=repr(e)[:300])
                 # SeeOneLimited is raised only after a real 429 (or when the shared cooldown is
@@ -683,8 +694,16 @@ class SelfScanner:
             if any(len((r.get("geometry") or {}).get("targets") or []) != len(TP_R) for r in rv.values()):
                 continue
             raw = {sd: float(r.get("probability") or 0) for sd, r in rv.items()}
-            bias = (raw["LONG"] + raw["SHORT"] - 100) / 2
-            side = max(raw, key=raw.get)
+            samples = self.d.setdefault("bias_samples", [])
+            if "LONG" in raw and "SHORT" in raw:
+                bias = (raw["LONG"] + raw["SHORT"] - 100) / 2
+                samples.append(round(bias, 2))
+                del samples[:-40]
+                side = max(raw, key=raw.get)
+            else:
+                bias = sum(samples[-20:]) / len(samples[-20:]) if len(samples) >= 4 else 13.0
+                side = next(iter(raw))
+                raw["SHORT" if side == "LONG" else "LONG"] = 100 + 2 * bias - raw[side]
             other = "SHORT" if side == "LONG" else "LONG"
             pl = pl_long if side == "LONG" else pl_short
             prob = round(raw[side] - bias, 1)
@@ -697,7 +716,9 @@ class SelfScanner:
             if px15 is None:
                 px15 = pl_long.get("px15")
             oi15 = snap.get("oi15")
-            for sd, plx in (("LONG", pl_long), ("SHORT", pl_short)):
+            for sd, plx in plans.items():
+                if sd not in rv:
+                    continue
                 self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf,
                             pl_long.get("rpos"), pl_long.get("rsi"), self.btc.get("ret1h"), px15, oi15)
             r = rv[side]
