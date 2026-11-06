@@ -41,6 +41,8 @@ RECONCILE_S = 60
 ADOPT_TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
 ADOPT_MAX_STOP_PCT = 0.06
 LOOP_SECONDS = 30
+# While the main loop is inside a See One scan, this thread still ratchets exchange stops.
+FAST_GUARD_S = 3
 # A normal cycle with several maker entries/exits stays well under this.
 WATCHDOG_S = 1200
 SLIPPAGE_BUFFER = 0.0003
@@ -70,11 +72,16 @@ def load_state() -> dict:
     return {"trades": {}, "closed": [], "traded_ids": [], "skips": {}, "day": None, "day_start_equity": None}
 
 
+_STATE_LOCK = threading.Lock()
+
+
 def save_state(st: dict):
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, ensure_ascii=False, indent=1, default=str))
-    tmp.replace(STATE_FILE)
+    payload = json.dumps(st, ensure_ascii=False, indent=1, default=str)
+    with _STATE_LOCK:
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(payload)
+        tmp.replace(STATE_FILE)
 
 
 class Bot:
@@ -93,6 +100,7 @@ class Bot:
         self.selfscan = SelfScanner(self.so, self.tb, self.learner, CALIB_FILE, log_event)
         self.last_history = 0.0
         self.pre_moves: dict[str, float | None] = {}
+        self._protect_lock = threading.Lock()
 
     # ------------------------------------------------------------------ helpers
     def equity(self) -> tuple[float, float]:
@@ -178,10 +186,12 @@ class Bot:
             if tr.get("source") in (SELF_SOURCE, ADOPT_SOURCE) and not tr.get("exit_reason"):
                 close, why = self.selfscan.recheck(tr)
                 if close:
-                    tr["exit_reason"] = why
-                    log_event("SELF_EXIT_DECISION", trade_id=tid, symbol=sym, side=side, reason=why,
-                              rechecks=tr.get("rechecks", [])[-3:])
-                    self.maker_close(tr)
+                    with self._protect_lock:
+                        if not tr.get("exit_reason"):
+                            tr["exit_reason"] = why
+                            log_event("SELF_EXIT_DECISION", trade_id=tid, symbol=sym, side=side, reason=why,
+                                      rechecks=tr.get("rechecks", [])[-3:])
+                            self.maker_close(tr)
                 continue
 
             if sigmap is None:
@@ -198,6 +208,12 @@ class Bot:
 
     def protect(self, tr: dict):
         """Ratchet the exchange stop from the best price reached: break-even first, then lock part of the open profit."""
+        with self._protect_lock:
+            self._protect(tr)
+
+    def _protect(self, tr: dict):
+        if tr.get("exit_reason"):
+            return
         sym, side = tr["tsym"], tr["side"]
         sgn = 1 if side == "LONG" else -1
         if not tr.get("init_dist"):
@@ -970,6 +986,25 @@ class Bot:
                 self.st["traded_ids"].append(sig["id"])
                 log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
 
+    def fast_guard(self):
+        """Move exchange stops within a few seconds of a new high, without waiting for the See One scan to finish."""
+        while not self.stopping:
+            time.sleep(FAST_GUARD_S)
+            if self.dry or self.stopping:
+                continue
+            moved = False
+            for tr in list(self.st["trades"].values()):
+                if tr.get("exit_reason"):
+                    continue
+                try:
+                    before = (tr.get("stop"), tr.get("lock_r"), tr.get("mfe_r"))
+                    self.protect(tr)
+                    moved = moved or (tr.get("stop"), tr.get("lock_r"), tr.get("mfe_r")) != before
+                except ToobitError as e:
+                    log_event("ERROR", trade_id=tr.get("id"), where="fast_guard", error=str(e))
+            if moved:
+                save_state(self.st)
+
     def watchdog(self):
         tick = time.time()
         while True:
@@ -998,6 +1033,7 @@ class Bot:
         signal.signal(signal.SIGTERM, self.request_stop)
         if not once:
             threading.Thread(target=self.watchdog, daemon=True).start()
+            threading.Thread(target=self.fast_guard, daemon=True, name="fast-guard").start()
         try:
             me = self.so.me()
         except Exception as e:

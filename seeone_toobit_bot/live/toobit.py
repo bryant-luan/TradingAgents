@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import threading
 import time
 import uuid
 from decimal import Decimal, ROUND_DOWN
@@ -22,8 +23,13 @@ class Toobit:
         self.http = requests.Session()
         self.http.headers["X-BB-APIKEY"] = key
         self._specs = None
+        self._lock = threading.Lock()
 
     def _request(self, method: str, path: str, params: dict | None = None):
+        with self._lock:
+            return self._request_locked(method, path, params)
+
+    def _request_locked(self, method: str, path: str, params: dict | None = None):
         params = {k: v for k, v in (params or {}).items() if v is not None}
         params["timestamp"] = int(time.time() * 1000)
         params["recvWindow"] = 10000
