@@ -1,0 +1,19 @@
+[Unit]
+Description=See One -> Toobit live bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@DIR@
+Environment=PATH=@DIR@/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@DIR@/live/run_forever.sh
+# Only run_forever.sh gets SIGTERM; it forwards it to the bot, which finishes its current cycle
+# (including an in-flight entry) before exiting. Signalling tee too would break the bot's stdout mid-cycle.
+KillMode=mixed
+TimeoutStopSec=300
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
