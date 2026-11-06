@@ -734,6 +734,10 @@ class SelfScanner:
                 pl_long = self.plan(tsym, "LONG")
                 if pl_long:
                     self._emit_shadow(sym, pl_long, htf, None, None)
+                    if sum(1 for x in found if x.get("source") == "安靜期強勢空") == 0:
+                        item = self._quiet_short(c, pl_long, regime, htf)
+                        if item:
+                            found.append(item)
                     self.d["last_shadow"][sym] = time.time()
                     shadowed += 1
                 continue
@@ -844,6 +848,54 @@ class SelfScanner:
                  min_prob=min_prob, min_edge=MIN_EDGE, pending_calibration=len(self.d["pending"]),
                  resolved=len(self.d["resolved"]))
         return found[:MAX_PER_SCAN]
+
+    def _quiet_short(self, c: dict, pl_long: dict, regime: tuple, htf: float | None):
+        """While 分析驗算 is paused, a liquid short with the higher timeframe already
+        aligned, but not extremely so, still had positive R in both halves:
+        directional HTF in [1.5, 2.5) and 24h quote volume at or above the live floor,
+        37 reviews, +0.76R. Longs in that same band were about -1R, so this is shorts only.
+        The volume floor is applied with the other live gates after this returns.
+        """
+        if regime[0] > S.REGIME_VETO:
+            return None
+        if htf is None:
+            return None
+        htf_dir = -htf
+        if not (1.5 <= htf_dir < 2.5):
+            return None
+        rpos_long = pl_long.get("rpos")
+        rpos = None if rpos_long is None else round(1 - rpos_long, 3)
+        if rpos is None or rpos > S.MAX_RANGE_POS:
+            return None
+        px, dist = pl_long["price"], pl_long["dist"]
+        pl = dict(pl_long)
+        pl["stop"] = px + dist
+        pl["tps"] = [px - dist * r for r in TP_R]
+        sym = c["symbol"]
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        levels = [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": TP_R[i],
+                   "price": pl["tps"][i], "hit": False} for i in range(len(TP_R))]
+        sig = {"id": f"quiet:{sym}:SHORT:{int(time.time() // 900)}", "symbol": sym, "side": "SHORT",
+               "status": "ACTIVE", "timeframe": "15m", "entry_price": px, "stop_price": pl["stop"],
+               "current_price": px, "entry_at": now, "levels": levels, "signal_path": "QUIET SHORT",
+               "path_subtype": None, "quiet_strong_short": True}
+        factors = {"source:安靜期強勢空": 0.0, "side:SHORT": 0.0, f"regime:{regime[1].lower()}": 0.0}
+        for t in c["tags"]:
+            factors[f"origin:{t.split('#')[0].split('(')[0].split(':')[0]}"] = 0.0
+        learned = sum(self.learner.p.get("factor_adj", {}).get(t, 0.0) for t in factors)
+        score = round(self.learner.p.get("effective_min_score", S.MIN_SCORE) + learned, 1)
+        reasons = [
+            "安靜期強勢空：分析驗算暫停，沿用已測過的強勢空單條件",
+            f"大週期順方向 {htf_dir:+.2f}，允許 1.5 到 2.5（2.5 以上歷史為負）",
+            f"區間位置 {rpos:.2f}，須靠近高點（上限 {S.MAX_RANGE_POS}）",
+            f"24h 成交額仍須達 {S.QUOTE_VOL_MIN_DEFAULT/1e6:.0f} 百萬，這一段 +0.76R，流動性不足的是 -0.23R",
+            f"止損 {dist / px:.2%} (1.5×ATR15m)，大盤 {regime[1]} {regime[0]:+.2f}",
+        ]
+        ev = {"ok": True, "score": score, "tier": "NORMAL", "reasons": reasons, "factors": factors,
+              "skip": None, "cur_r": 0.0,
+              "analysis": {"prob": None, "bias": 0.0, "edge": None, "prob_1h": None,
+                           "quality": None, "ev_r": None, "targets": [], "quiet_strong_short": True}}
+        return {"sig": sig, "ev": ev, "source": "安靜期強勢空"}
 
     def to_signal(self, c, rv, pl, prob, p1h, quality, ev_r, regime, raw, bias, edge) -> dict:
         sym, side = c["symbol"], c["side"]

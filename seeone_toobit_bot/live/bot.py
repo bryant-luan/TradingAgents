@@ -904,11 +904,11 @@ class Bot:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                     f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
                 continue
-            if htf is not None and htf * sgn >= htf_max:
+            if htf is not None and htf * sgn >= htf_max and not (sig.get("quiet_strong_short") and htf * sgn < 2.5):
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
                                     f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
                 continue
-            if btc1h is not None and btc1h * sgn < btc1h_min:
+            if btc1h is not None and btc1h * sgn < btc1h_min and not sig.get("quiet_strong_short"):
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
                                     f"(順方向 {btc1h * sgn:+.2f}% < 下限 {btc1h_min:+.2f}%)，等大盤同向再進")
                 continue
