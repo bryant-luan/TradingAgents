@@ -651,6 +651,10 @@ class SelfScanner:
                       "SHORT": self.review(sym, "SHORT", pl_short["stop"], pl_short["tps"])}
             except Exception as e:
                 self.log("ERROR", where="self_review", symbol=sym, error=repr(e)[:300])
+                # A 429 or an open breaker means the rest of this scan would just pile on. Leave those
+                # symbols for the next scan; ones already reviewed stay on the 15-minute cooldown.
+                if "429" in repr(e) or isinstance(e, S.SeeOneDown):
+                    break
                 continue
             reviewed += 1
             self.d["last_review"][sym] = time.time()

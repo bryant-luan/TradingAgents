@@ -170,7 +170,10 @@ class SeeOne:
                 r.raise_for_status()
                 data = r.json()
             except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code < 500:
+                status = e.response.status_code if e.response is not None else 0
+                # 429 is See One asking us to slow down. Retry once, then count it toward the breaker.
+                # Other 4xx are the caller's problem (auth, bad body) and must not open the breaker.
+                if status != 429 and e.response is not None and status < 500:
                     raise
                 err = e
             except (requests.ConnectionError, requests.Timeout, requests.JSONDecodeError) as e:
@@ -182,7 +185,7 @@ class SeeOne:
             if attempt == tries - 1:
                 self._fail(path, err)
                 raise err
-            time.sleep(2)
+            time.sleep(8 if isinstance(err, requests.HTTPError) and getattr(err.response, "status_code", 0) == 429 else 2)
 
     def _ok(self):
         if self.down_since is not None:
