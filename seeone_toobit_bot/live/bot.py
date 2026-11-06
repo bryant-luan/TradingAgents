@@ -683,7 +683,7 @@ class Bot:
         if htf is None or not S.POST_LOCK_HTF_MIN <= htf * sgn < S.POST_LOCK_HTF_MAX:
             return False, (f"1h/4h 順方向 {0 if htf is None else htf * sgn:+.1f} 不在實測最佳區間 "
                            f"{S.POST_LOCK_HTF_MIN:+.1f}~{S.POST_LOCK_HTF_MAX:+.1f}")
-        return True, f"1h/4h 順方向 {htf * sgn:+.1f} 在實測最佳區間，以一般 3% 風險進場"
+        return True, f"1h/4h 順方向 {htf * sgn:+.1f} 在實測最佳區間，以一般 {S.RISK_PCT:.0%} 風險進場"
 
     def open_risk(self) -> float:
         specs = self.tb.specs()
