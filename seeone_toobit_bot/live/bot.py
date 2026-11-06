@@ -917,8 +917,8 @@ class Bot:
                 try:
                     micros[tsym] = micro_1h(tsym)
                 except Exception:
-                    micros[tsym] = (None, None, None, None)
-            atr_ratio, ret1h, vol_ratio, quote_vol = micros[tsym]
+                    micros[tsym] = (None, None, None, None, None)
+            atr_ratio, ret1h, vol_ratio, quote_vol, px15 = micros[tsym]
             atr_min = self.learner.p.get("atr_ratio_min", S.ATR_RATIO_MIN_DEFAULT)
             if atr_ratio is not None and atr_ratio < atr_min:
                 self.note_skip(sig, f"{sig['symbol']} 近 1 小時平均波幅只有約 25 小時的 {atr_ratio:.2f} 倍 "
@@ -939,6 +939,11 @@ class Bot:
             if quote_vol is not None and quote_vol < qv_min:
                 self.note_skip(sig, f"{sig['symbol']} 24 小時成交額 {quote_vol / 1e6:.1f} 百萬 USDT "
                                     f"(< {qv_min / 1e6:.0f} 百萬)，流動性不足的標的期望值差，不進")
+                continue
+            px15_min = self.learner.p.get("px15_dir_min", S.PX15_DIR_MIN_DEFAULT)
+            if px15 is not None and px15 * sgn < px15_min:
+                self.note_skip(sig, f"{sig['symbol']} 近 15 分鐘順方向 {px15 * sgn:+.2f}% "
+                                    f"(< {px15_min:.3f}%)，短線已逆著要進的方向走，等轉回再進")
                 continue
             if tsym not in moves:
                 try:

@@ -48,12 +48,14 @@ LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "th
                              lambda f: f["vol_ratio_1h"] is not None and f["vol_ratio_1h"] < S.VOL_RATIO_MIN_DEFAULT),
     "24h 成交額 < 1.14e8": ("2026-11-06T02:05:00+00:00",
                            lambda f: f["quote_vol_24h"] is not None and f["quote_vol_24h"] < S.QUOTE_VOL_MIN_DEFAULT),
+    "近 15m 漲跌 (方向) < -0.484": ("2026-11-06T10:30:00+00:00",
+                                   lambda f: f.get("px15_dir_pct") is not None and f["px15_dir_pct"] < S.PX15_DIR_MIN_DEFAULT),
     "3h 區間位置 ≥ 0.45": ("2026-11-06T05:00:00+00:00",
                           lambda f: f["rpos"] is not None and f["rpos"] >= S.MAX_RANGE_POS),
 }
 # Features already gated live (BTC 4h measured redundant with BTC 1h inside the live gates).
 LIVE_FEATURES = {"htf", "btc1h_dir_pct", "m15", "rpos", "prob", "rsi15_dir", "atr_ratio", "rs1h_vs_btc",
-                 "vol_ratio_1h", "quote_vol_24h"}
+                 "vol_ratio_1h", "quote_vol_24h", "px15_dir_pct"}
 REDUNDANT = {"btc4h_dir_pct": "與 BTC 1h 重複，現行條件內無額外效果 (11-05 驗證)"}
 NAMES = {
     "prob": "分析驗算機率", "m15": "See One 15m 方向", "htf": "1h/4h 大方向", "rpos": "3h 區間位置",

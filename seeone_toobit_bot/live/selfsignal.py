@@ -135,15 +135,16 @@ def btc_ret1h() -> float | None:
     return round((float(rows[-1][4]) - ref) / ref * 100, 3)
 
 
-def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, float | None]:
-    """(range ratio, 1h return %, volume ratio, 24h quote volume) on closed 5m bars.
+def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+    """(range ratio, 1h return %, volume ratio, 24h quote volume, 15m return %) on closed 5m bars.
 
     Same definitions research.py scores. Range ratio is the mean high-low of the last 12 bars over the
-    last 300 (~25h). The return is the last close versus the close 12 bars earlier, long perspective.
+    last 300 (~25h). The 1h return is the last close versus the close 12 bars earlier, long perspective.
+    The 15m return is the last close versus the close 3 bars (15 minutes) earlier, also long perspective.
     Volume ratio is the last hour's mean quote volume over the mean of the 288 bars before it.
     Quote volume is base volume times close, summed over those 288 bars (24h).
     """
-    empty = (None, None, None, None)
+    empty = (None, None, None, None, None)
     try:
         rows = requests.get("https://api.toobit.com/quote/v1/klines",
                             params={"symbol": symbol, "interval": "5m", "limit": 301}, timeout=10).json()
@@ -159,12 +160,14 @@ def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, flo
     base = mean_range(past)
     ratio = None if base <= 0 else mean_range(past[-12:]) / base
     c0, c1 = float(past[-12][4]), float(past[-1][4])
+    c15 = float(past[-4][4])
     ret = None if c0 <= 0 else (c1 - c0) / c0 * 100
+    px15 = None if c15 <= 0 else (c1 - c15) / c15 * 100
     qv = [float(x[5]) * float(x[4]) for x in past]
     earlier = qv[:-12]
     vol_ratio = (sum(qv[-12:]) / 12) / ((sum(earlier) / len(earlier)) or 1)
     quote_vol = sum(qv[-288:])
-    return ratio, ret, vol_ratio, quote_vol
+    return ratio, ret, vol_ratio, quote_vol, px15
 
 
 def contract_quote_vol() -> dict[str, float]:
@@ -359,6 +362,7 @@ class SelfScanner:
         self.calibrate_atr_ratio(rows)
         self.calibrate_rs1h(rows)
         self.calibrate_vol_ratio(rows)
+        self.calibrate_px15(rows)
         self.calibrate_quote_vol(rows)
         self.calibrate_high(rows)
 
@@ -523,6 +527,12 @@ class SelfScanner:
         # Thin last-hour volume. Three robust passes fixed the cut at 0.54; do not let a short sample move it.
         if self.learner.p.get("vol_ratio_min", S.VOL_RATIO_MIN_DEFAULT) != S.VOL_RATIO_MIN_DEFAULT:
             self.learner.p["vol_ratio_min"] = S.VOL_RATIO_MIN_DEFAULT
+            self.learner.save()
+
+    def calibrate_px15(self, rows: list):
+        # Last 15m already against the trade. Three robust passes fixed the cut; do not move it.
+        if self.learner.p.get("px15_dir_min", S.PX15_DIR_MIN_DEFAULT) != S.PX15_DIR_MIN_DEFAULT:
+            self.learner.p["px15_dir_min"] = S.PX15_DIR_MIN_DEFAULT
             self.learner.save()
 
     def calibrate_quote_vol(self, rows: list):
@@ -892,7 +902,7 @@ class SelfScanner:
         extended versus BTC, not already extended over 2h, and still near the 3h high.
         Missing measurements are a skip. An unmeasured name is not a verification trade.
         """
-        atr_ratio, ret1h, vol_ratio, quote_vol = micro_1h(tsym)
+        atr_ratio, ret1h, vol_ratio, quote_vol, px15 = micro_1h(tsym)
         qv = quote_known if quote_known is not None else quote_vol
         qv_min = self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT)
         if qv is None or qv < qv_min:
@@ -906,6 +916,9 @@ class SelfScanner:
         if vol_ratio is None or vol_ratio < vol_min:
             shown = 0.0 if vol_ratio is None else vol_ratio
             return f"近 1 小時量比 {shown:.2f} < {vol_min:.2f}"
+        px15_min = self.learner.p.get("px15_dir_min", S.PX15_DIR_MIN_DEFAULT)
+        if px15 is not None and -px15 < px15_min:
+            return f"近 15 分鐘做空方向 {-px15:+.2f}% < {px15_min:.3f}%"
         rs_max = self.learner.p.get("rs1h_max", S.RS1H_MAX_DEFAULT)
         if ret1h is not None and btc_5m is not None and (btc_5m - ret1h) >= rs_max:
             return f"近 1 小時已領先 BTC {btc_5m - ret1h:+.2f}% ≥ {rs_max:.3f}%"

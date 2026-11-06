@@ -95,6 +95,11 @@ VOL_RATIO_MIN_DEFAULT = 0.54
 # held on the same three runs (~1.14e8 to 1.18e8 USDT): names below it averaged about -0.08R,
 # names above stayed positive, including after the range-ratio gate. Lock the loosest of the three.
 QUOTE_VOL_MIN_DEFAULT = 1.14e8
+# 15-minute price change on closed 5m bars, in the trade's direction, percent.
+# Three consecutive robust passes (11-06 17:10–18:10 Taipei) all cut at -0.484:
+# a coin that already moved against the trade by more than that averaged about -0.10R
+# over 35 hours and both sides; the rest stayed about +0.20R. Locked.
+PX15_DIR_MIN_DEFAULT = -0.484
 MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
 MAX_SAME_SIDE = 2               # open positions on one side
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
