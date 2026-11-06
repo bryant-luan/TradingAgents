@@ -671,9 +671,19 @@ class SelfScanner:
                 # wait before the next analysis-review, instead of retrying it at the front forever.
                 if "429" in repr(e):
                     self.d["last_review"][sym] = time.time()
-                    self.review_pause_until = time.time() + 180
-                    self.log("SEEONE_RATE_LIMIT", symbol=sym,
-                             note="分析驗算被限流，這個幣先排到後面，三分鐘後從下一個繼續")
+                    retry = None
+                    resp = getattr(e, "response", None)
+                    raw = resp.headers.get("Retry-After") if resp is not None else None
+                    if raw and str(raw).isdigit():
+                        retry = int(raw)
+                    if retry is None or not 30 <= retry <= 1800:
+                        self.review_backoff = min(1200, getattr(self, "review_backoff", 300) * 2)
+                        retry = self.review_backoff
+                    else:
+                        self.review_backoff = retry
+                    self.review_pause_until = time.time() + retry
+                    self.log("SEEONE_RATE_LIMIT", symbol=sym, pause_s=retry,
+                             note=f"分析驗算被限流，這個幣先排到後面，{retry // 60} 分鐘後再試下一個")
                     break
                 if isinstance(e, S.SeeOneDown):
                     break
@@ -681,6 +691,7 @@ class SelfScanner:
                     self.d.setdefault("unsupported", {})[sym] = time.time() + 6 * 3600
                 continue
             reviewed += 1
+            self.review_backoff = 300
             self.d["last_review"][sym] = time.time()
             time.sleep(1.5)
             if any(len((r.get("geometry") or {}).get("targets") or []) != len(TP_R) for r in rv.values()):
