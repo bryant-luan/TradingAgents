@@ -937,10 +937,12 @@ class Bot:
                 continue
             self.ext = mv["r"] * sgn if mv else None
             self.rpos = in_side(mv["rpos"], sig["side"]) if mv and mv.get("rpos") is not None else None
-            rpos_max = self.learner.p.get("range_pos_max", S.MAX_RANGE_POS)
+            rpos_max = min(self.learner.p.get("range_pos_max", S.MAX_RANGE_POS), S.MAX_RANGE_POS)
             if self.rpos is not None and self.rpos > rpos_max:
-                self.note_skip(sig, f"{sig['symbol']} 現價已超出近 3 小時{'高點' if sgn > 0 else '低點'} "
-                                    f"(區間位置 {self.rpos:.2f} > {rpos_max:.2f})，追在突破延伸段，等回到區間內再進")
+                where = "靠近低點" if sgn > 0 else "靠近高點"
+                self.note_skip(sig, f"{sig['symbol']} 近 3 小時區間位置 {self.rpos:.2f}（上限 {rpos_max:.2f}）。"
+                                    f"{'做多' if sgn > 0 else '做空'}只在{where}反轉進場，"
+                                    f"現價已離開這一段，不追")
                 continue
             self.rsi = rsi = rsi_side(mv.get("rsi"), sig["side"]) if mv else None
             rsi_min = self.learner.p.get("rsi_min", S.RSI_MIN_DEFAULT)

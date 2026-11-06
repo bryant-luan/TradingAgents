@@ -52,7 +52,12 @@ M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the 
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
 HTF_MAX_DEFAULT = 1.5           # cap on it too: entries with the 1h/4h already strongly aligned arrive late; recalibrated live
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
-MAX_RANGE_POS = 1.05            # no entry once price is past the 3h high (long) / low (short) by 5% of that range
+# 3h range position in the trade's direction: 0 = at the reversal extreme (long at the low,
+# short at the high), 1 = at the other extreme. Replays through 11-06 12:00 Taipei: entries at
+# or above 0.45 averaged about -0.23R in both halves and on both sides; entries below 0.45
+# averaged about +0.06R, and the shorts in that zone (shorting the high) about +0.31R.
+# Locked here. The old 1.05 cap only blocked prices already outside the range.
+MAX_RANGE_POS = 0.45
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
 BTC1H_MIN_DEFAULT = 0.0         # floor on BTC's last-hour move in the trade's direction, %; recalibrated live

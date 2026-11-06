@@ -39,7 +39,6 @@ EXT_BARS = 8                     # 2h of 15m bars
 RANGE_BARS = 12                  # 3h of closed 15m bars for the entry range position
 # Range position in the trade direction (1 = at the 3h extreme the trade is moving toward); the entry cap is
 # the top of the highest contiguous bucket that still passes, same rules as the 15m cap.
-RPOS_BUCKETS = [(0.85, 0.95), (0.95, 1.05), (1.05, 1.3), (1.3, 99.0)]
 BTC_COUNTER_ATR = 2.0            # BTC off its 2h extreme against the trade by this many ATRs = market turning
 EXT_TAG_R = 2.0
 MIN_QUALITY = 60.0
@@ -468,27 +467,11 @@ class SelfScanner:
                      note="順方向 15m 動能越強進場，先到 TP1 比例越低；自動設定可進場的 15m 動能上限")
 
     def calibrate_rpos(self, rows: list):
-        if not self._gate_ready(rows, "rpos", "range_pos_max", S.MAX_RANGE_POS):
-            return
-        table = []
-        for lo, hi in RPOS_BUCKETS:
-            b = [r["hit"] for r in rows if r.get("rpos") is not None and lo <= r["rpos"] < hi]
-            table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
-        if any(n < M15_MIN_N for _, _, n, _ in table[:2]):
-            return
-        cap = RPOS_BUCKETS[0][1]
-        for _, hi, n, rate in table:
-            if n < M15_MIN_N or rate < M15_PASS:
-                break
-            cap = hi
-        old = self.learner.p.get("range_pos_max", S.MAX_RANGE_POS)
-        self.learner.p["range_pos_max"] = cap
-        self.learner.save()
-        if cap != old or not self.learner.p.get("rpos_logged"):
-            self.learner.p["rpos_logged"] = True
-            self.log("SELF_RPOS_CALIBRATE", range_pos_max_old=old, range_pos_max_new=cap,
-                     buckets=[{"range_pos_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
-                     note="進場價已超出近 3 小時區間時先到 TP1 比例偏低；自動設定可進場的區間位置上限")
+        # Longs belong near the 3h low and shorts near the 3h high. Don't let the hit-rate
+        # buckets above 0.85 reopen the old 1.05 chase cap.
+        if self.learner.p.get("range_pos_max", S.MAX_RANGE_POS) != S.MAX_RANGE_POS:
+            self.learner.p["range_pos_max"] = S.MAX_RANGE_POS
+            self.learner.save()
 
     def calibrate_rsi(self, rows: list):
         # The measured best set leaves this off. Don't let a short sample turn it back on.

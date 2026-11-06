@@ -48,6 +48,8 @@ LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "th
                              lambda f: f["vol_ratio_1h"] is not None and f["vol_ratio_1h"] < S.VOL_RATIO_MIN_DEFAULT),
     "24h 成交額 < 1.14e8": ("2026-11-06T02:05:00+00:00",
                            lambda f: f["quote_vol_24h"] is not None and f["quote_vol_24h"] < S.QUOTE_VOL_MIN_DEFAULT),
+    "3h 區間位置 ≥ 0.45": ("2026-11-06T05:00:00+00:00",
+                          lambda f: f["rpos"] is not None and f["rpos"] >= S.MAX_RANGE_POS),
 }
 # Features already gated live (BTC 4h measured redundant with BTC 1h inside the live gates).
 LIVE_FEATURES = {"htf", "btc1h_dir_pct", "m15", "rpos", "prob", "rsi15_dir", "atr_ratio", "rs1h_vs_btc",
