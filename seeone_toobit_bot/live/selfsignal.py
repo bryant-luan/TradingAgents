@@ -136,6 +136,31 @@ def btc_ret1h() -> float | None:
     return round((float(rows[-1][4]) - ref) / ref * 100, 3)
 
 
+def micro_1h(symbol: str) -> tuple[float | None, float | None]:
+    """(range ratio, 1h return %) on closed 5m bars, the same definition research.py scores.
+
+    Range ratio is the mean high-low of the last 12 bars divided by the mean high-low of the last 300
+    (~25h). The return is the last close versus the close 12 bars earlier, long perspective.
+    """
+    try:
+        rows = requests.get("https://api.toobit.com/quote/v1/klines",
+                            params={"symbol": symbol, "interval": "5m", "limit": 301}, timeout=10).json()
+    except (requests.RequestException, ValueError):
+        return None, None
+    if not isinstance(rows, list) or len(rows) < 301:
+        return None, None
+    past = rows[:-1][-300:]
+
+    def mean_range(bars: list) -> float:
+        return sum(float(x[2]) - float(x[3]) for x in bars) / len(bars)
+
+    base = mean_range(past)
+    ratio = None if base <= 0 else mean_range(past[-12:]) / base
+    c0, c1 = float(past[-12][4]), float(past[-1][4])
+    ret = None if c0 <= 0 else (c1 - c0) / c0 * 100
+    return ratio, ret
+
+
 def rsi_side(rsi_l: float | None, side: str) -> float | None:
     return None if rsi_l is None else (rsi_l if side == "LONG" else round(100 - rsi_l, 1))
 
@@ -303,6 +328,8 @@ class SelfScanner:
         self.calibrate_rpos(rows)
         self.calibrate_rsi(rows)
         self.calibrate_btc1h(rows)
+        self.calibrate_atr_ratio(rows)
+        self.calibrate_rs1h(rows)
         self.calibrate_high(rows)
 
     def calibrate_high(self, rows: list):
@@ -464,6 +491,18 @@ class SelfScanner:
         # The measured best set is "BTC 1h must not be against the trade" (floor 0). Keep that floor.
         if self.learner.p.get("btc1h_min", S.BTC1H_MIN_DEFAULT) != S.BTC1H_MIN_DEFAULT:
             self.learner.p["btc1h_min"] = S.BTC1H_MIN_DEFAULT
+            self.learner.save()
+
+    def calibrate_atr_ratio(self, rows: list):
+        # Quiet-hour filter. Three robust passes fixed the cut at 0.8; do not let a short sample move it.
+        if self.learner.p.get("atr_ratio_min", S.ATR_RATIO_MIN_DEFAULT) != S.ATR_RATIO_MIN_DEFAULT:
+            self.learner.p["atr_ratio_min"] = S.ATR_RATIO_MIN_DEFAULT
+            self.learner.save()
+
+    def calibrate_rs1h(self, rows: list):
+        # Don't chase a coin that already outran BTC. Only the ≥ 0.924 cut held for three runs.
+        if self.learner.p.get("rs1h_max", S.RS1H_MAX_DEFAULT) != S.RS1H_MAX_DEFAULT:
+            self.learner.p["rs1h_max"] = S.RS1H_MAX_DEFAULT
             self.learner.save()
 
     def _calibrate_floor(self, rows: list, key: str, buckets: list, param: str, default: float, event: str, note: str):

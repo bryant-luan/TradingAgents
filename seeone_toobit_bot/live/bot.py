@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .learner import Learner
 from .shadow import Shadow
-from .selfsignal import SelfScanner, btc_ret1h, in_side, move_2h, move_before, rsi_side
+from .selfsignal import SelfScanner, btc_ret1h, in_side, micro_1h, move_2h, move_before, rsi_side
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -859,7 +859,11 @@ class Bot:
             btc1h = btc_ret1h()
         except Exception:
             btc1h = None
-        moves = {}
+        try:
+            btc_5m_1h = micro_1h("BTC-SWAP-USDT")[1]
+        except Exception:
+            btc_5m_1h = None
+        moves, micros = {}, {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
                 break
@@ -893,6 +897,23 @@ class Bot:
                                     f"(順方向 {btc1h * sgn:+.2f}% < 下限 {btc1h_min:+.2f}%)，等大盤同向再進")
                 continue
             tsym = S.to_toobit(sig["symbol"])
+            if tsym not in micros:
+                try:
+                    micros[tsym] = micro_1h(tsym)
+                except Exception:
+                    micros[tsym] = (None, None)
+            atr_ratio, ret1h = micros[tsym]
+            atr_min = self.learner.p.get("atr_ratio_min", S.ATR_RATIO_MIN_DEFAULT)
+            if atr_ratio is not None and atr_ratio < atr_min:
+                self.note_skip(sig, f"{sig['symbol']} 近 1 小時平均波幅只有約 25 小時的 {atr_ratio:.2f} 倍 "
+                                    f"(< {atr_min:.2f})，盤整段進場期望值差，等波動回到常態再進")
+                continue
+            rs_max = self.learner.p.get("rs1h_max", S.RS1H_MAX_DEFAULT)
+            if ret1h is not None and btc_5m_1h is not None and (ret1h - btc_5m_1h) * sgn >= rs_max:
+                rs = (ret1h - btc_5m_1h) * sgn
+                self.note_skip(sig, f"{sig['symbol']} 近 1 小時相對 BTC 已順方向領先 {rs:+.2f}% "
+                                    f"(≥ {rs_max:.3f}%)，短線已跑在大盤前面，不追")
+                continue
             if tsym not in moves:
                 try:
                     moves[tsym] = move_2h(tsym)

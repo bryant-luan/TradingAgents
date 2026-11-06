@@ -56,6 +56,14 @@ MAX_RANGE_POS = 1.05            # no entry once price is past the 3h high (long)
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
 BTC1H_MIN_DEFAULT = 0.0         # floor on BTC's last-hour move in the trade's direction, %; recalibrated live
+# Last-hour average bar range vs the ~25h average, on 5m bars. Three consecutive robust passes
+# (11-06 07:32–08:33 Taipei, 313–332 skipped, 33–34h, both halves and both sides negative):
+# ratios under 0.8 averaged about -0.28R; the rest stayed positive. Locked, not tightened live.
+ATR_RATIO_MIN_DEFAULT = 0.8
+# Coin's last-hour return minus BTC's, in the trade's direction, percent. The ≥ 0.924 cut
+# (top quartile) was robust on the same three runs: skipped side about -0.09R to -0.16R.
+# Looser cuts of this feature were not stable across the three runs, so only this one is live.
+RS1H_MAX_DEFAULT = 0.924
 MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
 MAX_SAME_SIDE = 2               # open positions on one side
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
