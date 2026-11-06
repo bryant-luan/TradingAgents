@@ -615,7 +615,7 @@ class SelfScanner:
             self.btc = self.btc_counter()
         except Exception:
             self.btc = {"up": 0.0, "down": 0.0}
-        found, reviewed, by_symbol = [], 0, {}
+        found, watched, reviewed, by_symbol = [], [], 0, {}
         for c in self.universe(regime[1], rhits):
             by_symbol.setdefault(c["symbol"], c)
         for sym, c in by_symbol.items():
@@ -661,8 +661,6 @@ class SelfScanner:
             for sd, plx in (("LONG", pl_long), ("SHORT", pl_short)):
                 self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf,
                             pl_long.get("rpos"), pl_long.get("rsi"), self.btc.get("ret1h"), px15, oi15)
-            if side == "LONG" and regime[0] < -S.REGIME_VETO or side == "SHORT" and regime[0] > S.REGIME_VETO:
-                continue
             r = rv[side]
             quality = float(r.get("tradeQuality") or 0)
             ev = self.expected_r(r, split, d / px, bias)
@@ -670,6 +668,17 @@ class SelfScanner:
             if max_prob is not None and prob >= max_prob:
                 continue
             if prob < min_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < MIN_EV_R:
+                continue
+            # Longs in a bear tape and shorts in a bull tape are still scored and written down. They are not
+            # opened: countertrend longs at the 3h low hit TP1 only about 43%, and a 15m turn-up against the
+            # higher timeframe hit TP1 about 17%.
+            if (side == "LONG" and regime[0] < -S.REGIME_VETO) or (side == "SHORT" and regime[0] > S.REGIME_VETO):
+                rec = {"symbol": sym, "side": side, "prob": prob, "edge": edge, "ev_r": ev,
+                       "rpos": None if pl_long.get("rpos") is None else round(in_side(pl_long["rpos"], side), 2),
+                       "htf": None if htf is None else round(htf * (1 if side == "LONG" else -1), 2)}
+                watched.append(rec)
+                self.log("SIDE_WATCH", **rec, regime=round(regime[0], 2),
+                         note="與大盤相反，已記錄，不進場")
                 continue
             try:
                 p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H").get("probability") or 0) - bias
@@ -685,6 +694,7 @@ class SelfScanner:
         found.sort(key=lambda f: -f["ev"]["score"])
         self.save()
         self.log("SELF_SCAN", reviewed_symbols=reviewed,
+                 watched=[(w["symbol"], w["side"], w["prob"], w["edge"]) for w in watched],
                  qualified=[(f["sig"]["symbol"], f["sig"]["side"], f["ev"]["score"], f["ev"]["analysis"]["edge"]) for f in found],
                  min_prob=min_prob, min_edge=MIN_EDGE, pending_calibration=len(self.d["pending"]),
                  resolved=len(self.d["resolved"]))
