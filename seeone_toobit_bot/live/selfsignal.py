@@ -167,6 +167,26 @@ def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, flo
     return ratio, ret, vol_ratio, quote_vol
 
 
+def contract_quote_vol() -> dict[str, float]:
+    """24h quote volume in USDT for every USDT-M contract. One public call."""
+    try:
+        rows = requests.get("https://api.toobit.com/quote/v1/contract/ticker/24hr", timeout=15).json()
+    except (requests.RequestException, ValueError):
+        return {}
+    out = {}
+    if not isinstance(rows, list):
+        return out
+    for row in rows:
+        sym = row.get("s")
+        if not sym:
+            continue
+        try:
+            out[sym] = float(row.get("qv") or 0)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def rsi_side(rsi_l: float | None, side: str) -> float | None:
     return None if rsi_l is None else (rsi_l if side == "LONG" else round(100 - rsi_l, 1))
 
@@ -719,9 +739,17 @@ class SelfScanner:
         # A full scan used to finish about twenty names. After the 11:52 burst, capping
         # each round keeps us under the pace See One was answering before the penalty.
         shadowed = 0
+        qv_map: dict[str, float] = {}
+        btc_5m = None
         if not seeone_open:
             fresh = self.d.setdefault("last_shadow", {})
             ordered = [c for c in ordered if now - fresh.get(c["symbol"], 0) >= REVIEW_COOLDOWN_S]
+            # Dust names pass the higher-timeframe and range checks and used to fill both
+            # slots before a liquid contract was looked at. Quote volume is known up front.
+            qv_map = contract_quote_vol()
+            qv_min = self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT)
+            ordered.sort(key=lambda c: 0 if qv_map.get(S.to_toobit(c["symbol"]), 0) >= qv_min else 1)
+            btc_5m = micro_1h("BTC-SWAP-USDT")[1]
         limit = 40 if not seeone_open else 6
         pl_long = None
         for c in ordered[:limit]:
@@ -737,11 +765,15 @@ class SelfScanner:
                 if not pl_long:
                     continue
                 self._emit_shadow(sym, pl_long, htf, None, None)
+                shadowed += 1
                 if sum(1 for x in found if x.get("source") == "安靜期強勢空") < 2:
                     item = self._quiet_short(c, pl_long, regime, htf)
                     if item:
-                        found.append(item)
-                shadowed += 1
+                        why = self._quiet_blocked(tsym, btc_5m, qv_map.get(tsym))
+                        if why:
+                            self.log("QUIET_GATE", symbol=sym, side="SHORT", reason=why)
+                        else:
+                            found.append(item)
                 if sum(1 for x in found if x.get("source") == "安靜期強勢空") >= 2:
                     break
                 continue
@@ -853,12 +885,45 @@ class SelfScanner:
                  resolved=len(self.d["resolved"]))
         return found[:MAX_PER_SCAN]
 
+    def _quiet_blocked(self, tsym: str, btc_5m: float | None, quote_known: float | None) -> str | None:
+        """Live gates for a quiet short. None means this name can take one of the two slots.
+
+        Matches bot.py: 1h range ratio, 1h volume ratio, 24h quote volume, not already
+        extended versus BTC, not already extended over 2h, and still near the 3h high.
+        Missing measurements are a skip. An unmeasured name is not a verification trade.
+        """
+        atr_ratio, ret1h, vol_ratio, quote_vol = micro_1h(tsym)
+        qv = quote_known if quote_known is not None else quote_vol
+        qv_min = self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT)
+        if qv is None or qv < qv_min:
+            shown = 0.0 if qv is None else qv / 1e6
+            return f"24h 成交額 {shown:.1f} 百萬 < {qv_min / 1e6:.0f} 百萬"
+        atr_min = self.learner.p.get("atr_ratio_min", S.ATR_RATIO_MIN_DEFAULT)
+        if atr_ratio is None or atr_ratio < atr_min:
+            shown = 0.0 if atr_ratio is None else atr_ratio
+            return f"近 1 小時波幅比 {shown:.2f} < {atr_min:.2f}"
+        vol_min = self.learner.p.get("vol_ratio_min", S.VOL_RATIO_MIN_DEFAULT)
+        if vol_ratio is None or vol_ratio < vol_min:
+            shown = 0.0 if vol_ratio is None else vol_ratio
+            return f"近 1 小時量比 {shown:.2f} < {vol_min:.2f}"
+        rs_max = self.learner.p.get("rs1h_max", S.RS1H_MAX_DEFAULT)
+        if ret1h is not None and btc_5m is not None and (btc_5m - ret1h) >= rs_max:
+            return f"近 1 小時已領先 BTC {btc_5m - ret1h:+.2f}% ≥ {rs_max:.3f}%"
+        mv = move_2h(tsym)
+        if mv and -mv["r"] >= S.MAX_EXT_R:
+            return f"近 2 小時已跌 {abs(mv['pct']):.1f}% ({-mv['r']:+.1f}R ≥ {S.MAX_EXT_R}R)"
+        if mv and mv.get("rpos") is not None and (1 - mv["rpos"]) > S.MAX_RANGE_POS:
+            return f"3 小時區間位置 {1 - mv['rpos']:.2f} > {S.MAX_RANGE_POS:.2f}"
+        return None
+
     def _quiet_short(self, c: dict, pl_long: dict, regime: tuple, htf: float | None):
         """While 分析驗算 is paused, a liquid short with the higher timeframe already
         aligned, but not extremely so, still had positive R in both halves:
         directional HTF in [1.5, 2.5) and 24h quote volume at or above the live floor,
         37 reviews, +0.76R. Longs in that same band were about -1R, so this is shorts only.
-        The volume floor is applied with the other live gates after this returns.
+        Quote volume, the 1h range and volume ratios, relative strength, and the 2h
+        extension are applied here as well, so a thin name does not take one of the
+        two slots before a liquid name is seen.
         """
         if regime[0] > S.REGIME_VETO:
             return None
