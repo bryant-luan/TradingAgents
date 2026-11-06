@@ -611,6 +611,38 @@ class SelfScanner:
         fee_r = (S.MAKER_FEE * (1 + p1) + S.TAKER_FEE * (1 - p1)) / sl_pct
         return round(ev - fee_r, 3)
 
+    def _pairs(self) -> list:
+        if getattr(self, "_pair_cache", None) is None:
+            rows = []
+            if self.sim_log.exists():
+                for line in self.sim_log.read_text(encoding="utf-8").splitlines():
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if rec.get("prob") is not None and rec.get("seeone_prob") is not None:
+                        rows.append(rec)
+            self._pair_cache = rows
+        return self._pair_cache
+
+    def _write_align(self):
+        rep = self.local.report(self._pairs())
+        lines = [
+            "自建驗算對齊 See One（實盤不下單）",
+            f"歷史留出樣本 {rep['n']} 筆（訓練 {rep['train']} / 測試 {rep['test']}）",
+            f"平均絕對誤差 {rep['mae']} 個百分點，偏差 {rep['bias']}（正=我們高於 See One）",
+            f"60 分以上是否同一側 {rep['agree']}",
+            f"我們估 50–70 時，實際先碰到 TP1 的比例 {rep['hit_when_local_50_70']}（{rep['hit_n']} 筆）",
+            f"歷史對齊 {'是' if rep['aligned'] else '否'}（需要 ≥{200} 筆、誤差 ≤8、同一側 ≥0.75）",
+            f"上線後同時有兩邊機率的新對照 {rep['live_pairs']} 筆，誤差 {rep['live_mae']}，同一側 {rep['live_agree']}",
+            f"可以考慮接上實盤 {'是' if rep['ready'] else '否'}",
+        ]
+        path = self.sim_log.with_name("local_review_align.txt")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.log("LOCAL_ALIGN", n=rep["n"], mae=rep["mae"], bias=rep["bias"], agree=rep["agree"],
+                 aligned=rep["aligned"], live_pairs=rep["live_pairs"], live_mae=rep["live_mae"],
+                 live_agree=rep["live_agree"], ready=rep["ready"])
+
     def _emit_shadow(self, sym: str, pl_long: dict, htf: float | None, seeone_prob: float | None, seeone_side: str | None):
         """Log what our own TP1-before-stop table would say. Never opens a trade."""
         btc = (self.btc or {}).get("ret1h")
@@ -635,7 +667,9 @@ class SelfScanner:
                "would_pass": would, "seeone_prob": seeone_prob, "seeone_side": seeone_side}
         with self.sim_log.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        self.log("LOCAL_SIM", **rec, note="自建驗算模擬，不下單")
+        if seeone_prob is not None and prob is not None:
+            self._pairs().append(rec)
+        self.log("LOCAL_SIM", **rec, note="自建驗算模擬，不下單；有 See One 機率的才計入對齊")
 
     def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
              htf: float | None = None) -> list:
@@ -801,6 +835,7 @@ class SelfScanner:
             time.sleep(0.3)
         found.sort(key=lambda f: -f["ev"]["score"])
         self.save()
+        self._write_align()
         self.log("SELF_SCAN", reviewed_symbols=reviewed, shadow=shadowed, seeone_open=seeone_open,
                  universe=len(by_symbol),
                  tradefi=sum(1 for c in by_symbol.values() if "TradFi" in c["tags"]),
