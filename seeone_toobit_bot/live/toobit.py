@@ -54,11 +54,18 @@ class Toobit:
                     continue
                 f = {x["filterType"]: x for x in c["filters"]}
                 mult = Decimal(c["contractMultiplier"])
-                out[c["symbol"]] = {
+                sym = c["symbol"]
+                seeone = sym[: -len("-SWAP-USDT")] + "USDT" if sym.endswith("-SWAP-USDT") else sym
+                cats = list(c.get("categories") or [])
+                out[sym] = {
                     "multiplier": mult,
                     "min_contracts": int(Decimal(f["LOT_SIZE"]["minQty"]) / mult),
                     "tick": Decimal(f["PRICE_FILTER"]["tickSize"]),
                     "max_leverage": int(float(c["riskLimits"][0]["maxLeverage"])) if c.get("riskLimits") else 20,
+                    "seeone": seeone,
+                    "rwa": bool(c.get("isRwa")) or "TradFi" in cats,
+                    "categories": cats,
+                    "quote": c.get("quoteAsset") or "",
                 }
             self._specs = out
         return self._specs

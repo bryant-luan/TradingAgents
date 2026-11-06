@@ -21,7 +21,6 @@ from . import strategy as S
 
 SCAN_EVERY_S = 300
 MAJORS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
-MAX_CANDIDATES = 30
 ATR_MULT = 1.5
 MIN_STOP_PCT = 0.008
 MAX_STOP_PCT = 0.06
@@ -556,12 +555,21 @@ class SelfScanner:
         default = "LONG" if regime_label == "BULL" else "SHORT" if regime_label == "BEAR" else None
         for m in MAJORS:
             cands.setdefault(m, {"side": default, "tags": ["主流幣"]})
+        # Every USDT-margined contract, including TradFi (stocks, indices, metals, forex).
+        # Boards keep the side hint they already have; names See One does not list are skipped later.
+        for tsym, spec in self.tb.specs().items():
+            if spec.get("quote") not in ("", "USDT"):
+                continue
+            sym = spec.get("seeone")
+            if not sym:
+                continue
+            c = cands.setdefault(sym, {"side": None, "tags": []})
+            if spec.get("rwa") and "TradFi" not in c["tags"]:
+                c["tags"].append("TradFi")
         out = []
         for sym, c in cands.items():
-            sides = [c["side"]] if c.get("side") else ["LONG", "SHORT"]
-            for sd in sides:
-                out.append({"symbol": sym, "side": sd, "tags": c["tags"]})
-        return out[:MAX_CANDIDATES * 2]
+            out.append({"symbol": sym, "side": c.get("side"), "tags": c["tags"]})
+        return out
 
     def plan(self, tsym: str, side: str) -> dict | None:
         a = atr(tsym)
@@ -618,11 +626,33 @@ class SelfScanner:
         found, watched, reviewed, by_symbol = [], [], 0, {}
         for c in self.universe(regime[1], rhits):
             by_symbol.setdefault(c["symbol"], c)
-        for sym, c in by_symbol.items():
+        now = time.time()
+        unsupported = self.d.setdefault("unsupported", {})
+        for sym in [s for s, until in unsupported.items() if until <= now]:
+            unsupported.pop(sym, None)
+
+        def due(sym: str) -> bool:
+            if unsupported.get(sym, 0) > now:
+                return False
+            return now - self.d["last_review"].get(sym, 0) >= REVIEW_COOLDOWN_S
+
+        def priority(c: dict) -> bool:
+            return any(t.startswith(("強勢榜", "潛力榜", "客製化", "主流幣")) for t in c["tags"])
+
+        boards = sorted((c for c in by_symbol.values() if priority(c) and due(c["symbol"])),
+                        key=lambda c: self.d["last_review"].get(c["symbol"], 0))
+        rest = sorted((c for c in by_symbol.values() if not priority(c) and due(c["symbol"])),
+                      key=lambda c: self.d["last_review"].get(c["symbol"], 0))
+        ordered = []
+        while boards or rest:
+            if boards:
+                ordered.append(boards.pop(0))
+            if rest:
+                ordered.append(rest.pop(0))
+        for c in ordered:
+            sym = c["symbol"]
             tsym = S.to_toobit(sym)
             if tsym not in specs or tsym in held:
-                continue
-            if time.time() - self.d["last_review"].get(sym, 0) < REVIEW_COOLDOWN_S:
                 continue
             try:
                 pl_long = self.plan(tsym, "LONG")
@@ -638,6 +668,8 @@ class SelfScanner:
                 # symbols for the next scan; ones already reviewed stay on the 15-minute cooldown.
                 if "429" in repr(e) or isinstance(e, S.SeeOneDown):
                     break
+                if any(code in repr(e) for code in ("400 ", "404 ", "422 ")):
+                    self.d.setdefault("unsupported", {})[sym] = time.time() + 6 * 3600
                 continue
             reviewed += 1
             self.d["last_review"][sym] = time.time()
@@ -694,6 +726,8 @@ class SelfScanner:
         found.sort(key=lambda f: -f["ev"]["score"])
         self.save()
         self.log("SELF_SCAN", reviewed_symbols=reviewed,
+                 universe=len(by_symbol),
+                 tradefi=sum(1 for c in by_symbol.values() if "TradFi" in c["tags"]),
                  watched=[(w["symbol"], w["side"], w["prob"], w["edge"]) for w in watched],
                  qualified=[(f["sig"]["symbol"], f["sig"]["side"], f["ev"]["score"], f["ev"]["analysis"]["edge"]) for f in found],
                  min_prob=min_prob, min_edge=MIN_EDGE, pending_calibration=len(self.d["pending"]),
