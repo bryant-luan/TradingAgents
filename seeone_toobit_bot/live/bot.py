@@ -674,6 +674,8 @@ class Bot:
 
     def lock_pass(self, sig: dict, ev: dict, src: str, htf: float | None, sgn: int) -> tuple[bool, str]:
         """After the daily profit lock arms, only signals in the best-measured 1h/4h band get through, one at a time."""
+        if sig.get("quiet_strong_short") or sig.get("quiet_strong_long"):
+            return True, "安靜期單沿用自己的條件，不受當日鎖利的窄區間限制"
         armed_ts = self.st.get("day_lock_ts", 0)
         post = [t for t in self.st["trades"].values() if t["opened_ts"] >= armed_ts]
         if len(post) >= S.POST_LOCK_MAX_OPEN:
@@ -787,7 +789,7 @@ class Bot:
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
                       reason=f"當日已實現獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，鎖利：只放行 1h/4h 大方向在實測最佳區間的單 "
-                             f"(3% 風險、同時最多 {S.POST_LOCK_MAX_OPEN} 筆)；"
+                             f"({S.RISK_PCT:.0%} 風險、同時最多 {S.POST_LOCK_MAX_OPEN} 筆)；安靜期單另計；"
                              f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則全部停止開新倉")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
         if self.st.get("day_lock_armed") and bal < floor:

@@ -54,14 +54,14 @@ MAX_SIGNAL_AGE_MIN = 240
 CVD_RATIO_MAX_DEFAULT = 1.5
 ENTRY_R_WINDOW = (-0.30, 0.50)  # current price must sit within this R band of the signal entry
 MIN_SCORE = 50
-RISK_PCT = 0.03                 # equity risked per trade at the stop
-MIN_RISK_PCT = 0.03             # never open below this risk: a trade that can't be sized this big is skipped
-MAX_MIN_SIZE_RISK_PCT = 0.045   # allow exchange-minimum size only up to this risk
+RISK_PCT = 0.05                 # equity risked per trade at the stop
+MIN_RISK_PCT = 0.05             # never open below this risk: a trade that can't be sized this big is skipped
+MAX_MIN_SIZE_RISK_PCT = 0.07    # allow exchange-minimum size only up to this risk
 MAX_LEVERAGE = 25
 MAX_POSITIONS = 3
 MAX_TOTAL_MARGIN_PCT = 0.70
 MARGIN_PER_TRADE_PCT = 0.07
-NORMAL_MARGIN_CAP_PCT = 0.16       # lets a 0.8% stop at 25x still reach the 3% minimum risk
+NORMAL_MARGIN_CAP_PCT = 0.22       # lets a 1% stop at 25x still reach the 5% risk
 HIGH_RISK_PCT = 0.10            # high-conviction tier (CLANKER-type setups): equity at risk at the stop
 HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
@@ -120,7 +120,7 @@ TP_STOP_MOVES = False           # moving the stop to break-even / the previous T
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
 TRAIL_GAP_R = 1.2               # beyond the ladder, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
-DAY_LOCK_TRIGGER_PCT = 0.05     # day realized gain at which only high-conviction signals may open
+DAY_LOCK_TRIGGER_PCT = 0.10     # day realized gain at which only high-conviction signals may open
 DAILY_STOP_PCT = 0.12           # day loss (realized + floating, incl. open risk to stops) that ends the day
 DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
 POST_LOCK_MAX_OPEN = 1          # after the lock arms: positions opened since then that may be open at once
@@ -648,7 +648,9 @@ def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct
             return None
         contracts = spec["min_contracts"]
     notional = contracts * mult * price
-    lev_cap = max(1, min(spec["max_leverage"], MAX_LEVERAGE, math.floor(0.4 / sl_pct)))
+    # 0.60 keeps the stop inside the liquidation distance at higher leverage.
+    # A 2.3% stop can use 25x; the old 0.40 cap held that stop near 17x.
+    lev_cap = max(1, min(spec["max_leverage"], MAX_LEVERAGE, math.floor(0.60 / sl_pct)))
     leverage = max(1, min(lev_cap, math.ceil(notional / (MARGIN_PER_TRADE_PCT * equity))))
     margin = notional / leverage
     if margin > margin_cap_pct * equity:
