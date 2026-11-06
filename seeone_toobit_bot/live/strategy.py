@@ -35,9 +35,12 @@ class SeeOneLimited(Exception):
 
 
 # Minimum space between analysis-review posts, and how long to stay silent after a 429
-# when See One does not send Retry-After. Five minutes was still inside the penalty.
+# when See One does not send Retry-After. A burst at 11:52 Taipei on Nov 6 started the
+# penalty; probing every 5 or 15 minutes kept it alive. One quiet hour matches the gap
+# that used to let a normal scan through.
 REVIEW_GAP_S = 15
-REVIEW_PENALTY_S = 900
+REVIEW_PENALTY_S = 3600
+REVIEW_PAUSE_FILE = ENV_FILE.parent / "logs" / "seeone_review_pause.json"
 
 # --- tunables -------------------------------------------------------------
 REGIME_WEIGHTS = {"15m": 0.25, "1h": 0.35, "4h": 0.40}
@@ -145,7 +148,7 @@ class SeeOne:
         self.rt_session = rt_session
         self.log = lambda event, **kw: None
         self.fails, self.open_until, self.down_since, self.last_error = 0, 0.0, None, None
-        self.review_not_before = 0.0
+        self.review_not_before = self._load_review_pause()
         self.last_review_post = 0.0
         self._cache: dict = {}
         self.http = None
@@ -190,6 +193,19 @@ class SeeOne:
         self._cache[key] = (now, data)
         return data
 
+    def _load_review_pause(self) -> float:
+        try:
+            data = json.loads(REVIEW_PAUSE_FILE.read_text())
+            return float(data.get("until") or 0)
+        except (OSError, ValueError):
+            return 0.0
+
+    def _save_review_pause(self, until: float):
+        REVIEW_PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = REVIEW_PAUSE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"until": until}))
+        tmp.replace(REVIEW_PAUSE_FILE)
+
     def _review_penalty(self, response) -> int:
         raw = response.headers.get("Retry-After") if response is not None else None
         if raw and str(raw).isdigit() and 30 <= int(raw) <= 1800:
@@ -213,6 +229,7 @@ class SeeOne:
                 if r.status_code == 429 and is_review:
                     pause = self._review_penalty(r)
                     self.review_not_before = time.time() + pause
+                    self._save_review_pause(self.review_not_before)
                     self.log("SEEONE_RATE_LIMIT", pause_s=pause, path=path,
                              note=f"分析驗算 429，{pause // 60} 分鐘內這支完全不打，避免處罰被延續")
                     raise SeeOneLimited(pause)
@@ -235,6 +252,8 @@ class SeeOne:
             else:
                 if is_review:
                     self.last_review_post = time.time()
+                    if REVIEW_PAUSE_FILE.exists():
+                        REVIEW_PAUSE_FILE.unlink()
                 self._ok()
                 return data
             if attempt == tries - 1:

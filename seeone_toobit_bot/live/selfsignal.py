@@ -654,7 +654,9 @@ class SelfScanner:
                     ordered.append(boards.pop(0))
             if rest:
                 ordered.append(rest.pop(0))
-        for c in ordered:
+        # A full scan used to finish about twenty names. After the 11:52 burst, capping
+        # each round keeps us under the pace See One was answering before the penalty.
+        for c in ordered[:6]:
             sym = c["symbol"]
             tsym = S.to_toobit(sym)
             if tsym not in specs or tsym in held:
