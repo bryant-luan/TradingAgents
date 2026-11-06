@@ -904,7 +904,8 @@ class Bot:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                     f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
                 continue
-            if htf is not None and htf * sgn >= htf_max and not (sig.get("quiet_strong_short") and htf * sgn < 2.5):
+            quiet = sig.get("quiet_strong_short") or sig.get("quiet_strong_long")
+            if htf is not None and htf * sgn >= htf_max and not (quiet and htf * sgn < 2.5):
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
                                     f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
                 continue
@@ -972,12 +973,12 @@ class Bot:
                                     f"(< 下限 {rsi_min:.0f})，短線動能與方向相反，等轉強再進")
                 continue
             same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
-            same_cap = S.QUIET_MAX_SAME_SIDE if sig.get("quiet_strong_short") else S.MAX_SAME_SIDE
+            same_cap = S.QUIET_MAX_SAME_SIDE if sig.get("quiet_strong_short") or sig.get("quiet_strong_long") else S.MAX_SAME_SIDE
             if len(same) >= same_cap:
                 self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
                 continue
             last = max((t["opened_ts"] for t in same), default=0)
-            if time.time() - last < S.SAME_SIDE_GAP_MIN * 60 and not sig.get("quiet_strong_short"):
+            if time.time() - last < S.SAME_SIDE_GAP_MIN * 60 and not (sig.get("quiet_strong_short") or sig.get("quiet_strong_long")):
                 self.note_skip(sig, f"同方向 {S.SAME_SIDE_GAP_MIN} 分鐘內已開倉，分散進場時間")
                 continue
             if self.st.get("day_lock_armed"):

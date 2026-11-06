@@ -776,17 +776,27 @@ class SelfScanner:
                     continue
                 self._emit_shadow(sym, pl_long, htf, None, None)
                 shadowed += 1
-                quiet_n = sum(1 for x in found if x.get("source") == "安靜期強勢空")
-                if quiet_n < S.QUIET_MAX_SAME_SIDE:
+                short_band = htf is not None and 1.5 <= -htf < 2.5
+                long_band = htf is not None and 1.5 <= htf < 2.5
+                if short_band and sum(1 for x in found if x.get("source") == "安靜期強勢空") < S.QUIET_MAX_SAME_SIDE:
                     item = self._quiet_short(c, pl_long, regime, htf)
                     if item:
-                        why = self._quiet_blocked(tsym, btc_5m, qv_map.get(tsym))
+                        why = self._quiet_blocked(tsym, btc_5m, qv_map.get(tsym), "SHORT")
                         if why:
                             self.log("QUIET_GATE", symbol=sym, side="SHORT", reason=why)
                         else:
                             found.append(item)
-                            quiet_n += 1
-                if quiet_n >= S.QUIET_MAX_SAME_SIDE:
+                if long_band and sum(1 for x in found if x.get("source") == "安靜期強勢多") < S.QUIET_MAX_SAME_SIDE:
+                    item = self._quiet_long(c, pl_long, regime, htf)
+                    if item:
+                        why = self._quiet_blocked(tsym, btc_5m, qv_map.get(tsym), "LONG")
+                        if why:
+                            self.log("QUIET_GATE", symbol=sym, side="LONG", reason=why)
+                        else:
+                            found.append(item)
+                short_done = short_band and sum(1 for x in found if x.get("source") == "安靜期強勢空") >= S.QUIET_MAX_SAME_SIDE
+                long_done = long_band and sum(1 for x in found if x.get("source") == "安靜期強勢多") >= S.QUIET_MAX_SAME_SIDE
+                if short_done or long_done:
                     break
                 continue
             try:
@@ -897,13 +907,15 @@ class SelfScanner:
                  resolved=len(self.d["resolved"]))
         return found[:MAX_PER_SCAN]
 
-    def _quiet_blocked(self, tsym: str, btc_5m: float | None, quote_known: float | None) -> str | None:
-        """Live gates for a quiet short. None means this name can take one of the two slots.
+    def _quiet_blocked(self, tsym: str, btc_5m: float | None, quote_known: float | None,
+                       side: str = "SHORT") -> str | None:
+        """Live gates for a quiet entry. None means this name can take a quiet slot.
 
         Matches bot.py: 1h range ratio, 1h volume ratio, 24h quote volume, not already
-        extended versus BTC, not already extended over 2h, and still near the 3h high.
-        Missing measurements are a skip. An unmeasured name is not a verification trade.
+        extended versus BTC, not already extended over 2h, and still near the 3h extreme.
+        Missing measurements are a skip. An unmeasured name is not a quiet trade.
         """
+        sgn = 1 if side == "LONG" else -1
         atr_ratio, ret1h, vol_ratio, quote_vol, px15 = micro_1h(tsym)
         qv = quote_known if quote_known is not None else quote_vol
         qv_min = self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT)
@@ -919,26 +931,27 @@ class SelfScanner:
             shown = 0.0 if vol_ratio is None else vol_ratio
             return f"近 1 小時量比 {shown:.2f} < {vol_min:.2f}"
         px15_min = self.learner.p.get("px15_dir_min", S.PX15_DIR_MIN_DEFAULT)
-        if px15 is not None and -px15 < px15_min:
-            return f"近 15 分鐘做空方向 {-px15:+.2f}% < {px15_min:.3f}%"
+        if px15 is not None and px15 * sgn < px15_min:
+            return f"近 15 分鐘順方向 {px15 * sgn:+.2f}% < {px15_min:.3f}%"
         rs_max = self.learner.p.get("rs1h_max", S.RS1H_MAX_DEFAULT)
-        if ret1h is not None and btc_5m is not None and (btc_5m - ret1h) >= rs_max:
-            return f"近 1 小時已領先 BTC {btc_5m - ret1h:+.2f}% ≥ {rs_max:.3f}%"
+        if ret1h is not None and btc_5m is not None and (ret1h - btc_5m) * sgn >= rs_max:
+            return f"近 1 小時已領先 BTC {(ret1h - btc_5m) * sgn:+.2f}% ≥ {rs_max:.3f}%"
         mv = move_2h(tsym)
-        if mv and -mv["r"] >= S.MAX_EXT_R:
-            return f"近 2 小時已跌 {abs(mv['pct']):.1f}% ({-mv['r']:+.1f}R ≥ {S.MAX_EXT_R}R)"
-        if mv and mv.get("rpos") is not None and (1 - mv["rpos"]) > S.MAX_RANGE_POS:
-            return f"3 小時區間位置 {1 - mv['rpos']:.2f} > {S.MAX_RANGE_POS:.2f}"
+        if mv and mv["r"] * sgn >= S.MAX_EXT_R:
+            return f"近 2 小時已走 {abs(mv['pct']):.1f}% ({mv['r'] * sgn:+.1f}R ≥ {S.MAX_EXT_R}R)"
+        rpos = None if not mv or mv.get("rpos") is None else (mv["rpos"] if side == "LONG" else 1 - mv["rpos"])
+        if rpos is not None and rpos > S.MAX_RANGE_POS:
+            return f"3 小時區間位置 {rpos:.2f} > {S.MAX_RANGE_POS:.2f}"
         return None
 
     def _quiet_short(self, c: dict, pl_long: dict, regime: tuple, htf: float | None):
         """While 分析驗算 is paused, a liquid short with the higher timeframe already
         aligned, but not extremely so, still had positive R in both halves:
         directional HTF in [1.5, 2.5) and 24h quote volume at or above the live floor,
-        37 reviews, +0.76R. Longs in that same band were about -1R, so this is shorts only.
+        37 reviews, +0.76R. The long mirror is separate and was about -1R.
         Quote volume, the 1h range and volume ratios, relative strength, and the 2h
-        extension are applied here as well, so a thin name does not take one of the
-        two slots before a liquid name is seen.
+        extension are applied here as well, so a thin name does not take a slot
+        before a liquid name is seen.
         """
         if regime[0] > S.REGIME_VETO:
             return None
@@ -980,6 +993,52 @@ class SelfScanner:
               "analysis": {"prob": None, "bias": 0.0, "edge": None, "prob_1h": None,
                            "quality": None, "ev_r": None, "targets": [], "quiet_strong_short": True}}
         return {"sig": sig, "ev": ev, "source": "安靜期強勢空"}
+
+    def _quiet_long(self, c: dict, pl_long: dict, regime: tuple, htf: float | None):
+        """Quiet-period long. Same geometry as the short, on the other side.
+
+        Directional HTF in [1.5, 2.5) with the live volume floor was 14 longs,
+        about -0.99R in both halves. The path is open because that side was
+        requested anyway. It does not fire unless the higher timeframe is up.
+        """
+        if regime[0] < -S.REGIME_VETO:
+            return None
+        if htf is None:
+            return None
+        htf_dir = htf
+        if not (1.5 <= htf_dir < 2.5):
+            return None
+        rpos = pl_long.get("rpos")
+        if rpos is None or rpos > S.MAX_RANGE_POS:
+            return None
+        rpos = round(rpos, 3)
+        px, dist = pl_long["price"], pl_long["dist"]
+        sym = c["symbol"]
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        levels = [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": TP_R[i],
+                   "price": pl_long["tps"][i], "hit": False} for i in range(len(TP_R))]
+        sig = {"id": f"quiet:{sym}:LONG:{int(time.time() // 900)}", "symbol": sym, "side": "LONG",
+               "status": "ACTIVE", "timeframe": "15m", "entry_price": px, "stop_price": pl_long["stop"],
+               "current_price": px, "entry_at": now, "levels": levels, "signal_path": "QUIET LONG",
+               "path_subtype": None, "quiet_strong_long": True}
+        factors = {"source:安靜期強勢多": 0.0, "side:LONG": 0.0, f"regime:{regime[1].lower()}": 0.0}
+        for t in c["tags"]:
+            factors[f"origin:{t.split('#')[0].split('(')[0].split(':')[0]}"] = 0.0
+        learned = sum(self.learner.p.get("factor_adj", {}).get(t, 0.0) for t in factors)
+        score = round(self.learner.p.get("effective_min_score", S.MIN_SCORE) + learned, 1)
+        reasons = [
+            "安靜期強勢多：分析驗算暫停，沿用強勢空的鏡像條件",
+            f"大週期順方向 {htf_dir:+.2f}，允許 1.5 到 2.5",
+            "這一側 14 筆流動性夠的樣本約 -0.99R，前後半都是負的",
+            f"區間位置 {rpos:.2f}，須靠近低點（上限 {S.MAX_RANGE_POS}）",
+            f"24h 成交額仍須達 {S.QUOTE_VOL_MIN_DEFAULT/1e6:.0f} 百萬",
+            f"止損 {dist / px:.2%} (1.5×ATR15m)，大盤 {regime[1]} {regime[0]:+.2f}",
+        ]
+        ev = {"ok": True, "score": score, "tier": "NORMAL", "reasons": reasons, "factors": factors,
+              "skip": None, "cur_r": 0.0,
+              "analysis": {"prob": None, "bias": 0.0, "edge": None, "prob_1h": None,
+                           "quality": None, "ev_r": None, "targets": [], "quiet_strong_long": True}}
+        return {"sig": sig, "ev": ev, "source": "安靜期強勢多"}
 
     def to_signal(self, c, rv, pl, prob, p1h, quality, ev_r, regime, raw, bias, edge) -> dict:
         sym, side = c["symbol"], c["side"]
