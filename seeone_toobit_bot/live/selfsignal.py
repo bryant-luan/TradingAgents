@@ -136,19 +136,22 @@ def btc_ret1h() -> float | None:
     return round((float(rows[-1][4]) - ref) / ref * 100, 3)
 
 
-def micro_1h(symbol: str) -> tuple[float | None, float | None]:
-    """(range ratio, 1h return %) on closed 5m bars, the same definition research.py scores.
+def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, float | None]:
+    """(range ratio, 1h return %, volume ratio, 24h quote volume) on closed 5m bars.
 
-    Range ratio is the mean high-low of the last 12 bars divided by the mean high-low of the last 300
-    (~25h). The return is the last close versus the close 12 bars earlier, long perspective.
+    Same definitions research.py scores. Range ratio is the mean high-low of the last 12 bars over the
+    last 300 (~25h). The return is the last close versus the close 12 bars earlier, long perspective.
+    Volume ratio is the last hour's mean quote volume over the mean of the 288 bars before it.
+    Quote volume is base volume times close, summed over those 288 bars (24h).
     """
+    empty = (None, None, None, None)
     try:
         rows = requests.get("https://api.toobit.com/quote/v1/klines",
                             params={"symbol": symbol, "interval": "5m", "limit": 301}, timeout=10).json()
     except (requests.RequestException, ValueError):
-        return None, None
+        return empty
     if not isinstance(rows, list) or len(rows) < 301:
-        return None, None
+        return empty
     past = rows[:-1][-300:]
 
     def mean_range(bars: list) -> float:
@@ -158,7 +161,11 @@ def micro_1h(symbol: str) -> tuple[float | None, float | None]:
     ratio = None if base <= 0 else mean_range(past[-12:]) / base
     c0, c1 = float(past[-12][4]), float(past[-1][4])
     ret = None if c0 <= 0 else (c1 - c0) / c0 * 100
-    return ratio, ret
+    qv = [float(x[5]) * float(x[4]) for x in past]
+    earlier = qv[:-12]
+    vol_ratio = (sum(qv[-12:]) / 12) / ((sum(earlier) / len(earlier)) or 1)
+    quote_vol = sum(qv[-288:])
+    return ratio, ret, vol_ratio, quote_vol
 
 
 def rsi_side(rsi_l: float | None, side: str) -> float | None:
@@ -330,6 +337,8 @@ class SelfScanner:
         self.calibrate_btc1h(rows)
         self.calibrate_atr_ratio(rows)
         self.calibrate_rs1h(rows)
+        self.calibrate_vol_ratio(rows)
+        self.calibrate_quote_vol(rows)
         self.calibrate_high(rows)
 
     def calibrate_high(self, rows: list):
@@ -503,6 +512,18 @@ class SelfScanner:
         # Don't chase a coin that already outran BTC. Only the ≥ 0.924 cut held for three runs.
         if self.learner.p.get("rs1h_max", S.RS1H_MAX_DEFAULT) != S.RS1H_MAX_DEFAULT:
             self.learner.p["rs1h_max"] = S.RS1H_MAX_DEFAULT
+            self.learner.save()
+
+    def calibrate_vol_ratio(self, rows: list):
+        # Thin last-hour volume. Three robust passes fixed the cut at 0.54; do not let a short sample move it.
+        if self.learner.p.get("vol_ratio_min", S.VOL_RATIO_MIN_DEFAULT) != S.VOL_RATIO_MIN_DEFAULT:
+            self.learner.p["vol_ratio_min"] = S.VOL_RATIO_MIN_DEFAULT
+            self.learner.save()
+
+    def calibrate_quote_vol(self, rows: list):
+        # Illiquid names. The top-quartile cut held for three runs; lock the loosest of them.
+        if self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT) != S.QUOTE_VOL_MIN_DEFAULT:
+            self.learner.p["quote_vol_min"] = S.QUOTE_VOL_MIN_DEFAULT
             self.learner.save()
 
     def _calibrate_floor(self, rows: list, key: str, buckets: list, param: str, default: float, event: str, note: str):

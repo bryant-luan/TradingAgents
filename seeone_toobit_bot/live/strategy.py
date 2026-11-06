@@ -64,6 +64,14 @@ ATR_RATIO_MIN_DEFAULT = 0.8
 # (top quartile) was robust on the same three runs: skipped side about -0.09R to -0.16R.
 # Looser cuts of this feature were not stable across the three runs, so only this one is live.
 RS1H_MAX_DEFAULT = 0.924
+# Last-hour quote volume vs the prior ~24h average, on 5m bars. Three consecutive robust passes
+# (11-06 08:33–09:34 Taipei, ~340 skipped, 34–35h): ratios under 0.54 averaged about -0.27R.
+# Still about -0.11R after the range-ratio gate, so it is not the same filter. Locked.
+VOL_RATIO_MIN_DEFAULT = 0.54
+# 24h quote volume (base volume × close, summed over 288 closed 5m bars). The top-quartile cut
+# held on the same three runs (~1.14e8 to 1.18e8 USDT): names below it averaged about -0.08R,
+# names above stayed positive, including after the range-ratio gate. Lock the loosest of the three.
+QUOTE_VOL_MIN_DEFAULT = 1.14e8
 MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
 MAX_SAME_SIDE = 2               # open positions on one side
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
