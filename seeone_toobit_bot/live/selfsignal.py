@@ -615,6 +615,8 @@ class SelfScanner:
         a trade needs a clear edge over the opposite side, not just a high raw probability."""
         if time.time() - self.last_scan < SCAN_EVERY_S:
             return []
+        if time.time() < getattr(self, "review_pause_until", 0):
+            return []
         self.last_scan = time.time()
         self.resolve()
         split = self.learner.p.get("tp_split") or S.TP_SPLIT
@@ -660,19 +662,27 @@ class SelfScanner:
                     continue
                 d, px = pl_long["dist"], pl_long["price"]
                 pl_short = {**pl_long, "stop": px + d, "tps": [px - d * r for r in TP_R]}
-                rv = {"LONG": self.review(sym, "LONG", pl_long["stop"], pl_long["tps"]),
-                      "SHORT": self.review(sym, "SHORT", pl_short["stop"], pl_short["tps"])}
+                rv = {"LONG": self.review(sym, "LONG", pl_long["stop"], pl_long["tps"])}
+                time.sleep(1.2)
+                rv["SHORT"] = self.review(sym, "SHORT", pl_short["stop"], pl_short["tps"])
             except Exception as e:
                 self.log("ERROR", where="self_review", symbol=sym, error=repr(e)[:300])
-                # A 429 or an open breaker means the rest of this scan would just pile on. Leave those
-                # symbols for the next scan; ones already reviewed stay on the 15-minute cooldown.
-                if "429" in repr(e) or isinstance(e, S.SeeOneDown):
+                # A 429 means the budget is spent. Park this symbol at the back of the queue and
+                # wait before the next analysis-review, instead of retrying it at the front forever.
+                if "429" in repr(e):
+                    self.d["last_review"][sym] = time.time()
+                    self.review_pause_until = time.time() + 180
+                    self.log("SEEONE_RATE_LIMIT", symbol=sym,
+                             note="分析驗算被限流，這個幣先排到後面，三分鐘後從下一個繼續")
+                    break
+                if isinstance(e, S.SeeOneDown):
                     break
                 if any(code in repr(e) for code in ("400 ", "404 ", "422 ")):
                     self.d.setdefault("unsupported", {})[sym] = time.time() + 6 * 3600
                 continue
             reviewed += 1
             self.d["last_review"][sym] = time.time()
+            time.sleep(1.5)
             if any(len((r.get("geometry") or {}).get("targets") or []) != len(TP_R) for r in rv.values()):
                 continue
             raw = {sd: float(r.get("probability") or 0) for sd, r in rv.items()}

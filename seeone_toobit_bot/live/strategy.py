@@ -170,15 +170,18 @@ class SeeOne:
         for attempt in range(tries):
             try:
                 r = self._call(method, path, deadline, **kw)
+                if r.status_code == 429:
+                    # One limited call is enough. A second attempt a few seconds later keeps the penalty open.
+                    raise requests.HTTPError(f"429 {path}", response=r)
                 if r.status_code >= 500:
                     raise requests.HTTPError(f"{r.status_code} {path}")
                 r.raise_for_status()
                 data = r.json()
             except requests.HTTPError as e:
                 status = e.response.status_code if e.response is not None else 0
-                # 429 is See One asking us to slow down. Retry once, then count it toward the breaker.
-                # Other 4xx are the caller's problem (auth, bad body) and must not open the breaker.
-                if status != 429 and e.response is not None and status < 500:
+                # 429 is a rate limit, not an outage: the caller pauses the scan. Other 4xx are the
+                # caller's problem and must not open the breaker.
+                if e.response is not None and status < 500:
                     raise
                 err = e
             except (requests.ConnectionError, requests.Timeout, requests.JSONDecodeError) as e:
@@ -190,7 +193,7 @@ class SeeOne:
             if attempt == tries - 1:
                 self._fail(path, err)
                 raise err
-            time.sleep(8 if isinstance(err, requests.HTTPError) and getattr(err.response, "status_code", 0) == 429 else 2)
+            time.sleep(2)
 
     def _ok(self):
         if self.down_since is not None:
