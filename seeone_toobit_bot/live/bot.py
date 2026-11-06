@@ -1005,8 +1005,10 @@ class Bot:
                     before = (tr.get("stop"), tr.get("lock_r"), tr.get("mfe_r"))
                     self.protect(tr)
                     moved = moved or (tr.get("stop"), tr.get("lock_r"), tr.get("mfe_r")) != before
-                except ToobitError as e:
-                    log_event("ERROR", trade_id=tr.get("id"), where="fast_guard", error=str(e))
+                except Exception as e:
+                    # A read timeout is not a ToobitError. If it escapes, this thread dies and
+                    # stops only move again on the next full scan.
+                    log_event("ERROR", trade_id=tr.get("id"), where="fast_guard", error=repr(e)[:200])
             if moved:
                 save_state(self.st)
 
