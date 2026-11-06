@@ -722,8 +722,9 @@ class SelfScanner:
         if not seeone_open:
             fresh = self.d.setdefault("last_shadow", {})
             ordered = [c for c in ordered if now - fresh.get(c["symbol"], 0) >= REVIEW_COOLDOWN_S]
+        limit = 40 if not seeone_open else 6
         pl_long = None
-        for c in ordered[:6]:
+        for c in ordered[:limit]:
             sym = c["symbol"]
             tsym = S.to_toobit(sym)
             if tsym not in specs or tsym in held:
@@ -736,11 +737,13 @@ class SelfScanner:
                 if not pl_long:
                     continue
                 self._emit_shadow(sym, pl_long, htf, None, None)
-                if sum(1 for x in found if x.get("source") == "安靜期強勢空") == 0:
+                if sum(1 for x in found if x.get("source") == "安靜期強勢空") < 2:
                     item = self._quiet_short(c, pl_long, regime, htf)
                     if item:
                         found.append(item)
                 shadowed += 1
+                if sum(1 for x in found if x.get("source") == "安靜期強勢空") >= 2:
+                    break
                 continue
             try:
                 pl_long = None

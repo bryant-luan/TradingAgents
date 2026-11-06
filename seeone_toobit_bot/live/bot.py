@@ -971,7 +971,7 @@ class Bot:
                 self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
                 continue
             last = max((t["opened_ts"] for t in same), default=0)
-            if time.time() - last < S.SAME_SIDE_GAP_MIN * 60:
+            if time.time() - last < S.SAME_SIDE_GAP_MIN * 60 and not sig.get("quiet_strong_short"):
                 self.note_skip(sig, f"同方向 {S.SAME_SIDE_GAP_MIN} 分鐘內已開倉，分散進場時間")
                 continue
             if self.st.get("day_lock_armed"):
