@@ -852,7 +852,7 @@ class Bot:
         try:
             for f in self.selfscan.scan(reg, rhits, held_syms, specs, dirs.get("15m"), S.htf_score(dirs)):
                 if f["sig"]["id"] not in self.st["traded_ids"]:
-                    scored.append((f["ev"]["score"], f["sig"], SELF_SOURCE, f["ev"]))
+                    scored.append((f["ev"]["score"], f["sig"], f.get("source", SELF_SOURCE), f["ev"]))
         except Exception as e:
             log_event("ERROR", where="self_scan", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
 

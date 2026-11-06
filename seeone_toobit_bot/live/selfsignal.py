@@ -734,6 +734,9 @@ class SelfScanner:
                 pl_long = self.plan(tsym, "LONG")
                 if pl_long:
                     self._emit_shadow(sym, pl_long, htf, None, None)
+                    item = self._elsa(c, pl_long, regime, htf)
+                    if item:
+                        found.append(item)
                     self.d["last_shadow"][sym] = time.time()
                     shadowed += 1
                 continue
@@ -844,6 +847,54 @@ class SelfScanner:
                  min_prob=min_prob, min_edge=MIN_EDGE, pending_calibration=len(self.d["pending"]),
                  resolved=len(self.d["resolved"]))
         return found[:MAX_PER_SCAN]
+
+    def _elsa(self, c: dict, pl_long: dict, regime: tuple, htf: float | None):
+        """One live candidate under the ELSA gates only. Used while 分析驗算 is paused. No probability model."""
+        side = c.get("side") if c.get("side") in ("LONG", "SHORT") else ("SHORT" if regime[0] < 0 else "LONG")
+        sgn = 1 if side == "LONG" else -1
+        if (side == "LONG" and regime[0] < -S.REGIME_VETO) or (side == "SHORT" and regime[0] > S.REGIME_VETO):
+            return None
+        htf_dir = None if htf is None else htf * sgn
+        if htf_dir is None or not (S.HTF_MIN_DEFAULT <= htf_dir < S.HTF_MAX_DEFAULT):
+            return None
+        rpos_long = pl_long.get("rpos")
+        rpos = None if rpos_long is None else (rpos_long if side == "LONG" else round(1 - rpos_long, 3))
+        if rpos is None or rpos > S.MAX_RANGE_POS:
+            return None
+        btc = (self.btc or {}).get("ret1h")
+        if btc is not None and btc * sgn < S.BTC1H_MIN_DEFAULT:
+            return None
+        px, dist = pl_long["price"], pl_long["dist"]
+        pl = dict(pl_long)
+        if side == "SHORT":
+            pl["stop"] = px + dist
+            pl["tps"] = [px - dist * r for r in TP_R]
+        sym = c["symbol"]
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        levels = [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": TP_R[i],
+                   "price": pl["tps"][i], "hit": False} for i in range(len(TP_R))]
+        sig = {"id": f"elsa:{sym}:{side}:{int(time.time() // 900)}", "symbol": sym, "side": side, "status": "ACTIVE",
+               "timeframe": "15m", "entry_price": px, "stop_price": pl["stop"], "current_price": px,
+               "entry_at": now, "levels": levels, "signal_path": "ELSA", "path_subtype": None}
+        factors = {"source:ELSA規則": 0.0, f"side:{side}": 0.0, f"regime:{regime[1].lower()}": 0.0}
+        for t in c["tags"]:
+            factors[f"origin:{t.split('#')[0].split('(')[0].split(':')[0]}"] = 0.0
+        adj = self.learner.p.get("factor_adj", {})
+        learned = sum(adj.get(t, 0.0) for t in factors)
+        score = round(self.learner.p.get("effective_min_score", S.MIN_SCORE) + learned, 1)
+        reasons = [
+            "ELSA 規則進場（分析驗算暫停，不使用自建機率）",
+            f"來源: {', '.join(c['tags']) or '全市場'}",
+            f"大週期順方向 {htf_dir:+.2f}，須在 [{S.HTF_MIN_DEFAULT}, {S.HTF_MAX_DEFAULT})",
+            f"區間位置 {rpos:.2f}，上限 {S.MAX_RANGE_POS}",
+            f"BTC 1h 順方向 {None if btc is None else round(btc * sgn, 3)}%，下限 {S.BTC1H_MIN_DEFAULT}",
+            f"止損 {dist / px:.2%} (1.5×ATR15m)，大盤 {regime[1]} {regime[0]:+.2f}",
+        ]
+        ev = {"ok": True, "score": score, "tier": "NORMAL", "reasons": reasons, "factors": factors,
+              "skip": None, "cur_r": 0.0,
+              "analysis": {"prob": None, "bias": 0.0, "edge": None, "prob_1h": None,
+                           "quality": None, "ev_r": None, "targets": [], "elsa": True}}
+        return {"sig": sig, "ev": ev, "source": "ELSA規則"}
 
     def to_signal(self, c, rv, pl, prob, p1h, quality, ev_r, regime, raw, bias, edge) -> dict:
         sym, side = c["symbol"], c["side"]
