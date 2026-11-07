@@ -776,6 +776,8 @@ class SelfScanner:
                     continue
                 self._emit_shadow(sym, pl_long, htf, None, None)
                 shadowed += 1
+                if not S.QUIET_ENTRIES:
+                    continue
                 short_band = htf is not None and 1.5 <= -htf < 2.5
                 long_band = htf is not None and 1.5 <= htf < 2.5
                 if short_band and sum(1 for x in found if x.get("source") == "安靜期強勢空") < S.QUIET_MAX_SAME_SIDE:

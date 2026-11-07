@@ -105,6 +105,11 @@ MAX_SAME_SIDE = 2               # open positions on one side
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
 QUIET_MAX_SAME_SIDE = 3
+# ELSA window (HTF -0.5 to 1.5, BTC 1h aligned, 15m under 2.5, after a See One review)
+# is +0.64R on 211 resolved rows, both halves positive. Quiet shorts in the 1.5–2.5
+# band are +0.38R on 33 rows. Quiet longs in that band are -0.99R on 14 rows.
+# New entries stay on the higher-expectancy ELSA path.
+QUIET_ENTRIES = False
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
 MAKER_FEE, TAKER_FEE = 0.0002, 0.0006
