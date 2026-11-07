@@ -787,7 +787,7 @@ class Bot:
                 today = sum(c["pnl"] or 0 for c in self.st["closed"] if c["closed_at"].startswith(day))
             self.st["day_start_balance"] = bal - today
             self.st["day_peak_balance"] = bal
-            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity", "day_lock_ts"):
+            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity", "day_lock_ts", "day_target_done"):
                 self.st.pop(k, None)
         self.st.setdefault("principal", equity)
         # Profit lock tracks realized balance only, so a floating profit that is later given back can't trip it.
@@ -800,13 +800,24 @@ class Bot:
             self.st["day_lock_off_logged"] = day
             log_event("DAY_LOCK_OVERRIDE", day=day,
                       reason="使用者指示今日照常開一般倉：解除當日鎖利與回吐停止 (UTC 日界前有效)；當日虧損上限仍有效")
-        if not override and peak - start >= start * S.DAY_LOCK_TRIGGER_PCT and not self.st.get("day_lock_armed"):
+        gained = bal - start
+        if not override and gained >= S.DAY_TARGET_CAP_USDT and not self.st.get("day_target_done"):
+            self.st["day_target_done"] = True
+            log_event("DAY_TARGET_DONE", day_start_balance=round(start, 2), balance=round(bal, 2),
+                      gained=round(gained, 2),
+                      reason=f"當日已實現獲利 {gained:.0f}u 達到目標上限 {S.DAY_TARGET_CAP_USDT:.0f}u，今日停止開新倉")
+        if self.st.get("day_target_done"):
+            if signals is not None:
+                self.record_signal_snapshots(signals)
+            return
+        if not override and peak - start >= S.DAY_TARGET_ARM_USDT and not self.st.get("day_lock_armed"):
             self.st["day_lock_armed"] = True
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
-                      reason=f"當日已實現獲利達 {S.DAY_LOCK_TRIGGER_PCT:.0%}，鎖利：只放行 1h/4h 大方向在實測最佳區間的單 "
-                             f"({S.RISK_PCT:.0%} 風險、同時最多 {S.POST_LOCK_MAX_OPEN} 筆)；安靜期單另計；"
-                             f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則全部停止開新倉")
+                      reason=f"當日已實現獲利達 {S.DAY_TARGET_ARM_USDT:.0f}u，鎖利：只放行 1h/4h 大方向在實測最佳區間的單 "
+                             f"({S.RISK_PCT:.0%} 風險、同時最多 {S.POST_LOCK_MAX_OPEN} 筆)；"
+                             f"到 {S.DAY_TARGET_CAP_USDT:.0f}u 停止開新倉；"
+                             f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則提前停止")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
         if self.st.get("day_lock_armed") and bal < floor:
             if not self.st.get("day_lock_hit"):
@@ -988,7 +999,7 @@ class Bot:
             if self.st.get("day_lock_armed"):
                 ok, why = self.lock_pass(sig, ev, src, htf, sgn)
                 if not ok:
-                    self.note_skip(sig, f"當日已鎖利 {S.DAY_LOCK_TRIGGER_PCT:.0%}，限制放行: {why}")
+                    self.note_skip(sig, f"當日已鎖利 {S.DAY_TARGET_ARM_USDT:.0f}u，限制放行: {why}")
                     continue
                 ev["reasons"] = ev["reasons"] + [f"鎖利後放行: {why}"]
             try:

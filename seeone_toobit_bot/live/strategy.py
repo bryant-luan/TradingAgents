@@ -135,7 +135,11 @@ TP_STOP_MOVES = False           # moving the stop to break-even / the previous T
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
 TRAIL_GAP_R = 0.5               # beyond +3R, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
-DAY_LOCK_TRIGGER_PCT = 0.10     # day realized gain at which only high-conviction signals may open
+# Today's profit target, in USDT of realized balance above the day start.
+# At +50 only the best-measured 1h/4h band may still open. At +100 new entries stop.
+DAY_TARGET_ARM_USDT = 50.0
+DAY_TARGET_CAP_USDT = 100.0
+DAY_LOCK_TRIGGER_PCT = 0.10     # kept for logs; the live trigger is the USDT band above
 DAILY_STOP_PCT = 0.12           # day loss (realized + floating, incl. open risk to stops) that ends the day
 DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
 POST_LOCK_MAX_OPEN = 1          # after the lock arms: positions opened since then that may be open at once
