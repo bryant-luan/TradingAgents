@@ -68,9 +68,13 @@ MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
-# Cap on the 1h/4h direction in the trade's direction. 1.8 still keeps the book at
-# 78.7% wins and +0.90R (11-07 replay). Past 1.8 the added shorts won about 36%.
+# Cap on the 1h/4h direction in the trade's direction. 1.8 still keeps the core book
+# near 78% wins. The next sliver, 1.8 to 2.0, won 40% and about 0R, so it stays shut.
+# Shorts from 2.0 to 2.5 are a separate band: with 24h quote volume at or above the
+# floor and the 3h extreme, 19 reviews won 79% and +0.53R, both halves positive.
 HTF_MAX_DEFAULT = 1.8
+HTF_STRONG_SHORT_LO = 2.0
+HTF_STRONG_SHORT_HI = 2.5
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
 # 3h range position in the trade's direction: 0 = at the reversal extreme (long at the low,
 # short at the high), 1 = at the other extreme. Replays through 11-06 12:00 Taipei: entries at
@@ -81,10 +85,13 @@ MAX_RANGE_POS = 0.45
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
 # Floor on BTC's last-hour move in the trade's direction, percent.
-# Longs stay at 0. Shorts may be 0.08% against BTC: that adds 15 shorts at 73% wins
-# and +0.54R, and the book stays at 78.4% wins and +0.88R (11-07 replay).
+# Longs stay at 0. Shorts may be 0.08% against BTC. There is also a pocket from
+# -0.30% to -0.15%: 24 shorts, 83% wins, +0.74R, both halves positive. The gap
+# between -0.15% and -0.08% was three losers, so it stays closed. Adding the pocket
+# lifts the core book to 208 trades, 78.4% wins, +0.84R (11-08 replay).
 BTC1H_MIN_LONG = 0.0
 BTC1H_MIN_SHORT = -0.08
+BTC1H_SHORT_POCKET = (-0.30, -0.15)
 BTC1H_MIN_DEFAULT = 0.0
 # Last-hour average bar range vs the ~25h average, on 5m bars.
 # Longs under 0.8 averaged -0.46R, both halves negative. The same low-range shorts averaged +0.26R,
@@ -102,8 +109,9 @@ RS1H_MAX_DEFAULT = 0.924
 # a ratio at or above 1.19 averaged -0.24R, both halves negative.
 VOL_RATIO_MIN_DEFAULT = 0.54          # long floor
 VOL_RATIO_MAX_SHORT = 1.19            # short cap
-# 24h quote volume. The full-sample cut looked useful, but inside the ELSA window it removed
-# 124 trades averaging +0.70R and cut total result from +139R to +52R (11-07 replay). Not an entry gate.
+# 24h quote volume. Inside the core window this cut removed trades that were still positive,
+# so it is not a core gate. It is required for the 2.0–2.5 short band: without it that
+# band lost money, and at or above this floor it won 79%.
 QUOTE_VOL_MIN_DEFAULT = 1.14e8
 # 15-minute price change on closed 5m bars, in the trade's direction, percent.
 # Three consecutive robust passes (11-06 17:10–18:10 Taipei) all cut at -0.484:
@@ -157,6 +165,36 @@ PROFIT_RESERVE = 0.5            # share of gains above principal kept out of pos
 def htf_score(dirs: dict) -> float | None:
     vals = [dirs.get(k) for k in ("1h", "4h") if dirs.get(k) is not None]
     return round(sum(vals) / len(vals), 2) if vals else None
+
+
+def direc_window(direc: float | None, side: str, htf_min: float | None = None,
+                 htf_max: float | None = None) -> str | None:
+    """Which entry band this side is in. `direc` is the 1h/4h score in the trade's direction.
+
+    'core' is the main window. 'strong_short' is the liquid-short band above it.
+    None means this side is not reviewed and not opened.
+    """
+    if direc is None:
+        return None
+    lo = HTF_MIN_DEFAULT if htf_min is None else htf_min
+    hi = HTF_MAX_DEFAULT if htf_max is None else htf_max
+    if lo <= direc < hi:
+        return "core"
+    if side == "SHORT" and HTF_STRONG_SHORT_LO <= direc < HTF_STRONG_SHORT_HI:
+        return "strong_short"
+    return None
+
+
+def btc_dir_ok(aligned_pct: float | None, side: str) -> bool:
+    """`aligned_pct` is BTC's last-hour return already signed in the trade's direction."""
+    if aligned_pct is None:
+        return True
+    if side == "LONG":
+        return aligned_pct >= BTC1H_MIN_LONG
+    if aligned_pct >= BTC1H_MIN_SHORT:
+        return True
+    lo, hi = BTC1H_SHORT_POCKET
+    return lo <= aligned_pct < hi
 
 
 def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:

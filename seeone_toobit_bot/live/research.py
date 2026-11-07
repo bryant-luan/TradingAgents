@@ -36,10 +36,25 @@ FEE_RT, BE_BUF = 0.0011, 0.0011
 TPS, SPLIT = [1.0, 1.5, 2.0, 3.0, 4.0], [0.375, 0.218, 0.227, 0.09, 0.09]
 # A cut is "robust" only if the skipped side loses in both halves, spans enough hours, and is not one-sided.
 MIN_SKIP_N, MIN_SKIP_HOURS, MIN_SIDE_N = 30, 8, 15
+
+
+def _htf_blocked(f: dict) -> bool:
+    """True when the live higher-timeframe rule would skip this row."""
+    h = f.get("htf")
+    if h is None or h < S.HTF_MAX_DEFAULT:
+        return False
+    liquid = (not f.get("side_long") and S.HTF_STRONG_SHORT_LO <= h < S.HTF_STRONG_SHORT_HI
+              and f.get("rpos") is not None and f["rpos"] <= S.MAX_RANGE_POS
+              and (f.get("quote_vol_24h") or 0) >= S.QUOTE_VOL_MIN_DEFAULT)
+    return not liquid
+
+
 LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "the live filter would skip it")
-    "大週期方向 ≥ 1.8": ("2026-11-07T12:00:00+00:00", lambda f: f["htf"] is not None and f["htf"] >= S.HTF_MAX_DEFAULT),
-    "BTC 1h：多 < 0 / 空 < -0.08": ("2026-11-07T12:00:00+00:00",
-                                     lambda f: f["btc1h_dir_pct"] is not None and f["btc1h_dir_pct"] < (S.BTC1H_MIN_LONG if f.get("side_long") else S.BTC1H_MIN_SHORT)),
+    "大週期不在核心、也不是流動強勢空": ("2026-11-07T22:00:00+00:00",
+                                      lambda f: _htf_blocked(f)),
+    "BTC 1h 不在允許範圍": ("2026-11-07T22:00:00+00:00",
+                         lambda f: f["btc1h_dir_pct"] is not None and not S.btc_dir_ok(
+                             f["btc1h_dir_pct"], "LONG" if f.get("side_long") else "SHORT")),
     "波動比：多 < 0.8 / 空 ≥ 1.29": ("2026-11-07T07:00:00+00:00",
                                   lambda f: f["atr_ratio"] is not None and (f["atr_ratio"] < S.ATR_RATIO_MIN_DEFAULT if f.get("side_long") else f["atr_ratio"] >= S.ATR_RATIO_MAX_SHORT)),
     "近 15m 漲跌 (方向) < -0.484": ("2026-11-06T10:30:00+00:00",

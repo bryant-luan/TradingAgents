@@ -692,7 +692,7 @@ class SelfScanner:
         htf_dir, rpos = est[side]["htf_dir"], est[side]["rpos"]
         would = (prob is not None and prob >= DEFAULT_MIN_PROB and edge is not None and edge >= MIN_EDGE
                  and rpos is not None and rpos <= S.MAX_RANGE_POS
-                 and htf_dir is not None and S.HTF_MIN_DEFAULT <= htf_dir < S.HTF_MAX_DEFAULT)
+                 and S.direc_window(htf_dir, side) is not None)
         rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "symbol": sym, "side": side,
                "prob": prob, "other_prob": other_prob, "edge": edge, "n": est[side]["n"],
                "level": est[side]["level"], "rpos": rpos, "htf_dir": None if htf_dir is None else round(htf_dir, 2),
@@ -702,6 +702,48 @@ class SelfScanner:
         if seeone_prob is not None and prob is not None:
             self._pairs().append(rec)
         self.log("LOCAL_SIM", **rec, note="自建驗算模擬，不下單；有 See One 機率的才計入對齊")
+
+    def _near_extreme(self, ordered: list, htf: float | None, specs: dict, held: set) -> list:
+        """Names whose 3h price is still near the reversal extreme on an open side.
+
+        The review budget is six See One calls. Names already through the range
+        cannot be opened, so they no longer take a call.
+        """
+        if htf is None:
+            return []
+        sides = []
+        for side in ("LONG", "SHORT"):
+            direc = htf if side == "LONG" else -htf
+            band = S.direc_window(direc, side)
+            if band:
+                sides.append((side, band))
+        if not sides:
+            return []
+        qv = contract_quote_vol() if any(band == "strong_short" for _, band in sides) else {}
+        picked = []
+        looked = 0
+        for c in ordered:
+            if looked >= 40 or len(picked) >= 6:
+                break
+            tsym = S.to_toobit(c["symbol"])
+            if tsym not in specs or tsym in held:
+                continue
+            looked += 1
+            try:
+                pl = self.plan(tsym, "LONG")
+            except Exception:
+                continue
+            if not pl or pl.get("rpos") is None:
+                continue
+            for side, band in sides:
+                rp = pl["rpos"] if side == "LONG" else 1 - pl["rpos"]
+                if rp > S.MAX_RANGE_POS:
+                    continue
+                if band == "strong_short" and qv.get(tsym, 0) < S.QUOTE_VOL_MIN_DEFAULT:
+                    continue
+                picked.append(c)
+                break
+        return picked
 
     def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
              htf: float | None = None) -> list:
@@ -762,6 +804,10 @@ class SelfScanner:
             qv_min = self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT)
             ordered.sort(key=lambda c: 0 if qv_map.get(S.to_toobit(c["symbol"]), 0) >= qv_min else 1)
             btc_5m = micro_1h("BTC-SWAP-USDT")[1]
+        if seeone_open:
+            # Local plans are free. Spend the six See One calls on names already sitting
+            # near the 3h extreme on a side the window allows, including the liquid-short band.
+            ordered = self._near_extreme(ordered, htf, specs, held)
         limit = 40 if not seeone_open else 6
         pl_long = None
         for c in ordered[:limit]:
@@ -811,10 +857,10 @@ class SelfScanner:
                 d, px = pl_long["dist"], pl_long["price"]
                 pl_short = {**pl_long, "stop": px + d, "tps": [px - d * r for r in TP_R]}
                 plans = {"LONG": pl_long, "SHORT": pl_short}
-                # ELSA longs were +0.72R and shorts +0.49R. Review the side whose higher-timeframe
-                # direction is inside [-0.5, 1.5). Near zero, both sides are eligible.
+                # Review a side in the core window, or a short in the liquid 2.0–2.5 band.
+                # Near zero, both sides of the core window are eligible.
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
-                            if direc is not None and S.HTF_MIN_DEFAULT <= direc < S.HTF_MAX_DEFAULT]
+                            if S.direc_window(direc, sd) is not None]
                 if not eligible:
                     continue
                 hint = c.get("side") if c.get("side") in eligible else eligible[0]
@@ -891,8 +937,9 @@ class SelfScanner:
                 self.log("SELF_REJECT", symbol=sym, side=side, prob_15m=prob, prob_1h=round(p1h, 1),
                          reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {CONFIRM_MIN_PROB}%，週期不一致")
                 continue
-            found.append(self.to_signal({**c, "side": side}, r, pl, prob, round(p1h, 1), quality, ev, regime,
-                                        raw, bias, edge))
+            band = S.direc_window(htf if side == "LONG" else None if htf is None else -htf, side)
+            found.append(self.to_signal({**c, "side": side, "strong_liquid_short": band == "strong_short"},
+                                        r, pl, prob, round(p1h, 1), quality, ev, regime, raw, bias, edge))
             time.sleep(0.3)
         found.sort(key=lambda f: -f["ev"]["score"])
         self.save()
@@ -1053,7 +1100,8 @@ class SelfScanner:
                    "price": pl["tps"][i], "hit": False} for i in range(len(TP_R))]
         sig = {"id": f"self:{sym}:{side}:{int(time.time() // 900)}", "symbol": sym, "side": side, "status": "ACTIVE",
                "timeframe": "15m", "entry_price": pl["price"], "stop_price": pl["stop"], "current_price": pl["price"],
-               "entry_at": now, "levels": levels, "signal_path": "SELF ANALYSIS", "path_subtype": None}
+               "entry_at": now, "levels": levels, "signal_path": "SELF ANALYSIS", "path_subtype": None,
+               "strong_liquid_short": bool(c.get("strong_liquid_short"))}
         factors = {"source:自選驗算": 0.0, f"side:{side}": 0.0, f"regime:{regime[1].lower()}": 0.0,
                    f"selfprob:{int(prob // 10 * 10)}": 0.0, f"selfedge:{min(40, int(edge // 10 * 10))}": 0.0}
         for t in c["tags"]:
@@ -1107,6 +1155,9 @@ class SelfScanner:
             reasons.append(f"實單優化權重合計 {learned:+.1f}")
         if aux:
             reasons.append(f"空頭預備輔助（不決定進場）: 近15分鐘漲跌 {px15:+.2f}%，分數 {aux:+d}")
+        if c.get("strong_liquid_short"):
+            reasons.append(f"流動強勢空：1h/4h 順方向 {S.HTF_STRONG_SHORT_LO:.1f}–{S.HTF_STRONG_SHORT_HI:.1f}，"
+                           f"且 24h 成交額須達 {S.QUOTE_VOL_MIN_DEFAULT / 1e6:.0f} 百萬")
         if high:
             reasons.append(f"高信心單 (CLANKER 型): 優勢 ≥{HIGH_MIN_EDGE}、機率 ≥{HIGH_MIN_PROB}%、品質 ≥{HIGH_MIN_QUALITY}、"
                            f"1H ≥{HIGH_MIN_1H}%、在強勢榜或潛力榜前 10 → 放大部位")
