@@ -506,10 +506,8 @@ class SelfScanner:
             self.learner.save()
 
     def calibrate_btc1h(self, rows: list):
-        # Floor is the researched -0.0425% cut, not zero. A flat hour is not a veto.
-        if self.learner.p.get("btc1h_min", S.BTC1H_MIN_DEFAULT) != S.BTC1H_MIN_DEFAULT:
-            self.learner.p["btc1h_min"] = S.BTC1H_MIN_DEFAULT
-            self.learner.save()
+        # Longs use +0.055 and shorts use -0.0425. A single learned floor would collapse that.
+        return
 
     def calibrate_atr_ratio(self, rows: list):
         # Quiet-hour filter. Three robust passes fixed the cut at 0.8; do not let a short sample move it.
@@ -920,13 +918,19 @@ class SelfScanner:
             shown = 0.0 if qv is None else qv / 1e6
             return f"24h 成交額 {shown:.1f} 百萬 < {qv_min / 1e6:.0f} 百萬"
         atr_min = self.learner.p.get("atr_ratio_min", S.ATR_RATIO_MIN_DEFAULT)
-        if atr_ratio is None or atr_ratio < atr_min:
-            shown = 0.0 if atr_ratio is None else atr_ratio
-            return f"近 1 小時波幅比 {shown:.2f} < {atr_min:.2f}"
+        if atr_ratio is None:
+            return "近 1 小時波幅比未知"
+        if sgn > 0 and atr_ratio < atr_min:
+            return f"近 1 小時波幅比 {atr_ratio:.2f} < {atr_min:.2f}"
+        if sgn < 0 and atr_ratio >= S.ATR_RATIO_MAX_SHORT:
+            return f"近 1 小時波幅比 {atr_ratio:.2f} ≥ {S.ATR_RATIO_MAX_SHORT:.2f}"
         vol_min = self.learner.p.get("vol_ratio_min", S.VOL_RATIO_MIN_DEFAULT)
-        if vol_ratio is None or vol_ratio < vol_min:
-            shown = 0.0 if vol_ratio is None else vol_ratio
-            return f"近 1 小時量比 {shown:.2f} < {vol_min:.2f}"
+        if vol_ratio is None:
+            return "近 1 小時量比未知"
+        if sgn > 0 and vol_ratio < vol_min:
+            return f"近 1 小時量比 {vol_ratio:.2f} < {vol_min:.2f}"
+        if sgn < 0 and vol_ratio >= S.VOL_RATIO_MAX_SHORT:
+            return f"近 1 小時量比 {vol_ratio:.2f} ≥ {S.VOL_RATIO_MAX_SHORT:.2f}"
         px15_min = self.learner.p.get("px15_dir_min", S.PX15_DIR_MIN_DEFAULT)
         if px15 is not None and px15 * sgn < px15_min:
             return f"近 15 分鐘順方向 {px15 * sgn:+.2f}% < {px15_min:.3f}%"

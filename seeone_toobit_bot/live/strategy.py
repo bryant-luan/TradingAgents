@@ -78,24 +78,29 @@ FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's ow
 MAX_RANGE_POS = 0.45
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
-# Floor on BTC's last-hour move in the trade's direction, percent.
-# The cut that kept repeating in research is -0.0425: hours worse than that averaged about
-# -0.18R (354 rows). The old floor of 0 also blocked the sliver from -0.0425 up to 0,
-# 24 rows that were not the losing side (17 shorts averaged +0.64R). A flat hour such as
-# BTC +0.03% no longer vetoes a short.
-BTC1H_MIN_DEFAULT = -0.0425
-# Last-hour average bar range vs the ~25h average, on 5m bars. Three consecutive robust passes
-# (11-06 07:32–08:33 Taipei, 313–332 skipped, 33–34h, both halves and both sides negative):
-# ratios under 0.8 averaged about -0.28R; the rest stayed positive. Locked, not tightened live.
-ATR_RATIO_MIN_DEFAULT = 0.8
+# Floor on BTC's last-hour move in the trade's direction, percent. The two sides do not share a cut.
+# Longs below +0.055 averaged -0.38R over 20 hours, both halves negative; longs at or above it
+# averaged +0.70R (698-row replay, 11-07). Shorts only lose once BTC is meaningfully against them:
+# below -0.0425 the short book is flat-to-negative, while the sliver just under 0 was +0.64R on 17 shorts.
+BTC1H_MIN_LONG = 0.055
+BTC1H_MIN_SHORT = -0.0425
+BTC1H_MIN_DEFAULT = BTC1H_MIN_SHORT
+# Last-hour average bar range vs the ~25h average, on 5m bars.
+# Longs under 0.8 averaged -0.46R, both halves negative. The same low-range shorts averaged +0.26R,
+# both halves positive, so the floor is long-only. Shorts lose when the range is already expanded:
+# a ratio at or above 1.29 averaged -0.37R, both halves negative.
+ATR_RATIO_MIN_DEFAULT = 0.8          # long floor
+ATR_RATIO_MAX_SHORT = 1.29           # short cap
 # Coin's last-hour return minus BTC's, in the trade's direction, percent. The ≥ 0.924 cut
 # (top quartile) was robust on the same three runs: skipped side about -0.09R to -0.16R.
 # Looser cuts of this feature were not stable across the three runs, so only this one is live.
 RS1H_MAX_DEFAULT = 0.924
-# Last-hour quote volume vs the prior ~24h average, on 5m bars. Three consecutive robust passes
-# (11-06 08:33–09:34 Taipei, ~340 skipped, 34–35h): ratios under 0.54 averaged about -0.27R.
-# Still about -0.11R after the range-ratio gate, so it is not the same filter. Locked.
-VOL_RATIO_MIN_DEFAULT = 0.54
+# Last-hour quote volume vs the prior ~24h average, on 5m bars.
+# Thin volume is a long problem: longs under 0.54 averaged -0.33R. The same thin shorts averaged
+# +0.21R, both halves positive, so that floor is long-only. Shorts lose when volume is already hot:
+# a ratio at or above 1.19 averaged -0.24R, both halves negative.
+VOL_RATIO_MIN_DEFAULT = 0.54          # long floor
+VOL_RATIO_MAX_SHORT = 1.19            # short cap
 # 24h quote volume (base volume × close, summed over 288 closed 5m bars). The top-quartile cut
 # held on the same three runs (~1.14e8 to 1.18e8 USDT): names below it averaged about -0.08R,
 # names above stayed positive, including after the range-ratio gate. Lock the loosest of the three.

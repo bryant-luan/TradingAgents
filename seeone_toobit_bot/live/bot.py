@@ -872,7 +872,6 @@ class Bot:
         htf = self.htf = S.htf_score(dirs)
         htf_min = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
         htf_max = self.learner.p.get("htf_max", S.HTF_MAX_DEFAULT)
-        btc1h_min = self.learner.p.get("btc1h_min", S.BTC1H_MIN_DEFAULT)
         try:
             btc1h = btc_ret1h()
         except Exception:
@@ -911,9 +910,10 @@ class Bot:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
                                     f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
                 continue
-            if btc1h is not None and btc1h * sgn < btc1h_min and not sig.get("quiet_strong_short"):
+            btc_floor = S.BTC1H_MIN_LONG if sgn > 0 else S.BTC1H_MIN_SHORT
+            if btc1h is not None and btc1h * sgn < btc_floor and not sig.get("quiet_strong_short"):
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
-                                    f"(順方向 {btc1h * sgn:+.2f}% < 下限 {btc1h_min:+.2f}%)，等大盤同向再進")
+                                    f"(順方向 {btc1h * sgn:+.2f}% < 下限 {btc_floor:+.3f}%)，等大盤同向再進")
                 continue
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in micros:
@@ -923,9 +923,13 @@ class Bot:
                     micros[tsym] = (None, None, None, None, None)
             atr_ratio, ret1h, vol_ratio, quote_vol, px15 = micros[tsym]
             atr_min = self.learner.p.get("atr_ratio_min", S.ATR_RATIO_MIN_DEFAULT)
-            if atr_ratio is not None and atr_ratio < atr_min:
+            if sgn > 0 and atr_ratio is not None and atr_ratio < atr_min:
                 self.note_skip(sig, f"{sig['symbol']} 近 1 小時平均波幅只有約 25 小時的 {atr_ratio:.2f} 倍 "
-                                    f"(< {atr_min:.2f})，盤整段進場期望值差，等波動回到常態再進")
+                                    f"(< {atr_min:.2f})，做多在盤整段期望值差，等波動回到常態再進")
+                continue
+            if sgn < 0 and atr_ratio is not None and atr_ratio >= S.ATR_RATIO_MAX_SHORT:
+                self.note_skip(sig, f"{sig['symbol']} 近 1 小時平均波幅已是約 25 小時的 {atr_ratio:.2f} 倍 "
+                                    f"(≥ {S.ATR_RATIO_MAX_SHORT:.2f})，做空在波動已放大時期望值差，等收斂再進")
                 continue
             rs_max = self.learner.p.get("rs1h_max", S.RS1H_MAX_DEFAULT)
             if ret1h is not None and btc_5m_1h is not None and (ret1h - btc_5m_1h) * sgn >= rs_max:
@@ -934,9 +938,13 @@ class Bot:
                                     f"(≥ {rs_max:.3f}%)，短線已跑在大盤前面，不追")
                 continue
             vol_min = self.learner.p.get("vol_ratio_min", S.VOL_RATIO_MIN_DEFAULT)
-            if vol_ratio is not None and vol_ratio < vol_min:
+            if sgn > 0 and vol_ratio is not None and vol_ratio < vol_min:
                 self.note_skip(sig, f"{sig['symbol']} 近 1 小時成交量只有均量的 {vol_ratio:.2f} 倍 "
-                                    f"(< {vol_min:.2f})，量能太薄，等成交回到常態再進")
+                                    f"(< {vol_min:.2f})，做多在量能太薄時期望值差，等成交回到常態再進")
+                continue
+            if sgn < 0 and vol_ratio is not None and vol_ratio >= S.VOL_RATIO_MAX_SHORT:
+                self.note_skip(sig, f"{sig['symbol']} 近 1 小時成交量已是均量的 {vol_ratio:.2f} 倍 "
+                                    f"(≥ {S.VOL_RATIO_MAX_SHORT:.2f})，做空在量能過熱時期望值差，等退燒再進")
                 continue
             qv_min = self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT)
             if quote_vol is not None and quote_vol < qv_min:
