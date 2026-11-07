@@ -1,7 +1,7 @@
 """Indicator research on the bot's own See One analysis-review records.
 
 Each resolved review (both sides of every symbol the self-scanner reviewed) is replayed on Toobit 5m bars with the
-live exit policy (TP ladder, break-even at 2R, lock 1.6R at 3R, trail), fees included, giving its outcome in R.
+live exit policy (TP ladder, break-even at 2R, lock 2.5R at 3R, then trail 0.5R behind), fees included, giving its outcome in R.
 For every candidate entry-time indicator and every quartile cut, the script asks: if trades on one side of the cut
 were skipped, would expectancy rise, and does that hold in both halves of the period, on enough distinct hours,
 and on longs and shorts separately? Results go to logs/research_latest.txt and one line per run to

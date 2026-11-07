@@ -119,11 +119,14 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 # (MFE in R reached, R locked by the stop); 0.0 = break-even plus round-trip fees.
 # Replaying gated reviews on 5m bars, tightening before +2R cut the average result roughly in half
 # (+0.10R vs +0.20R): early break-even stops were wicked out ahead of the bigger moves.
-LOCK_LADDER = ((2.0, 0.0), (3.0, 1.6))
+# Once MFE is +3R the stop used to sit 1.2R behind the high, so a +3.02R push (XRP, 11-07)
+# only locked +1.75R and the runner gave the rest back. After +3R the stop now stays 0.5R
+# behind the high, stepped by 0.25R: +3.02R locks +2.50R, +3.66R locks +3.00R.
+LOCK_LADDER = ((2.0, 0.0), (3.0, 2.5))
 HIGH_BE_TRIGGER_R = 2.0
 TP_STOP_MOVES = False           # moving the stop to break-even / the previous TP on each TP fill (same finding)
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
-TRAIL_GAP_R = 1.2               # beyond the ladder, trail the stop this far behind the best price
+TRAIL_GAP_R = 0.5               # beyond +3R, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
 DAY_LOCK_TRIGGER_PCT = 0.10     # day realized gain at which only high-conviction signals may open
 DAILY_STOP_PCT = 0.12           # day loss (realized + floating, incl. open risk to stops) that ends the day
