@@ -137,6 +137,10 @@ QUIET_MAX_SAME_SIDE = 3
 QUIET_ENTRIES = False
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
+# Inside the live gates, stops of 1.8% or more won 49% and +0.18R, and the later
+# half was negative. Stops under 1.8% won 87% at +1.10R, both halves above 86%.
+# The 0.8% stops the account can size sit in that better band (94.7%, +1.29R).
+ENTRY_MAX_STOP_PCT = 0.018
 MAKER_FEE, TAKER_FEE = 0.0002, 0.0006
 MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more than this fraction of 1R
 

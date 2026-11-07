@@ -309,6 +309,11 @@ class Bot:
         spec = self.tb.specs()[sym]
         price = self.tb.price(sym)
         stop = float(sig["stop_price"])
+        sl_pct = abs(price - stop) / price if price else 0
+        if sl_pct >= S.ENTRY_MAX_STOP_PCT:
+            self.note_skip(sig, f"止損距離 {sl_pct:.1%} 過寬 (≥ {S.ENTRY_MAX_STOP_PCT:.1%})。"
+                                f"這一段回放勝率約 49%、後半轉負，等止損收回 1.8% 以內再進")
+            return False
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):
             self.note_skip(sig, f"現價 {price} 已貼近/穿越止損 {stop}")
             return False

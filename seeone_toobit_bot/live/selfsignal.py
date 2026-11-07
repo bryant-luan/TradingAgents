@@ -623,7 +623,7 @@ class SelfScanner:
         atr_v, rows = a
         price = self.tb.price(tsym)
         dist = max(ATR_MULT * atr_v, MIN_STOP_PCT * price)
-        if dist / price > MAX_STOP_PCT:
+        if dist / price > MAX_STOP_PCT or dist / price >= S.ENTRY_MAX_STOP_PCT:
             return None
         sgn = 1 if side == "LONG" else -1
         move = (price - float(rows[-EXT_BARS][1])) / dist
