@@ -41,12 +41,16 @@ MIN_SKIP_N, MIN_SKIP_HOURS, MIN_SIDE_N = 30, 8, 15
 def _htf_blocked(f: dict) -> bool:
     """True when the live higher-timeframe rule would skip this row."""
     h = f.get("htf")
-    if h is None or h < S.HTF_MAX_DEFAULT:
+    if h is None:
         return False
-    liquid = (not f.get("side_long") and S.HTF_STRONG_SHORT_LO <= h < S.HTF_STRONG_SHORT_HI
-              and f.get("rpos") is not None and f["rpos"] <= S.MAX_RANGE_POS
-              and (f.get("quote_vol_24h") or 0) >= S.QUOTE_VOL_MIN_DEFAULT)
-    return not liquid
+    side = "LONG" if f.get("side_long") else "SHORT"
+    band = S.direc_window(h, side)
+    if band is None:
+        return True
+    if band == "strong_short":
+        return not (f.get("rpos") is not None and f["rpos"] <= S.MAX_RANGE_POS
+                    and (f.get("quote_vol_24h") or 0) >= S.QUOTE_VOL_MIN_DEFAULT)
+    return False
 
 
 LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "the live filter would skip it")
@@ -101,10 +105,22 @@ def records() -> list:
     htf_min = learned.get("htf_min", S.HTF_MIN_DEFAULT)
     rpos_max = learned.get("range_pos_max", S.MAX_RANGE_POS)
     res = json.loads((LOGS / "self_calib.json").read_text())["resolved"]
-    # Only gates that are not under study here; the htf cap and RSI floor are left open so both sides are measured.
+    # The cap, the floor, and the RSI floor stay open so the fade bands can be measured.
+    # A row below the core floor is kept only when it sits in a live fade band.
+    def htf_kept(r) -> bool:
+        h = r.get("htf")
+        if h is None or h >= htf_min:
+            return True
+        side = r.get("side")
+        if side == "LONG":
+            return S.HTF_FADE_LONG[0] <= h < S.HTF_FADE_LONG[1]
+        if side == "SHORT":
+            return S.HTF_FADE_SHORT[0] <= h < S.HTF_FADE_SHORT[1]
+        return False
+
     g = sorted((r for r in res if r["prob"] >= MIN_PROB
                 and (r.get("m15") is None or r["m15"] <= m15_max)
-                and (r.get("htf") is None or r["htf"] >= htf_min)
+                and htf_kept(r)
                 and (r.get("rpos") is None or r["rpos"] <= rpos_max)), key=lambda r: r["ts"])
     last, out = {}, []
     for r in g:

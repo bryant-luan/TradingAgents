@@ -938,7 +938,9 @@ class SelfScanner:
                          reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {CONFIRM_MIN_PROB}%，週期不一致")
                 continue
             band = S.direc_window(htf if side == "LONG" else None if htf is None else -htf, side)
-            found.append(self.to_signal({**c, "side": side, "strong_liquid_short": band == "strong_short"},
+            found.append(self.to_signal({**c, "side": side,
+                                        "strong_liquid_short": band == "strong_short",
+                                        "fade_entry": band in ("fade_long", "fade_short")},
                                         r, pl, prob, round(p1h, 1), quality, ev, regime, raw, bias, edge))
             time.sleep(0.3)
         found.sort(key=lambda f: -f["ev"]["score"])
@@ -1101,7 +1103,8 @@ class SelfScanner:
         sig = {"id": f"self:{sym}:{side}:{int(time.time() // 900)}", "symbol": sym, "side": side, "status": "ACTIVE",
                "timeframe": "15m", "entry_price": pl["price"], "stop_price": pl["stop"], "current_price": pl["price"],
                "entry_at": now, "levels": levels, "signal_path": "SELF ANALYSIS", "path_subtype": None,
-               "strong_liquid_short": bool(c.get("strong_liquid_short"))}
+               "strong_liquid_short": bool(c.get("strong_liquid_short")),
+               "fade_entry": bool(c.get("fade_entry"))}
         factors = {"source:自選驗算": 0.0, f"side:{side}": 0.0, f"regime:{regime[1].lower()}": 0.0,
                    f"selfprob:{int(prob // 10 * 10)}": 0.0, f"selfedge:{min(40, int(edge // 10 * 10))}": 0.0}
         for t in c["tags"]:
@@ -1158,6 +1161,8 @@ class SelfScanner:
         if c.get("strong_liquid_short"):
             reasons.append(f"流動強勢空：1h/4h 順方向 {S.HTF_STRONG_SHORT_LO:.1f}–{S.HTF_STRONG_SHORT_HI:.1f}，"
                            f"且 24h 成交額須達 {S.QUOTE_VOL_MIN_DEFAULT / 1e6:.0f} 百萬")
+        if c.get("fade_entry"):
+            reasons.append("逆勢帶：1h/4h 略微相反，其餘條件與核心相同。這一段回放勝率與平均 R 都在核心之上")
         if high:
             reasons.append(f"高信心單 (CLANKER 型): 優勢 ≥{HIGH_MIN_EDGE}、機率 ≥{HIGH_MIN_PROB}%、品質 ≥{HIGH_MIN_QUALITY}、"
                            f"1H ≥{HIGH_MIN_1H}%、在強勢榜或潛力榜前 10 → 放大部位")

@@ -1,8 +1,9 @@
 """Score live trades opened under the current entry rules against the replay baseline.
 
-The baseline is the 227-row replay of the rules loaded at 2026-11-08 06:00 Taipei:
-the core window, the short BTC pocket from -0.30% to -0.15%, and liquid shorts
-whose 1h/4h direction is 2.0 to 2.5. Win rate 78.4%, mean +0.818R.
+The baseline is the 281-row replay of the rules loaded at 2026-11-08 05:50 Taipei:
+the core window, the short BTC pocket, liquid shorts at 2.0 to 2.5, longs mildly
+against the higher timeframe (-0.8 to -0.5), and shorts mildly against it
+(-1.5 to -0.5). Win rate 78.6%, mean +0.865R.
 
 Keep the rules while a live sample is still small, or while both win rate and mean R
 are at least that baseline. If five or more trades have closed and either number is
@@ -14,9 +15,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TRADES = ROOT / "logs" / "trades" / "live_trades.jsonl"
 
-RULE_SINCE = "2026-11-07T22:00:00+00:00"
-BASE_WIN = 0.784
-BASE_R = 0.818
+RULE_SINCE = "2026-11-07T21:50:00+00:00"
+BASE_WIN = 0.786
+BASE_R = 0.865
 MIN_CLOSED = 5
 
 

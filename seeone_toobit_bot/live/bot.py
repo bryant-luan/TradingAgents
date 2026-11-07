@@ -927,23 +927,23 @@ class Bot:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                     f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
-            if htf is not None and htf * sgn < htf_min:
-                self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
-                                    f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
-                continue
             quiet = sig.get("quiet_strong_short") or sig.get("quiet_strong_long")
-            band = S.direc_window(None if htf is None else htf * sgn, sig["side"], htf_min, htf_max)
-            # The liquid band is only for our own reviews. An official signal in that
-            # tape has not been measured, so it still stops at the core cap.
+            direc = None if htf is None else htf * sgn
+            band = S.direc_window(direc, sig["side"], htf_min, htf_max)
+            # The extra bands are only for our own reviews. An official signal there
+            # has not been measured, so it still stops at the core window.
             strong = band == "strong_short" and src == SELF_SOURCE and sig.get("strong_liquid_short")
-            if htf is not None and not strong and band != "core" and not (quiet and htf * sgn < 2.5):
-                if band == "strong_short":
-                    why = "這一段只開放給自選驗算的空單"
+            fade = band in ("fade_long", "fade_short") and src == SELF_SOURCE and sig.get("fade_entry")
+            if htf is not None and not strong and not fade and band != "core" and not (quiet and htf * sgn < 2.5):
+                if band in ("strong_short", "fade_long", "fade_short"):
+                    why = "這一段只開放給自選驗算"
                 else:
                     why = "這一段沒有正期望"
-                self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
-                                    f"(順方向 {htf * sgn:+.1f}，核心上限 {htf_max:+.1f}，"
-                                    f"流動空單帶 {S.HTF_STRONG_SHORT_LO:.1f}–{S.HTF_STRONG_SHORT_HI:.1f})，{why}，不進")
+                self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f}，{'做多' if sgn > 0 else '做空'}順方向 {direc:+.1f} "
+                                    f"不在可進場區間（核心 {htf_min:+.1f}～{htf_max:+.1f}，"
+                                    f"逆勢多 {S.HTF_FADE_LONG[0]:.1f}～{S.HTF_FADE_LONG[1]:.1f}，"
+                                    f"逆勢空 {S.HTF_FADE_SHORT[0]:.1f}～{S.HTF_FADE_SHORT[1]:.1f}，"
+                                    f"流動空 {S.HTF_STRONG_SHORT_LO:.1f}～{S.HTF_STRONG_SHORT_HI:.1f}），{why}，不進")
                 continue
             aligned = None if btc1h is None else btc1h * sgn
             if not strong and not sig.get("quiet_strong_short") and not S.btc_dir_ok(aligned, sig["side"]):

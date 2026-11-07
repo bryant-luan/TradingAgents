@@ -75,6 +75,11 @@ HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the tr
 HTF_MAX_DEFAULT = 1.8
 HTF_STRONG_SHORT_LO = 2.0
 HTF_STRONG_SHORT_HI = 2.5
+# Mildly against the 1h/4h, with the other gates still on. Longs in [-0.8, -0.5) were
+# 31 trades, 77% wins, +0.98R. Shorts in [-1.5, -0.5) were 23 trades, 83% wins, +1.18R.
+# Both halves positive. Added to the book: 281 trades, 78.6% wins, +0.87R (11-08 replay).
+HTF_FADE_LONG = (-0.8, -0.5)
+HTF_FADE_SHORT = (-1.5, -0.5)
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
 # 3h range position in the trade's direction: 0 = at the reversal extreme (long at the low,
 # short at the high), 1 = at the other extreme. Replays through 11-06 12:00 Taipei: entries at
@@ -172,6 +177,7 @@ def direc_window(direc: float | None, side: str, htf_min: float | None = None,
     """Which entry band this side is in. `direc` is the 1h/4h score in the trade's direction.
 
     'core' is the main window. 'strong_short' is the liquid-short band above it.
+    'fade_long' and 'fade_short' are the mildly-against bands that still won.
     None means this side is not reviewed and not opened.
     """
     if direc is None:
@@ -182,6 +188,10 @@ def direc_window(direc: float | None, side: str, htf_min: float | None = None,
         return "core"
     if side == "SHORT" and HTF_STRONG_SHORT_LO <= direc < HTF_STRONG_SHORT_HI:
         return "strong_short"
+    if side == "LONG" and HTF_FADE_LONG[0] <= direc < HTF_FADE_LONG[1]:
+        return "fade_long"
+    if side == "SHORT" and HTF_FADE_SHORT[0] <= direc < HTF_FADE_SHORT[1]:
+        return "fade_short"
     return None
 
 
