@@ -889,8 +889,14 @@ class SelfScanner:
                 plans = {"LONG": pl_long, "SHORT": pl_short}
                 # Review a side in the core window, or a short in the liquid 2.0–2.5 band.
                 # Near zero, both sides of the core window are eligible.
+                def m15_ok(sd: str) -> bool:
+                    if m15 is None:
+                        return True
+                    sgn = 1 if sd == "LONG" else -1
+                    return S.M15_MIN_DEFAULT <= m15 * sgn < S.M15_MAX_DEFAULT
+
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
-                            if S.direc_window(direc, sd) is not None]
+                            if S.direc_window(direc, sd) is not None and m15_ok(sd)]
                 if not eligible:
                     continue
                 hint = c.get("side") if c.get("side") in eligible else eligible[0]

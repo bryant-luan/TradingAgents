@@ -67,6 +67,8 @@ LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "th
                           lambda f: f["rpos"] is not None and f["rpos"] >= S.MAX_RANGE_POS),
     "止損距離 ≥ 1.8%": ("2026-11-07T22:30:00+00:00",
                      lambda f: f.get("stop_pct") is not None and f["stop_pct"] >= S.ENTRY_MAX_STOP_PCT * 100),
+    "15m 順方向 < -0.5": ("2026-11-07T23:55:00+00:00",
+                        lambda f: f.get("m15") is not None and f["m15"] < S.M15_MIN_DEFAULT),
 }
 # Features already gated live (BTC 4h measured redundant with BTC 1h inside the live gates).
 LIVE_FEATURES = {"htf", "btc1h_dir_pct", "m15", "rpos", "prob", "rsi15_dir", "atr_ratio", "rs1h_vs_btc",

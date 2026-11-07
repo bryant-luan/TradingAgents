@@ -1,9 +1,9 @@
 """Score live trades opened under the current entry rules against the replay baseline.
 
-The baseline is the 222-row replay of the rules loaded at 2026-11-08 06:30 Taipei:
-the entry-capable book (core, fade, liquid shorts) with stops under 1.8%.
-Win rate 86.5%, mean +1.05R. Stops at or above 1.8% won 49% and the later half
-was negative, so they are no longer opened.
+The baseline is the 167-row replay of the rules loaded at 2026-11-08 07:55 Taipei.
+The 15m score in the trade's direction must be at least -0.5, and the stop
+under 1.8%. Win rate 89.2%, mean +1.15R. A 15m score below -0.5 is already
+against the trade; that band was 34 rows at 79% and +0.86R.
 
 Keep the rules while a live sample is still small, or while both win rate and mean R
 are at least that baseline. If five or more trades have closed and either number is
@@ -15,9 +15,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TRADES = ROOT / "logs" / "trades" / "live_trades.jsonl"
 
-RULE_SINCE = "2026-11-07T22:30:00+00:00"
-BASE_WIN = 0.865
-BASE_R = 1.048
+RULE_SINCE = "2026-11-07T23:55:00+00:00"
+BASE_WIN = 0.892
+BASE_R = 1.152
 MIN_CLOSED = 5
 
 

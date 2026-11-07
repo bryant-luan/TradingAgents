@@ -69,6 +69,11 @@ HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
+# Floor on that same score. Below -0.5 the 15m is already against the trade
+# (XRP short on 11-08 was +0.7 raw, so -0.7 in the short's direction).
+# That band was 34 trades, 79% wins, +0.86R. The rest was 167 trades,
+# 89% wins, +1.15R, both halves above 88% (11-08 replay).
+M15_MIN_DEFAULT = -0.5
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
 # Cap on the 1h/4h direction in the trade's direction. 1.8 still keeps the core book
 # near 78% wins. The next sliver, 1.8 to 2.0, won 40% and about 0R, so it stays shut.

@@ -932,6 +932,10 @@ class Bot:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                     f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
+            if m15 * sgn < S.M15_MIN_DEFAULT:
+                self.note_skip(sig, f"See One 15m 方向 {m15:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
+                                    f"(順方向 {m15 * sgn:+.1f} < {S.M15_MIN_DEFAULT:+.1f})，短線已經反過來，等轉回再進")
+                continue
             quiet = sig.get("quiet_strong_short") or sig.get("quiet_strong_long")
             direc = None if htf is None else htf * sgn
             band = S.direc_window(direc, sig["side"], htf_min, htf_max)
