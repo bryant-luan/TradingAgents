@@ -809,12 +809,18 @@ class SelfScanner:
                 d, px = pl_long["dist"], pl_long["price"]
                 pl_short = {**pl_long, "stop": px + d, "tps": [px - d * r for r in TP_R]}
                 plans = {"LONG": pl_long, "SHORT": pl_short}
-                hint = c.get("side") if c.get("side") in ("LONG", "SHORT") else ("SHORT" if regime[0] < 0 else "LONG")
+                # ELSA longs were +0.72R and shorts +0.49R. Review the side whose higher-timeframe
+                # direction is inside [-0.5, 1.5). Near zero, both sides are eligible.
+                eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
+                            if direc is not None and S.HTF_MIN_DEFAULT <= direc < S.HTF_MAX_DEFAULT]
+                if not eligible:
+                    continue
+                hint = c.get("side") if c.get("side") in eligible else eligible[0]
                 # Both sides are only needed to measure the model's long/short bias. Once that bias is known,
                 # one call plus the saved bias matches the old de-bias math and cuts the request in half.
                 # Every fourth name still reviews both sides so the bias can move.
                 samples = self.d.setdefault("bias_samples", [])
-                both = (reviewed + 1) % 4 == 0
+                both = (reviewed + 1) % 4 == 0 and len(eligible) == 2
                 rv = {hint: self.review(sym, hint, plans[hint]["stop"], plans[hint]["tps"])}
                 if both:
                     other_side = "SHORT" if hint == "LONG" else "LONG"
@@ -874,17 +880,6 @@ class SelfScanner:
             if max_prob is not None and prob >= max_prob:
                 continue
             if prob < min_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < MIN_EV_R:
-                continue
-            # Longs in a bear tape and shorts in a bull tape are still scored and written down. They are not
-            # opened: countertrend longs at the 3h low hit TP1 only about 43%, and a 15m turn-up against the
-            # higher timeframe hit TP1 about 17%.
-            if (side == "LONG" and regime[0] < -S.REGIME_VETO) or (side == "SHORT" and regime[0] > S.REGIME_VETO):
-                rec = {"symbol": sym, "side": side, "prob": prob, "edge": edge, "ev_r": ev,
-                       "rpos": None if pl_long.get("rpos") is None else round(in_side(pl_long["rpos"], side), 2),
-                       "htf": None if htf is None else round(htf * (1 if side == "LONG" else -1), 2)}
-                watched.append(rec)
-                self.log("SIDE_WATCH", **rec, regime=round(regime[0], 2),
-                         note="與大盤相反，已記錄，不進場")
                 continue
             try:
                 p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H").get("probability") or 0) - bias

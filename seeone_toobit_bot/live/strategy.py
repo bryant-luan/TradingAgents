@@ -561,10 +561,6 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         skip = f"止損僅 {risk / cur:.2%}，手續費約佔 {(MAKER_FEE + TAKER_FEE) / (risk / cur):.2f}R (> {MAX_FEE_R}R)"
     elif risk / cur > MAX_STOP_PCT:
         skip = f"止損距離 {risk / cur:.0%} 過寬 (> {MAX_STOP_PCT:.0%})，TP 難以到達"
-    elif side == "LONG" and regime_score < -REGIME_VETO:
-        skip = f"大盤偏空 {regime_score:+.2f}，否決做多"
-    elif side == "SHORT" and regime_score > REGIME_VETO:
-        skip = f"大盤偏多 {regime_score:+.2f}，否決做空"
     else:
         ratio = cvd_ratio_of(sig)
         cvd_max = learned.get("cvd_ratio_max", CVD_RATIO_MAX_DEFAULT)
