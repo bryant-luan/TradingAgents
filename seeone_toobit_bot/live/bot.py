@@ -876,10 +876,6 @@ class Bot:
             btc1h = btc_ret1h()
         except Exception:
             btc1h = None
-        try:
-            btc_5m_1h = micro_1h("BTC-SWAP-USDT")[1]
-        except Exception:
-            btc_5m_1h = None
         moves, micros = {}, {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if len(self.st["trades"]) >= S.MAX_POSITIONS:
@@ -921,7 +917,7 @@ class Bot:
                     micros[tsym] = micro_1h(tsym)
                 except Exception:
                     micros[tsym] = (None, None, None, None, None)
-            atr_ratio, ret1h, vol_ratio, quote_vol, px15 = micros[tsym]
+            atr_ratio, _ret1h, _vol_ratio, _quote_vol, px15 = micros[tsym]
             atr_min = self.learner.p.get("atr_ratio_min", S.ATR_RATIO_MIN_DEFAULT)
             if sgn > 0 and atr_ratio is not None and atr_ratio < atr_min:
                 self.note_skip(sig, f"{sig['symbol']} 近 1 小時平均波幅只有約 25 小時的 {atr_ratio:.2f} 倍 "
@@ -931,26 +927,8 @@ class Bot:
                 self.note_skip(sig, f"{sig['symbol']} 近 1 小時平均波幅已是約 25 小時的 {atr_ratio:.2f} 倍 "
                                     f"(≥ {S.ATR_RATIO_MAX_SHORT:.2f})，做空在波動已放大時期望值差，等收斂再進")
                 continue
-            rs_max = self.learner.p.get("rs1h_max", S.RS1H_MAX_DEFAULT)
-            if ret1h is not None and btc_5m_1h is not None and (ret1h - btc_5m_1h) * sgn >= rs_max:
-                rs = (ret1h - btc_5m_1h) * sgn
-                self.note_skip(sig, f"{sig['symbol']} 近 1 小時相對 BTC 已順方向領先 {rs:+.2f}% "
-                                    f"(≥ {rs_max:.3f}%)，短線已跑在大盤前面，不追")
-                continue
-            vol_min = self.learner.p.get("vol_ratio_min", S.VOL_RATIO_MIN_DEFAULT)
-            if sgn > 0 and vol_ratio is not None and vol_ratio < vol_min:
-                self.note_skip(sig, f"{sig['symbol']} 近 1 小時成交量只有均量的 {vol_ratio:.2f} 倍 "
-                                    f"(< {vol_min:.2f})，做多在量能太薄時期望值差，等成交回到常態再進")
-                continue
-            if sgn < 0 and vol_ratio is not None and vol_ratio >= S.VOL_RATIO_MAX_SHORT:
-                self.note_skip(sig, f"{sig['symbol']} 近 1 小時成交量已是均量的 {vol_ratio:.2f} 倍 "
-                                    f"(≥ {S.VOL_RATIO_MAX_SHORT:.2f})，做空在量能過熱時期望值差，等退燒再進")
-                continue
-            qv_min = self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT)
-            if quote_vol is not None and quote_vol < qv_min:
-                self.note_skip(sig, f"{sig['symbol']} 24 小時成交額 {quote_vol / 1e6:.1f} 百萬 USDT "
-                                    f"(< {qv_min / 1e6:.0f} 百萬)，流動性不足的標的期望值差，不進")
-                continue
+            # Volume, 24h quote volume, and relative strength vs BTC stay off this path.
+            # Inside the ELSA window they removed trades that were still positive (11-07 replay).
             px15_min = self.learner.p.get("px15_dir_min", S.PX15_DIR_MIN_DEFAULT)
             if px15 is not None and px15 * sgn < px15_min:
                 self.note_skip(sig, f"{sig['symbol']} 近 15 分鐘順方向 {px15 * sgn:+.2f}% "

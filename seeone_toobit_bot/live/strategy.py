@@ -78,13 +78,11 @@ FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's ow
 MAX_RANGE_POS = 0.45
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
-# Floor on BTC's last-hour move in the trade's direction, percent. The two sides do not share a cut.
-# Longs below +0.055 averaged -0.38R over 20 hours, both halves negative; longs at or above it
-# averaged +0.70R (698-row replay, 11-07). Shorts only lose once BTC is meaningfully against them:
-# below -0.0425 the short book is flat-to-negative, while the sliver just under 0 was +0.64R on 17 shorts.
-BTC1H_MIN_LONG = 0.055
-BTC1H_MIN_SHORT = -0.0425
-BTC1H_MIN_DEFAULT = BTC1H_MIN_SHORT
+# Floor on BTC's last-hour move in the trade's direction, percent. Both sides use 0, the ELSA/AIO cut.
+# Raising the long floor to +0.055 inside that window removed trades averaging +1.49R (11-07 replay).
+BTC1H_MIN_LONG = 0.0
+BTC1H_MIN_SHORT = 0.0
+BTC1H_MIN_DEFAULT = 0.0
 # Last-hour average bar range vs the ~25h average, on 5m bars.
 # Longs under 0.8 averaged -0.46R, both halves negative. The same low-range shorts averaged +0.26R,
 # both halves positive, so the floor is long-only. Shorts lose when the range is already expanded:
@@ -101,9 +99,8 @@ RS1H_MAX_DEFAULT = 0.924
 # a ratio at or above 1.19 averaged -0.24R, both halves negative.
 VOL_RATIO_MIN_DEFAULT = 0.54          # long floor
 VOL_RATIO_MAX_SHORT = 1.19            # short cap
-# 24h quote volume (base volume × close, summed over 288 closed 5m bars). The top-quartile cut
-# held on the same three runs (~1.14e8 to 1.18e8 USDT): names below it averaged about -0.08R,
-# names above stayed positive, including after the range-ratio gate. Lock the loosest of the three.
+# 24h quote volume. The full-sample cut looked useful, but inside the ELSA window it removed
+# 124 trades averaging +0.70R and cut total result from +139R to +52R (11-07 replay). Not an entry gate.
 QUOTE_VOL_MIN_DEFAULT = 1.14e8
 # 15-minute price change on closed 5m bars, in the trade's direction, percent.
 # Three consecutive robust passes (11-06 17:10–18:10 Taipei) all cut at -0.484:
