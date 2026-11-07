@@ -78,10 +78,11 @@ FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's ow
 MAX_RANGE_POS = 0.45
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
-# Floor on BTC's last-hour move in the trade's direction, percent. Both sides use 0, the ELSA/AIO cut.
-# Raising the long floor to +0.055 inside that window removed trades averaging +1.49R (11-07 replay).
+# Floor on BTC's last-hour move in the trade's direction, percent.
+# Longs stay at 0. Shorts may be 0.05% against BTC: on the 11-07 replay that added 10 shorts
+# at 80% wins and +0.62R, and the whole book stayed at 78.9% wins (mean R +0.89 vs +0.91).
 BTC1H_MIN_LONG = 0.0
-BTC1H_MIN_SHORT = 0.0
+BTC1H_MIN_SHORT = -0.05
 BTC1H_MIN_DEFAULT = 0.0
 # Last-hour average bar range vs the ~25h average, on 5m bars.
 # Longs under 0.8 averaged -0.46R, both halves negative. The same low-range shorts averaged +0.26R,

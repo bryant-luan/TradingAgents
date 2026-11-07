@@ -38,8 +38,8 @@ TPS, SPLIT = [1.0, 1.5, 2.0, 3.0, 4.0], [0.375, 0.218, 0.227, 0.09, 0.09]
 MIN_SKIP_N, MIN_SKIP_HOURS, MIN_SIDE_N = 30, 8, 15
 LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "the live filter would skip it")
     "大週期方向 ≥ 1.5": ("2026-11-05T07:24:00+00:00", lambda f: f["htf"] is not None and f["htf"] >= 1.5),
-    "BTC 1h 方向 < 0": ("2026-11-07T08:35:00+00:00",
-                        lambda f: f["btc1h_dir_pct"] is not None and f["btc1h_dir_pct"] < 0),
+    "BTC 1h：多 < 0 / 空 < -0.05": ("2026-11-07T11:15:00+00:00",
+                                     lambda f: f["btc1h_dir_pct"] is not None and f["btc1h_dir_pct"] < (S.BTC1H_MIN_LONG if f.get("side_long") else S.BTC1H_MIN_SHORT)),
     "波動比：多 < 0.8 / 空 ≥ 1.29": ("2026-11-07T07:00:00+00:00",
                                   lambda f: f["atr_ratio"] is not None and (f["atr_ratio"] < S.ATR_RATIO_MIN_DEFAULT if f.get("side_long") else f["atr_ratio"] >= S.ATR_RATIO_MAX_SHORT)),
     "近 15m 漲跌 (方向) < -0.484": ("2026-11-06T10:30:00+00:00",
