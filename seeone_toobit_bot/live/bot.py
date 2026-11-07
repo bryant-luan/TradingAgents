@@ -334,9 +334,11 @@ class Bot:
         if not sz:
             self.note_skip(sig, f"無法以至少 {S.MIN_RISK_PCT:.0%} 風險建立部位 (槓桿/保證金上限或最小下單量)，不開小倉")
             return False
-        used = sum(t["margin"] for t in self.st["trades"].values())
-        if used + sz["margin"] > equity * S.MAX_TOTAL_MARGIN_PCT:
-            self.note_skip(sig, f"總保證金將超過 {S.MAX_TOTAL_MARGIN_PCT:.0%} 權益")
+        used = sum(t.get("margin") or 0 for t in self.st["trades"].values())
+        room = equity * S.MAX_TOTAL_MARGIN_PCT - used
+        if sz["margin"] > room:
+            self.note_skip(sig, f"這筆保證金 {sz['margin']:.0f}u、{sz['leverage']}x，"
+                                f"剩餘保證金額度 {max(0, room):.0f}u，總上限 {S.MAX_TOTAL_MARGIN_PCT:.0%}，再開不下")
             return False
         plan = S.tp_plan(sig, sz["contracts"], spec["min_contracts"], self.learner.p.get("tp_split"))
         entry_info = dict(signal_id=sig["id"], source=source, symbol=sym, side=side, price=price,
@@ -689,17 +691,18 @@ class Bot:
         return out
 
     def lock_pass(self, sig: dict, ev: dict, src: str, htf: float | None, sgn: int) -> tuple[bool, str]:
-        """After the daily profit lock arms, only signals in the best-measured 1h/4h band get through, one at a time."""
+        """After the daily profit lock arms, only signals in the best-measured 1h/4h band get through.
+        How many can be open is decided later from margin and leverage."""
         if sig.get("quiet_strong_short") or sig.get("quiet_strong_long"):
             return True, "安靜期單沿用自己的條件，不受當日鎖利的窄區間限制"
-        armed_ts = self.st.get("day_lock_ts", 0)
-        post = [t for t in self.st["trades"].values() if t["opened_ts"] >= armed_ts]
-        if len(post) >= S.POST_LOCK_MAX_OPEN:
-            return False, f"鎖利後已有 {len(post)} 筆放行單持倉中"
         if htf is None or not S.POST_LOCK_HTF_MIN <= htf * sgn < S.POST_LOCK_HTF_MAX:
             return False, (f"1h/4h 順方向 {0 if htf is None else htf * sgn:+.1f} 不在實測最佳區間 "
                            f"{S.POST_LOCK_HTF_MIN:+.1f}~{S.POST_LOCK_HTF_MAX:+.1f}")
         return True, f"1h/4h 順方向 {htf * sgn:+.1f} 在實測最佳區間，以一般 {S.RISK_PCT:.0%} 風險進場"
+
+    def _margin_full(self, equity: float) -> bool:
+        used = sum(t.get("margin") or 0 for t in self.st["trades"].values())
+        return used >= equity * S.MAX_TOTAL_MARGIN_PCT - 1
 
     def open_risk(self) -> float:
         specs = self.tb.specs()
@@ -815,7 +818,7 @@ class Bot:
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
                       reason=f"當日已實現獲利達 {S.DAY_TARGET_ARM_USDT:.0f}u，鎖利：只放行 1h/4h 大方向在實測最佳區間的單 "
-                             f"({S.RISK_PCT:.0%} 風險、同時最多 {S.POST_LOCK_MAX_OPEN} 筆)；"
+                             f"({S.RISK_PCT:.0%} 風險，筆數看剩餘保證金和該筆槓桿，總保證金不超過 {S.MAX_TOTAL_MARGIN_PCT:.0%})；"
                              f"到 {S.DAY_TARGET_CAP_USDT:.0f}u 停止開新倉；"
                              f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則提前停止")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
@@ -843,7 +846,7 @@ class Bot:
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
             self.record_signal_snapshots(signals)
             return
-        if len(self.st["trades"]) >= S.MAX_POSITIONS:
+        if self._margin_full(equity):
             self.record_signal_snapshots(signals)
             return
 
@@ -905,7 +908,7 @@ class Bot:
             btc1h = None
         moves, micros = {}, {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
-            if len(self.st["trades"]) >= S.MAX_POSITIONS:
+            if self._margin_full(size_eq):
                 break
             sgn = 1 if sig["side"] == "LONG" else -1
             cd = self.learner.p.get("symbol_cooldown", {}).get(sig["symbol"], 0)
