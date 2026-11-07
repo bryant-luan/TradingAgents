@@ -68,7 +68,9 @@ MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
-HTF_MAX_DEFAULT = 1.5           # cap on it too: entries with the 1h/4h already strongly aligned arrive late; recalibrated live
+# Cap on the 1h/4h direction in the trade's direction. 1.8 still keeps the book at
+# 78.7% wins and +0.90R (11-07 replay). Past 1.8 the added shorts won about 36%.
+HTF_MAX_DEFAULT = 1.8
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
 # 3h range position in the trade's direction: 0 = at the reversal extreme (long at the low,
 # short at the high), 1 = at the other extreme. Replays through 11-06 12:00 Taipei: entries at
@@ -79,10 +81,10 @@ MAX_RANGE_POS = 0.45
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
 # Floor on BTC's last-hour move in the trade's direction, percent.
-# Longs stay at 0. Shorts may be 0.05% against BTC: on the 11-07 replay that added 10 shorts
-# at 80% wins and +0.62R, and the whole book stayed at 78.9% wins (mean R +0.89 vs +0.91).
+# Longs stay at 0. Shorts may be 0.08% against BTC: that adds 15 shorts at 73% wins
+# and +0.54R, and the book stays at 78.4% wins and +0.88R (11-07 replay).
 BTC1H_MIN_LONG = 0.0
-BTC1H_MIN_SHORT = -0.05
+BTC1H_MIN_SHORT = -0.08
 BTC1H_MIN_DEFAULT = 0.0
 # Last-hour average bar range vs the ~25h average, on 5m bars.
 # Longs under 0.8 averaged -0.46R, both halves negative. The same low-range shorts averaged +0.26R,

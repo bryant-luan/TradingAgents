@@ -454,6 +454,9 @@ class SelfScanner:
         for _, hi, n, rate in table:
             if n < M15_MIN_N or rate < M15_PASS:
                 break
+            # Do not auto-raise past the replay cap. The 1.5–2.5 bucket still loses in R.
+            if hi > S.HTF_MAX_DEFAULT:
+                break
             if hi >= S.HTF_MAX_DEFAULT:
                 cap = hi
         floor = self.learner.p.get("htf_min", S.HTF_MIN_DEFAULT)
