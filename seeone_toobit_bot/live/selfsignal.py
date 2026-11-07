@@ -20,7 +20,7 @@ import requests
 from . import strategy as S
 from .localreview import LocalReview
 
-SCAN_EVERY_S = 300
+SCAN_EVERY_S = 900          # one analysis-review pass every 15 minutes
 MAJORS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
 ATR_MULT = 1.5
 MIN_STOP_PCT = 0.008
@@ -47,6 +47,7 @@ CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 RECHECK_OPEN_S = 900
 EXIT_PROB_BELOW = 40.0
+EXIT_PROB_DROP = 25.0        # close when the next-target probability falls this many points from entry
 # See One vs Toobit price ratio: cached per symbol, re-aligned when the levels sent are off by more than BASIS_TOL_R.
 BASIS_TTL_S = 600
 BASIS_TOL_R = 0.05
@@ -1130,4 +1131,8 @@ class SelfScanner:
         tr.setdefault("rechecks", []).append({"ts": int(time.time()), "prob": p})
         if p < EXIT_PROB_BELOW:
             return True, f"分析驗算重評：下一個止盈先到機率降至 {p}% (< {EXIT_PROB_BELOW}%)，提前平倉"
+        entry_prob = (tr.get("analysis") or {}).get("prob")
+        if entry_prob is not None and entry_prob - p >= EXIT_PROB_DROP:
+            return True, (f"分析驗算變弱：進場 {entry_prob:.0f}% 降到 {p:.0f}%"
+                          f"（少了 {entry_prob - p:.0f} 點，≥ {EXIT_PROB_DROP:.0f}），提前平倉")
         return False, None

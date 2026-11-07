@@ -42,7 +42,9 @@ ADOPT_TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
 ADOPT_MAX_STOP_PCT = 0.06
 LOOP_SECONDS = 30
 # While the main loop is inside a See One scan, this thread still ratchets exchange stops.
-FAST_GUARD_S = 3
+FAST_GUARD_S = 1               # with a position open, watch price every second
+SPIKE_DROP_R = 0.45             # one-second adverse jump treated as a wick
+DEEP_ADVERSE_R = -0.85          # exit before a wick can slip through the full stop
 # A normal cycle with several maker entries/exits stays well under this.
 WATCHDOG_S = 1200
 SLIPPAGE_BUFFER = 0.0003
@@ -226,6 +228,20 @@ class Bot:
         cur_r = (px - entry) * sgn / dist
         if cur_r > tr.get("mfe_r", 0.0):
             tr["mfe_r"] = round(cur_r, 3)
+        prev_r = tr.get("_prev_r")
+        tr["_prev_r"] = round(cur_r, 3)
+        htf = getattr(self, "htf", None)
+        if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
+            tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
+        elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
+            tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
+        elif cur_r <= DEEP_ADVERSE_R:
+            tr["exit_reason"] = (f"浮虧 {cur_r:+.2f}R 已深於 {DEEP_ADVERSE_R}R，先平倉，避免插針滑過止損")
+        if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧")):
+            log_event("ADVERSE_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, cur_r=round(cur_r, 3),
+                      reason=tr["exit_reason"])
+            self.maker_close(tr)
+            return
         lk = S.lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
         if lk is None or lk <= tr.get("lock_r", -1):
             return
