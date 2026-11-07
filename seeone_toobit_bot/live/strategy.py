@@ -78,7 +78,12 @@ FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's ow
 MAX_RANGE_POS = 0.45
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
-BTC1H_MIN_DEFAULT = 0.0         # floor on BTC's last-hour move in the trade's direction, %; recalibrated live
+# Floor on BTC's last-hour move in the trade's direction, percent.
+# The cut that kept repeating in research is -0.0425: hours worse than that averaged about
+# -0.18R (354 rows). The old floor of 0 also blocked the sliver from -0.0425 up to 0,
+# 24 rows that were not the losing side (17 shorts averaged +0.64R). A flat hour such as
+# BTC +0.03% no longer vetoes a short.
+BTC1H_MIN_DEFAULT = -0.0425
 # Last-hour average bar range vs the ~25h average, on 5m bars. Three consecutive robust passes
 # (11-06 07:32–08:33 Taipei, 313–332 skipped, 33–34h, both halves and both sides negative):
 # ratios under 0.8 averaged about -0.28R; the rest stayed positive. Locked, not tightened live.

@@ -506,7 +506,7 @@ class SelfScanner:
             self.learner.save()
 
     def calibrate_btc1h(self, rows: list):
-        # The measured best set is "BTC 1h must not be against the trade" (floor 0). Keep that floor.
+        # Floor is the researched -0.0425% cut, not zero. A flat hour is not a veto.
         if self.learner.p.get("btc1h_min", S.BTC1H_MIN_DEFAULT) != S.BTC1H_MIN_DEFAULT:
             self.learner.p["btc1h_min"] = S.BTC1H_MIN_DEFAULT
             self.learner.save()
