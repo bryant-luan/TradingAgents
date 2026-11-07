@@ -32,7 +32,10 @@ DEFAULT_MIN_PROB = 60.0          # de-biased probability of TP1 before SL
 # floor won 81% at +0.95R (161 rows); the trades at or above it won 65% at +0.42R.
 # The favored side is still required (edge >= 0). A wider gap is not.
 MIN_EDGE = 0.0
-MAX_PER_SCAN = 3
+# The review finds several names. Trying only the top three dropped XRP and RUNE on
+# 11-08 06:10 Taipei after the higher-scoring names could not be sized. One same-side
+# gap still allows a single new position.
+MAX_PER_SCAN = 6
 # High-conviction tier = setups like the CLANKER trade: strong two-sided edge, high de-biased probability,
 # high trade quality, 1H agreement, and the coin is on the strength board or potential board top 10.
 HIGH_MIN_EDGE, HIGH_MIN_PROB, HIGH_MIN_QUALITY, HIGH_MIN_1H = 35.0, 68.0, 75.0, 60.0
@@ -46,7 +49,10 @@ RANGE_BARS = 12                  # 3h of closed 15m bars for the entry range pos
 BTC_COUNTER_ATR = 2.0            # BTC off its 2h extreme against the trade by this many ATRs = market turning
 EXT_TAG_R = 2.0
 MIN_QUALITY = 60.0
-MIN_EV_R = 0.20
+# The replay book never used this hurdle. A floor of +0.20R blocked XRP on 11-08 05:55
+# Taipei: probability 54%, quality 78, expectancy +0.14R, and every price gate passed.
+# Negative expectancy after fees still does not enter.
+MIN_EV_R = 0.0
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 RECHECK_OPEN_S = 900
@@ -724,10 +730,11 @@ class SelfScanner:
         if not sides:
             return []
         qv = contract_quote_vol() if any(band == "strong_short" for _, band in sides) else {}
-        picked = []
+        btc = (self.btc or {}).get("ret1h")
+        ranked = []
         looked = 0
         for c in ordered:
-            if looked >= 40 or len(picked) >= 6:
+            if looked >= 80 or len(ranked) >= 24:
                 break
             tsym = S.to_toobit(c["symbol"])
             if tsym not in specs or tsym in held:
@@ -735,19 +742,38 @@ class SelfScanner:
             looked += 1
             try:
                 pl = self.plan(tsym, "LONG")
+                atr_ratio, _ret, _vol, _qv, px15 = micro_1h(tsym)
             except Exception:
                 continue
             if not pl or pl.get("rpos") is None:
                 continue
+            best = None
             for side, band in sides:
+                sgn = 1 if side == "LONG" else -1
                 rp = pl["rpos"] if side == "LONG" else 1 - pl["rpos"]
                 if rp > S.MAX_RANGE_POS:
                     continue
                 if band == "strong_short" and qv.get(tsym, 0) < S.QUOTE_VOL_MIN_DEFAULT:
                     continue
-                picked.append(c)
-                break
-        return picked
+                # A name the price gates will refuse should not spend a See One call.
+                # ETH on 11-08 passed the review and then died on an expanded 1h range.
+                if atr_ratio is not None and side == "LONG" and atr_ratio < S.ATR_RATIO_MIN_DEFAULT:
+                    continue
+                if atr_ratio is not None and side == "SHORT" and atr_ratio >= S.ATR_RATIO_MAX_SHORT:
+                    continue
+                if px15 is not None and px15 * sgn < S.PX15_DIR_MIN_DEFAULT:
+                    continue
+                htf_dir = None if htf is None else htf * sgn
+                btc_dir = None if btc is None else btc * sgn
+                est = self.local.estimate(side, rp, btc_dir, htf_dir)
+                prob = est.get("prob") if est else None
+                if best is None or (prob or -1) > best:
+                    best = prob or -1
+            if best is None:
+                continue
+            ranked.append((best, c))
+        ranked.sort(key=lambda x: -x[0])
+        return [c for _, c in ranked[:6]]
 
     def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
              htf: float | None = None) -> list:

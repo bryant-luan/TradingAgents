@@ -61,7 +61,9 @@ MAX_LEVERAGE = 25
 MAX_POSITIONS = 3
 MAX_TOTAL_MARGIN_PCT = 0.70
 MARGIN_PER_TRADE_PCT = 0.07
-NORMAL_MARGIN_CAP_PCT = 0.22       # lets a 1% stop at 25x still reach the 5% risk
+# A 0.8% stop (the minimum) at 25x needs 25% of equity in margin to risk 5%.
+# 22% made that stop impossible, so qualified names such as XRP were skipped.
+NORMAL_MARGIN_CAP_PCT = 0.28
 HIGH_RISK_PCT = 0.10            # high-conviction tier (CLANKER-type setups): equity at risk at the stop
 HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
