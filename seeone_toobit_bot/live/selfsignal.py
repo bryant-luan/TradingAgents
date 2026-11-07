@@ -27,7 +27,11 @@ MIN_STOP_PCT = 0.008
 MAX_STOP_PCT = 0.06
 TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
 DEFAULT_MIN_PROB = 60.0          # de-biased probability of TP1 before SL
-MIN_EDGE = 25.0                  # raw prob(side) - prob(opposite side), percentage points
+# With one side reviewed, edge is exactly 2*prob - 100, so a floor of 25 silently
+# required 62.5% probability. Inside the live price gates the trades under that
+# floor won 81% at +0.95R (161 rows); the trades at or above it won 65% at +0.42R.
+# The favored side is still required (edge >= 0). A wider gap is not.
+MIN_EDGE = 0.0
 MAX_PER_SCAN = 3
 # High-conviction tier = setups like the CLANKER trade: strong two-sided edge, high de-biased probability,
 # high trade quality, 1H agreement, and the coin is on the strength board or potential board top 10.
@@ -928,6 +932,9 @@ class SelfScanner:
             if max_prob is not None and prob >= max_prob:
                 continue
             if prob < min_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < MIN_EV_R:
+                self.log("SELF_GATE", symbol=sym, side=side, prob=prob, edge=edge,
+                         quality=quality, ev=ev, min_prob=min_prob, min_edge=MIN_EDGE,
+                         min_quality=MIN_QUALITY, min_ev=MIN_EV_R)
                 continue
             try:
                 p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H").get("probability") or 0) - bias
