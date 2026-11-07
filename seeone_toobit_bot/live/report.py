@@ -17,6 +17,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+from .rulescore import line as rule_line
 from .toobit import Toobit
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -154,6 +155,7 @@ def main():
                 k = k[:20]
             why[k] = why.get(k, 0) + 1
         print("略過原因: " + "、".join(f"{k} {v}" for k, v in sorted(why.items(), key=lambda x: -x[1])[:6]))
+    print(rule_line())
     if not hours:
         MARK.write_text(json.dumps({"ts": now.isoformat(timespec="seconds")}))
 
