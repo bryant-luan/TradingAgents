@@ -10,7 +10,8 @@ on_term() {
 }
 trap on_term TERM INT
 while [ ! -f logs/STOP ]; do
-  python3 -u -m live.bot > >(tee -a logs/live_bot_console.log) 2>&1 &
+  # Append only. tee would also print every line into this terminal and keep popping it open.
+  python3 -u -m live.bot >> logs/live_bot_console.log 2>&1 &
   pid=$!
   while true; do
     wait "$pid"; code=$?
