@@ -981,9 +981,17 @@ class Bot:
                 if sig["side"] == "LONG" and not sig.get("after_red"):
                     self.note_skip(sig, "突破做多先停。BMT 平在 -0.18R、ERA 平在 -0.55R，之後價格還在跌")
                     continue
-                if not sig.get("after_red") and htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
-                    self.note_skip(sig, f"突破備案與 1h/4h 相反（順方向 {htf * sgn:+.2f} < {S.HTF_MIN_DEFAULT}），"
-                                        f"開倉後會被立刻平掉，不開")
+                if not sig.get("after_red") and htf is not None and htf * sgn < htf_min:
+                    self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
+                                        f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
+                    continue
+                if not sig.get("after_red") and htf is not None and htf * sgn >= htf_max:
+                    self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
+                                        f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
+                    continue
+                if not sig.get("after_red") and m15 * sgn >= m15_max:
+                    self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
+                                        f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                     continue
                 try:
                     if sig.get("broken") is not None and S.break_half_retrace(
