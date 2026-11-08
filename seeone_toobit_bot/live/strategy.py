@@ -116,10 +116,23 @@ MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop 
 # Its break failed, and the two-bar reversal exit cut it at -0.18R while price
 # went on to about -0.76R. ERA long at 13:16 the same day filled at 0.07732,
 # above the break close, and the same exit cut it at 0.07631, -0.55R. Price
-# then went to about -0.81R. Both long breaks failed and kept falling, so new
-# breakout entries are short only. The two-bar exit stays for a long already open.
+# then went to about -0.81R. A plain long break stays off.
+# The exception is a red decline and then one green bar. SIGN at 09:00 Taipei
+# on Nov 8 fell for hours, then a 15m bar gained 7.8% with a 10.2% range and
+# closed through the prior 3h high. That long is taken. BMT and ERA were about
+# 4% and are not. The higher-timeframe floor does not block this long: the
+# decline is why the spike is there.
 BREAK_MIN_RANGE_PCT = 0.01
 BREAK_LONGS = False
+BREAK_LONG_MIN_RANGE = 0.06
+BREAK_LONG_DROP = 0.02
+
+
+def long_after_red(range_pct: float, close_4h_ago: float, prev_close: float) -> bool:
+    """A long break only after a 4-hour drop and a green bar of at least 6%."""
+    if range_pct < BREAK_LONG_MIN_RANGE or close_4h_ago <= 0:
+        return False
+    return (close_4h_ago - prev_close) / close_4h_ago >= BREAK_LONG_DROP
 # Signal reversal, from the 11:00 Taipei bars on Nov 8, and the 11:15 bar that
 # reversed again. AKE closed +6.6% back through the short, then the next bar was
 # already -3.4% and back through the entry. WLD closed +0.54% through the entry,

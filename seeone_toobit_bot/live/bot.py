@@ -245,7 +245,7 @@ class Bot:
         prev_r = tr.get("_prev_r")
         tr["_prev_r"] = round(cur_r, 3)
         htf = getattr(self, "htf", None)
-        if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
+        if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT and not tr.get("after_red"):
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
         elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
@@ -414,6 +414,7 @@ class Bot:
             "risk_usdt": round(sz["contracts"] * mult * abs(entry - stop), 4), "margin": sz["margin"],
             "leverage": sz["leverage"], "path": sig.get("signal_path"), "opened_ts": time.time(),
             "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
+            "after_red": bool(sig.get("after_red")),
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
             "tier": p["tier"], "m15_at_entry": ctx["m15"], "htf_at_entry": ctx["htf"], "ext_r_at_entry": ctx["ext"],
             "pre_signal_r": ctx["pre"], "range_pos_at_entry": ctx["rpos"], "dirs_at_entry": ctx["dirs"],
@@ -949,10 +950,10 @@ class Bot:
                 self.note_skip(sig, "主流幣不靠自選單進場。今天 SOL、XRP 都在驗算轉弱時虧損出場，WLD、XMR 這種榜上的空單有打到 TP1")
                 continue
             if sig.get("breakout"):
-                if not S.BREAK_LONGS and sig["side"] == "LONG":
+                if sig["side"] == "LONG" and not sig.get("after_red"):
                     self.note_skip(sig, "突破做多先停。BMT 平在 -0.18R、ERA 平在 -0.55R，之後價格還在跌")
                     continue
-                if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
+                if not sig.get("after_red") and htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
                     self.note_skip(sig, f"突破備案與 1h/4h 相反（順方向 {htf * sgn:+.2f} < {S.HTF_MIN_DEFAULT}），"
                                         f"開倉後會被立刻平掉，不開")
                     continue
