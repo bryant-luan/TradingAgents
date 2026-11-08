@@ -27,8 +27,11 @@ MIN_STOP_PCT = 0.008
 MAX_STOP_PCT = 0.06
 TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
 DEFAULT_MIN_PROB = 60.0          # de-biased probability of TP1 before SL
-# ELSA/AIO review: the chosen side must lead the other by 25 points.
-MIN_EDGE = 25.0
+# On the ELSA set, reviews with an edge of 25 or more won 49% at +0.20R (37 rows).
+# Reviews under 25 won 72% at +0.73R (174 rows). The 15–25 band was the best:
+# 64 rows, 84% wins, +0.96R. A floor of 25 keeps the weak tail and blocks that band.
+# The chosen side still has to be ahead (edge >= 0).
+MIN_EDGE = 0.0
 # The review finds several names. Trying only the top three dropped XRP and RUNE on
 # 11-08 06:10 Taipei after the higher-scoring names could not be sized. One same-side
 # gap still allows a single new position.
