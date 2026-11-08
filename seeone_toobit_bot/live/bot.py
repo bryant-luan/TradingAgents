@@ -19,7 +19,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import strategy as S
-from .exchange import connect
+from .exchange import connect, exchange_name
 from .learner import Learner
 from .market import klines
 from .shadow import Shadow
@@ -37,6 +37,24 @@ LEARN_FILE = ROOT / "logs" / "learned_params.json"
 INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 CALIB_FILE = ROOT / "logs" / "self_calib.json"
+
+
+def use_venue(venue: str):
+    """Point this process at one book. Gate keeps the same rules and a separate state file."""
+    global LOG_DIR, TRADE_LOG, STATE_FILE, PAUSE_FILE, LOCK_OFF_FILE, LEARN_FILE, INSIGHT_LOG, SHADOW_FILE, CALIB_FILE
+    base = ROOT / "logs" / "gate" if venue == "gate" else ROOT / "logs"
+    LOG_DIR = base / "trades"
+    TRADE_LOG = LOG_DIR / "live_trades.jsonl"
+    STATE_FILE = base / "live_state.json"
+    PAUSE_FILE = base / "PAUSE"
+    LOCK_OFF_FILE = base / "DAY_LOCK_OFF"
+    LEARN_FILE = base / "learned_params.json"
+    INSIGHT_LOG = LOG_DIR / "insights.jsonl"
+    SHADOW_FILE = base / "shadow_archive.json"
+    CALIB_FILE = base / "self_calib.json"
+
+
+use_venue(exchange_name())
 SELF_SOURCE = "自選驗算"
 ADOPT_SOURCE = "接管持倉"
 RECONCILE_S = 60

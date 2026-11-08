@@ -19,12 +19,28 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .selfsignal import ATR_MULT, MAX_STOP_PCT, MIN_STOP_PCT, atr
-from .exchange import connect
+from .exchange import connect, exchange_name
 from .toobit import ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = ROOT / "logs" / "live_state.json"
 MON_LOG = ROOT / "logs" / "monitor.jsonl"
+BOT_PAT = "python3 -u -m live.bot"
+LOOP_PAT = "run_forever.sh"
+SESSION = "seeone-live-bot"
+LOOP_SCRIPT = "./live/run_forever.sh"
+
+
+def use_venue(venue: str):
+    """Watch one bot. The default process stays the Toobit bot."""
+    global STATE_FILE, MON_LOG, BOT_PAT, LOOP_PAT, SESSION, LOOP_SCRIPT
+    if venue == "gate":
+        STATE_FILE = ROOT / "logs" / "gate" / "live_state.json"
+        MON_LOG = ROOT / "logs" / "gate" / "monitor.jsonl"
+        BOT_PAT = "python3 -u -m live.gate_bot"
+        LOOP_PAT = "run_gate.sh"
+        SESSION = "seeone-gate-bot"
+        LOOP_SCRIPT = "./live/run_gate.sh"
 CHECK_S = 60
 # The bot saves state at the end of every cycle; its own watchdog fires at 20 minutes, this is the backstop.
 STATE_STALE_S = 25 * 60
@@ -48,6 +64,8 @@ def pids(pattern: str) -> list[int]:
 class Monitor:
     def __init__(self):
         load_dotenv(ROOT / ".env")
+        use_venue(exchange_name())
+        MON_LOG.parent.mkdir(parents=True, exist_ok=True)
         self.tb = connect()
         self.no_proc_since = None
         self.last_tick = time.time()
@@ -57,7 +75,7 @@ class Monitor:
 
     # ------------------------------------------------------------------ bot process health
     def check_process(self) -> dict:
-        bot, loop = pids("python3 -u -m live.bot"), pids("run_forever.sh")
+        bot, loop = pids(BOT_PAT), pids(LOOP_PAT)
         now = time.time()
         if now - self.last_tick > 3 * CHECK_S:
             # The monitor itself overslept, so the whole host was paused; the bot was frozen too, not hung.
@@ -71,10 +89,10 @@ class Monitor:
             self.no_proc_since = self.no_proc_since or time.time()
             if time.time() - self.no_proc_since > NO_PROCESS_S:
                 if not loop:
-                    subprocess.run(["tmux", "-f", "/exec-daemon/tmux.portal.conf", "kill-session", "-t", "seeone-live-bot"],
+                    subprocess.run(["tmux", "-f", "/exec-daemon/tmux.portal.conf", "kill-session", "-t", SESSION],
                                    capture_output=True)
-                    subprocess.run(["tmux", "-f", "/exec-daemon/tmux.portal.conf", "new-session", "-d", "-s", "seeone-live-bot",
-                                    "-c", str(ROOT), "./live/run_forever.sh"], capture_output=True)
+                    subprocess.run(["tmux", "-f", "/exec-daemon/tmux.portal.conf", "new-session", "-d", "-s", SESSION,
+                                    "-c", str(ROOT), LOOP_SCRIPT], capture_output=True)
                     log("MON_BOT_RESTART", reason=f"機器人行程消失超過 {NO_PROCESS_S}s 且無自動重啟迴圈，已重新啟動")
                 else:
                     log("MON_BOT_MISSING", reason="機器人行程消失，自動重啟迴圈仍在，等待其重啟")
