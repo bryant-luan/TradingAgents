@@ -890,7 +890,7 @@ class Bot:
         except Exception as e:
             log_event("ERROR", where="self_scan", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
         try:
-            for f in self.selfscan.fresh_breaks(held_syms, specs):
+            for f in self.selfscan.fresh_breaks(held_syms, specs, S.htf_score(dirs)):
                 if f["sig"]["id"] not in self.st["traded_ids"]:
                     scored.append((f["ev"]["score"], f["sig"], f.get("source", "突破"), f["ev"]))
         except Exception as e:
@@ -929,6 +929,10 @@ class Bot:
                 self.note_skip(sig, "ONE 這筆提前平倉後不接回，改開其他幣")
                 continue
             if sig.get("breakout"):
+                if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
+                    self.note_skip(sig, f"突破備案與 1h/4h 相反（順方向 {htf * sgn:+.2f} < {S.HTF_MIN_DEFAULT}），"
+                                        f"開倉後會被立刻平掉，不開")
+                    continue
                 try:
                     self.open_trade(sig, ev, src, reg, size_eq)
                 except ToobitError as e:

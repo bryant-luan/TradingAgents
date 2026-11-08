@@ -109,6 +109,12 @@ MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop 
 # range of at least 1%. XMR on 11-08 05:00 and WLD on 11-08 04:45 Taipei were
 # this shape. Every USDT-M contract is checked. One name per scan.
 # Maker only; if the price has left, the order is dropped.
+# A break whose 1h/4h direction is already below HTF_MIN_DEFAULT is not taken.
+# The position guard flattens that side immediately. ICNT short at 12:47 Taipei
+# on Nov 8 was opened and closed two seconds later, -0.31R, with the higher
+# timeframe at +0.95. BMT long the same hour was with the higher timeframe.
+# Its break failed, and the two-bar reversal exit cut it at -0.18R while price
+# went on to about -0.76R. That exit stays.
 BREAK_MIN_RANGE_PCT = 0.01
 # Signal reversal, from the 11:00 Taipei bars on Nov 8, and the 11:15 bar that
 # reversed again. AKE closed +6.6% back through the short, then the next bar was

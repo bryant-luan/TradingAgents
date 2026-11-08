@@ -762,7 +762,7 @@ class SelfScanner:
         ranked.sort(key=lambda x: -x[0])
         return [c for _, c in ranked[:6]]
 
-    def fresh_breaks(self, held: set, specs: dict) -> list:
+    def fresh_breaks(self, held: set, specs: dict, htf: float | None = None) -> list:
         """One backup signal: the largest fresh 15m close through the prior 3h range.
 
         The breaking bar has to be the first close outside that range, and its
@@ -813,11 +813,20 @@ class SelfScanner:
             return ((h - l) / o, seeone, side, c, dist, bar, broken)
 
         best = None
+        htf_skipped = 0
         with ThreadPoolExecutor(16) as pool:
             for hit in pool.map(one, names):
-                if hit and (best is None or hit[0] > best[0]):
+                if not hit:
+                    continue
+                side = hit[2]
+                sgn = 1 if side == "LONG" else -1
+                if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
+                    htf_skipped += 1
+                    continue
+                if best is None or hit[0] > best[0]:
                     best = hit
-        self.log("BREAKOUT_SCAN", checked=len(names), found=None if best is None else best[1])
+        self.log("BREAKOUT_SCAN", checked=len(names), htf_skipped=htf_skipped,
+                 found=None if best is None else best[1])
         if best is None:
             self.log("BREAKOUT", found=None, note="這一輪沒有剛收在 3 小時區間外的 15 分鐘 K 線")
             return []
