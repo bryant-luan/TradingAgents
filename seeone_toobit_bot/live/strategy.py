@@ -174,7 +174,9 @@ QUIET_MAX_SAME_SIDE = 3
 # band are +0.38R on 33 rows. Quiet longs in that band are -0.99R on 14 rows.
 # New entries stay on the higher-expectancy ELSA path.
 QUIET_ENTRIES = False
-SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
+# Same-side entries are no longer spaced 30 minutes apart. Closed pairs opened
+# within 30 minutes were 5 both green, 6 both red, and 4 split, and the wait did
+# not separate ICNT from PONS or BMT from ERA. One side is still capped at MAX_SAME_SIDE.
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
 MAKER_FEE, TAKER_FEE = 0.0002, 0.0006
 MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more than this fraction of 1R
