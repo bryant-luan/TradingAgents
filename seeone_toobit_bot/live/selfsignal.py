@@ -771,7 +771,8 @@ class SelfScanner:
             return []
         self.last_break = time.time()
         vols = contract_quote_vol()
-        names = sorted((specs or {}).keys(), key=lambda s: vols.get(s, 0), reverse=True)[:S.BREAK_TOP_N]
+        names = [s for s in (specs or {}) if vols.get(s, 0) >= S.BREAK_MIN_QUOTE]
+        names.sort(key=lambda s: vols.get(s, 0), reverse=True)
         best = None
         now_ms = time.time() * 1000
         for tsym in names:
