@@ -1059,14 +1059,16 @@ class Bot:
             if picked is None:
                 continue
             opened, closed, o, h, l, c, view = picked
+            decision = view["action"]
             rec = {"trade_id": tr["id"], "symbol": sym, "side": side, "path": tr.get("path"),
                    "entry": tr["entry"], "break_level": tr.get("break_level"), "mfe_r": tr.get("mfe_r"),
-                   "bar_open": opened, "bar_closed": closed, "o": o, "h": h, "l": l, **view}
-            if view["action"] == "record":
+                   "bar_open": opened, "bar_closed": closed, "o": o, "h": h, "l": l,
+                   **{k: v for k, v in view.items() if k != "action"}}
+            if decision == "record":
                 if tr.get("reversal_logged") == opened:
                     continue
                 tr["reversal_logged"] = opened
-                log_event("SIGNAL_REVERSAL", action="record",
+                log_event("SIGNAL_REVERSAL", decision="record",
                           note="訊號反轉先記下來；這根 15 分鐘 K 線收完仍在進場價反向，才平剩餘部位", **rec)
                 save_state(self.st)
                 continue
@@ -1079,7 +1081,7 @@ class Bot:
                 if tr.get("exit_reason"):
                     continue
                 tr["exit_reason"] = why
-            log_event("SIGNAL_REVERSAL", action="exit", reason=why, note="訊號反轉，剩餘部位改掛單出場", **rec)
+            log_event("SIGNAL_REVERSAL", decision="exit", reason=why, note="訊號反轉，剩餘部位改掛單出場", **rec)
             save_state(self.st)
             threading.Thread(target=self._close_reversal, args=(tr,), daemon=True).start()
 
