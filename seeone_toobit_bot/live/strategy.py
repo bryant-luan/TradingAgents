@@ -105,6 +105,12 @@ QUOTE_VOL_MIN_DEFAULT = 1.14e8
 # over 35 hours and both sides; the rest stayed about +0.20R. Locked.
 PX15_DIR_MIN_DEFAULT = -0.484
 MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
+# Backup only. A 15m bar that closes through the prior 3h high or low, with a
+# range of at least 1%. XMR on 11-08 05:00 Taipei was this: the close was already
+# outside the range, so the ELSA path does not take it. One name per scan.
+# Maker only; if the price has left, the order is dropped.
+BREAK_MIN_RANGE_PCT = 0.01
+BREAK_TOP_N = 40
 MAX_SAME_SIDE = 2               # open positions on one side
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.

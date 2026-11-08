@@ -887,6 +887,12 @@ class Bot:
                     scored.append((f["ev"]["score"], f["sig"], f.get("source", SELF_SOURCE), f["ev"]))
         except Exception as e:
             log_event("ERROR", where="self_scan", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
+        try:
+            for f in self.selfscan.fresh_breaks(held_syms, specs):
+                if f["sig"]["id"] not in self.st["traded_ids"]:
+                    scored.append((f["ev"]["score"], f["sig"], f.get("source", "突破"), f["ev"]))
+        except Exception as e:
+            log_event("ERROR", where="breakout", error=repr(e)[:300])
 
         if self.dry or os.environ.get("BOT_VERBOSE"):
             print(json.dumps({"ts": now_iso(), "regime": reg, "directions": dirs, "equity": round(equity, 2),
@@ -917,6 +923,13 @@ class Bot:
                                     f"{datetime.fromtimestamp(cd + 8 * 3600, timezone.utc):%H:%M})")
                 continue
             self.pre = None
+            if sig.get("breakout"):
+                try:
+                    self.open_trade(sig, ev, src, reg, size_eq)
+                except ToobitError as e:
+                    self.st["traded_ids"].append(sig["id"])
+                    log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
+                continue
             if src != SELF_SOURCE:
                 self.pre = self.pre_move(sig)
                 if self.pre is not None and self.pre >= S.FRESH_MAX_R:
