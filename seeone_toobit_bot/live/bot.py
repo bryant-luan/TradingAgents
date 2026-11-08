@@ -50,6 +50,12 @@ DEEP_ADVERSE_R = -0.85          # exit before a wick can slip through the full s
 # PONS on Nov 8 hit TP1, then the rest fell to -0.94R and the day finished -0.36R.
 # WLD's worst print after TP1 was only -0.18R, so this line would have left it on.
 AFTER_TP_DEEP_R = -0.35
+# Open profit that never reached a target is still protected. Once the best price
+# is +0.25R, a return to the entry is a giveback and the position is closed.
+# ERA peaked at +0.25R and finished -0.55R. SOL peaked near +0.34R and the recheck
+# closed it at -0.72R. Neither had filled a target.
+GIVEBACK_ARM_R = 0.25
+GIVEBACK_EXIT_R = 0.0
 # A normal cycle with several maker entries/exits stays well under this.
 WATCHDOG_S = 1200
 SLIPPAGE_BUFFER = 0.0003
@@ -240,10 +246,12 @@ class Bot:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
         elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
+        elif tr.get("mfe_r", 0) >= GIVEBACK_ARM_R and cur_r <= GIVEBACK_EXIT_R:
+            tr["exit_reason"] = (f"最高浮盈曾到 {tr['mfe_r']:+.2f}R，現在回到 {cur_r:+.2f}R，獲利吐回進場價，平倉")
         elif cur_r <= (AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R):
             line = AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R
             tr["exit_reason"] = (f"浮虧 {cur_r:+.2f}R 已深於 {line}R，先平倉，避免插針滑過止損")
-        if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧")):
+        if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧", "最高浮盈")):
             log_event("ADVERSE_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, cur_r=round(cur_r, 3),
                       reason=tr["exit_reason"])
             self.maker_close(tr)
