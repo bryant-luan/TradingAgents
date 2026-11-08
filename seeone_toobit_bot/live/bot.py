@@ -993,6 +993,12 @@ class Bot:
                     self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                         f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                     continue
+                if not sig.get("after_red"):
+                    aligned = None if btc1h is None else btc1h * sgn
+                    if not S.btc_dir_ok(aligned, sig["side"]):
+                        self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
+                                            f"(順方向 {aligned:+.2f}% < {S.BTC1H_MIN_DEFAULT:+.2f}%)，等大盤同向再進")
+                        continue
                 try:
                     if sig.get("broken") is not None and S.break_half_retrace(
                             sig["side"], float(sig["broken"]), float(sig["entry_price"]),
