@@ -110,18 +110,19 @@ MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop 
 # this shape. Every USDT-M contract is checked. One name per scan.
 # Maker only; if the price has left, the order is dropped.
 BREAK_MIN_RANGE_PCT = 0.01
-# Signal reversal, from the 11:00 Taipei bars on Nov 8.
-# AKE closed +6.6% back through the short. That exits immediately, including while the
-# bar is still forming, because waiting is how the move is given back.
-# ONE's bar closed only +0.41%, but its range was 3.2% and the close finished 0.7%
-# through the entry. A wide bar that settles at least 0.5% through the entry is the
-# same reversal. The 10:45 bar, only 0.3% through, is not.
-# WLD had already reached +1R and the bar closed +0.54% back through the entry. That
-# slower round-trip is recorded while the bar is forming and flattened once it closes.
+# Signal reversal, from the 11:00 Taipei bars on Nov 8, and the 11:15 bar that
+# reversed again. AKE closed +6.6% back through the short, then the next bar was
+# already -3.4% and back through the entry. WLD closed +0.54% through the entry,
+# then the next bar was back below it. Flattening on the first bar sells the
+# reversal. The first bar is only recorded. The position is closed when the next
+# bar also finishes on that side of the entry. If the next bar comes back through
+# the entry, with the original trade, the reversal is recorded as failed and the
+# position stays.
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
 REVERSAL_DRIFT_PCT = 0.003
+REVERSAL_BACK_PCT = 0.002
 MAX_SAME_SIDE = 2               # open positions on one side
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
@@ -150,9 +151,9 @@ def reversal_view(side: str, entry: float, break_level, mfe_r, o: float, h: floa
                   bar_closed: bool):
     """Describe a 15m bar that reverses an open signal. None when it does not.
 
-    ``action`` is ``exit`` or ``record``. An impulse, or a wide bar that settles
-    through the entry, exits immediately. A round-trip back to entry after +1R is
-    recorded while the bar is still forming, and exits once that bar has closed there.
+    This only records the reversal. Whether to exit is decided by the next bar:
+    still on this side of the entry, the position is closed; back through the
+    entry, the reversal failed and the position stays.
     """
     if o <= 0 or entry <= 0:
         return None
@@ -169,11 +170,35 @@ def reversal_view(side: str, entry: float, break_level, mfe_r, o: float, h: floa
     roundtrip = (mfe_r or 0) >= REVERSAL_ROUNDTRIP_R and through_entry and against >= REVERSAL_DRIFT_PCT
     if not (impulse or wide or failed_break or roundtrip):
         return None
-    action = "exit" if impulse or wide or failed_break or bar_closed else "record"
     return {"range_pct": round((h - l) / o * 100, 2), "against_pct": round(against * 100, 2),
             "beyond_pct": round(beyond * 100, 2), "through_entry": through_entry,
             "through_break": bool(through_break), "impulse": impulse, "wide": wide,
-            "failed_break": failed_break, "roundtrip": roundtrip, "action": action, "close": c}
+            "failed_break": failed_break, "roundtrip": roundtrip, "close": c,
+            "bar_closed": bar_closed}
+
+
+def reversal_back(side: str, entry: float, o: float, c: float):
+    """The bar after a reversal has come back through the entry, with the original trade."""
+    if o <= 0 or entry <= 0:
+        return None
+    sgn = 1 if side == "LONG" else -1
+    if (c - o) * sgn <= 0:
+        return None
+    with_pct = (c - o) * sgn / o
+    if with_pct < REVERSAL_BACK_PCT:
+        return None
+    beyond = (entry - c) * sgn / entry
+    if beyond >= 0:
+        return None
+    return {"with_pct": round(with_pct * 100, 2), "beyond_pct": round(beyond * 100, 2), "close": c}
+
+
+def reversal_still_against(side: str, entry: float, c: float) -> bool:
+    """True when the close is still on the wrong side of the entry."""
+    if entry <= 0:
+        return False
+    sgn = 1 if side == "LONG" else -1
+    return (entry - c) * sgn / entry >= 0
 
 
 HIGH_BE_TRIGGER_R = 2.0
