@@ -59,6 +59,11 @@ AFTER_TP_DEEP_R = -0.35
 # locked -0.01R while the bar's low was still the open profit.
 GIVEBACK_ARM_R = 0.25
 GIVEBACK_EXIT_R = 0.0
+# A legal entry is not flattened by a later higher-timeframe reading while it is
+# still near the entry. ARX long at 20:11 Taipei on Nov 8 was allowed at -0.4.
+# Eleven minutes later the score was -1.25 and the guard closed -0.11R. WLD, XMR,
+# and AKE were closed by this rule only after they had already reached +0.25R.
+HTF_FLAT_AFTER_R = -0.50
 # A normal cycle with several maker entries/exits stays well under this.
 WATCHDOG_S = 1200
 SLIPPAGE_BUFFER = 0.0003
@@ -250,7 +255,13 @@ class Bot:
         prev_r = tr.get("_prev_r")
         tr["_prev_r"] = round(cur_r, 3)
         htf = getattr(self, "htf", None)
-        if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT and not tr.get("after_red") and not tr.get("recipe_spike"):
+        htf_entry = tr.get("htf_at_entry")
+        opened_against = htf_entry is not None and htf_entry * sgn < S.HTF_MIN_DEFAULT
+        worked = tr.get("mfe_r", 0.0) >= GIVEBACK_ARM_R and time.time() - tr["opened_ts"] >= 900
+        htf_flat = (htf is not None and htf * sgn < S.HTF_MIN_DEFAULT
+                    and not tr.get("after_red") and not tr.get("recipe_spike")
+                    and (opened_against or worked or cur_r <= HTF_FLAT_AFTER_R))
+        if htf_flat:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
         elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
