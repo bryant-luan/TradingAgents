@@ -4,6 +4,7 @@ Gate reads seeone_toobit_bot/.env.gate. See One login still comes from .env.
 Its book, pause file, and log live under logs/gate, so it does not manage Toobit positions.
 The learned thresholds and review calibration are copied once from the Toobit bot, then kept separately.
 """
+import json
 import os
 import shutil
 from pathlib import Path
@@ -35,6 +36,13 @@ def seed_rules():
         src = ROOT / "logs" / name
         if not dest.exists() and src.exists():
             shutil.copy(src, dest)
+            if name == "learned_params.json":
+                # Same score gates. The other account's loss timers do not apply here.
+                data = json.loads(dest.read_text())
+                data["symbol_cooldown"] = {}
+                data["pause_until"] = 0
+                data["consec_losses"] = 0
+                dest.write_text(json.dumps(data))
 
 
 def main():

@@ -504,6 +504,12 @@ class SeeOne:
         except Exception:
             return None
 
+    def _load_shared_env(self):
+        """Reload See One credentials without pointing a Gate process back at Toobit."""
+        keep = {k: os.environ[k] for k in ("EXCHANGE", "GATE_API_KEY", "GATE_API_SECRET") if os.environ.get(k)}
+        load_dotenv(ENV_FILE, override=True)
+        os.environ.update(keep)
+
     def _save_env(self, updates: dict):
         text = ENV_FILE.read_text() if ENV_FILE.exists() else ""
         lines, seen = [], set()
@@ -531,8 +537,7 @@ class SeeOne:
 
     def _refresh_cookie(self) -> bool:
         """A still-valid rt_refresh cookie (about 30 days) mints a new rt_session."""
-        from dotenv import load_dotenv
-        load_dotenv(ENV_FILE, override=True)
+        self._load_shared_env()
         refresh = os.environ.get("SEEONE_RT_REFRESH") or ""
         if not refresh:
             return False
@@ -562,8 +567,7 @@ class SeeOne:
         self._login_next = now + 300
         if self._refresh_cookie():
             return
-        from dotenv import load_dotenv
-        load_dotenv(ENV_FILE, override=True)
+        self._load_shared_env()
         email = os.environ.get("SEEONE_EMAIL") or os.environ.get("SEEONE_USERNAME") or ""
         password = os.environ.get("SEEONE_PASSWORD") or ""
         if not email or not password:

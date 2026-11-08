@@ -918,7 +918,8 @@ class Bot:
                 continue
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in specs:
-                self.note_skip(sig, f"Toobit 無 {tsym} 合約")
+                venue = "Gate" if getattr(self.tb, "name", "") == "gate" else "Toobit"
+                self.note_skip(sig, f"{venue} 無 {tsym} 合約")
                 continue
             if tsym in held_syms:
                 self.note_skip(sig, "該幣已有持倉")

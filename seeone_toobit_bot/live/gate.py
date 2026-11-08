@@ -105,6 +105,8 @@ def _norm_position(row: dict) -> dict | None:
         side, qty = "SHORT", abs(size)
     else:
         return None
+    if qty <= 0:
+        return None
     lev = row.get("leverage")
     if lev in (None, "", "0", 0):
         lev = row.get("cross_leverage_limit") or 1
@@ -495,7 +497,7 @@ class Gate:
 
     def flash_close(self, symbol: str, direction: str):
         held = next((p for p in self.positions(symbol) if p["side"] == direction), None)
-        if not held:
+        if not held or int(float(held["position"])) <= 0:
             return {}
         side = "SELL_CLOSE" if direction == "LONG" else "BUY_CLOSE"
         return self.market(symbol, side, int(float(held["position"])))
