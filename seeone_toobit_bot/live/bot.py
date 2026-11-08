@@ -1097,10 +1097,10 @@ class Bot:
                     continue
                 pending = opened
                 if tr.get("reversal_logged") != opened:
-                    tr["reversal_logged"] = opened
                     log_event("SIGNAL_REVERSAL", decision="record",
                               note="訊號反轉先記下來。下一根 15 分鐘也收在進場價反向才平；轉回來就留倉",
-                              **base, **view)
+                              **base, **{k: v for k, v in view.items() if k not in base})
+                    tr["reversal_logged"] = opened
                     changed = True
             tr["reversal_bar"] = pending
         if changed:
