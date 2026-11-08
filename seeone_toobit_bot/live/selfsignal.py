@@ -225,6 +225,7 @@ class SelfScanner:
             self.d.update(json.loads(calib_path.read_text()))
         self.last_scan = 0.0
         self.last_break = 0.0
+        self.last_spike = 0.0
         self.basis: dict[str, tuple[float, float]] = {}
         self.local = LocalReview(calib_path)
         self.sim_log = calib_path.parent / "local_review_sim.jsonl"
@@ -762,6 +763,77 @@ class SelfScanner:
             ranked.append((best, c))
         ranked.sort(key=lambda x: -x[0])
         return [c for _, c in ranked[:6]]
+
+    def orderbook_spikes(self, held: set, specs: dict) -> list:
+        """One maker long when the order-book explosion recipe fully matches.
+
+        JCT's card at 12:23 Taipei on Nov 8 was this recipe, with price still at
+        0.002574. The official long was first seen at 16:38, after a target had
+        already been hit, and was not chased. A name already up 2.5R over the
+        last 2 hours is still not chased.
+        """
+        if time.time() - self.last_spike < SCAN_EVERY_S:
+            return []
+        self.last_spike = time.time()
+        best = None
+        matched = 0
+        for r in self.so.recipes():
+            rec = r.get("recipe") or {}
+            rules = rec.get("rules") or []
+            name = rec.get("name") or ""
+            metrics = {x.get("metric") for x in rules}
+            if not rec.get("enabled", True) or "爆漲" not in name or not {"depth-delta", "order-wall"} <= metrics:
+                continue
+            if S.recipe_direction(name, rules) != "LONG":
+                continue
+            rows = list((r.get("evaluation") or {}).get("results") or [])
+            seen = set()
+            for row in rows:
+                base = str(row.get("asset") or "").upper()
+                if base and row.get("match"):
+                    seen.add(base)
+                    pot = ((row.get("readings") or {}).get("potential") or {}).get("score") or 0
+                    best, matched = self._spike_pick(best, matched, base, name, pot, held, specs)
+            for base, hit in (r.get("members") or {}).items():
+                base = str(base).upper()
+                if hit and base not in seen:
+                    best, matched = self._spike_pick(best, matched, base, name, 0, held, specs)
+        self.log("ORDERBOOK_SPIKE", matched=matched, found=None if best is None else best[0])
+        if best is None:
+            return []
+        sym, name, pl, _pot = best
+        price, dist = pl["price"], pl["dist"]
+        tps = pl["tps"]
+        levels = [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": TP_R[i],
+                   "price": tps[i], "hit": False} for i in range(len(TP_R))]
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        sig = {"id": f"rcp:{sym}:LONG:{day}", "symbol": sym, "side": "LONG", "status": "ACTIVE",
+               "timeframe": "15m", "entry_price": price, "stop_price": pl["stop"], "current_price": price,
+               "entry_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "levels": levels,
+               "signal_path": "ORDERBOOK", "path_subtype": name, "recipe_spike": True}
+        reasons = [
+            f"訂單簿爆漲配方「{name}」六項全中",
+            "只掛單，價格離開進場區間不追",
+            "近 2 小時已漲超過 2.5R 的不追",
+        ]
+        ev = {"ok": True, "score": 96.0, "tier": "NORMAL", "reasons": reasons, "factors": {"source:訂單簿爆漲": 0.0},
+              "skip": None, "cur_r": 0.0, "analysis": {"prob": None, "edge": None, "quality": None, "ev_r": None}}
+        self.log("ORDERBOOK_SPIKE", symbol=sym, side="LONG", recipe=name, price=price, stop=pl["stop"],
+                 move_r=pl["move_r"], note="配方全中，掛不到就算")
+        return [{"sig": sig, "ev": ev, "source": "訂單簿爆漲"}]
+
+    def _spike_pick(self, best, matched, base, name, pot, held, specs):
+        sym = base + "USDT"
+        tsym = S.to_toobit(sym)
+        if tsym in held or tsym not in specs:
+            return best, matched
+        pl = self.plan(tsym, "LONG")
+        if not pl or pl["move_r"] >= S.MAX_EXT_R:
+            return best, matched
+        matched += 1
+        if best is None or pot > best[3]:
+            best = (sym, name, pl, pot)
+        return best, matched
 
     def fresh_breaks(self, held: set, specs: dict, htf: float | None = None) -> list:
         """One backup signal: the largest fresh 15m close through the prior 3h range.

@@ -250,7 +250,7 @@ class Bot:
         prev_r = tr.get("_prev_r")
         tr["_prev_r"] = round(cur_r, 3)
         htf = getattr(self, "htf", None)
-        if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT and not tr.get("after_red"):
+        if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT and not tr.get("after_red") and not tr.get("recipe_spike"):
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
         elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
@@ -420,6 +420,7 @@ class Bot:
             "leverage": sz["leverage"], "path": sig.get("signal_path"), "opened_ts": time.time(),
             "be_buffer": entry_fee + S.TAKER_FEE + SLIPPAGE_BUFFER, "entry_fill": fill,
             "after_red": bool(sig.get("after_red")),
+            "recipe_spike": bool(sig.get("recipe_spike")),
             "analysis": ev.get("analysis"), "analysis_bias": (ev.get("analysis") or {}).get("bias", 0.0),
             "tier": p["tier"], "m15_at_entry": ctx["m15"], "htf_at_entry": ctx["htf"], "ext_r_at_entry": ctx["ext"],
             "pre_signal_r": ctx["pre"], "range_pos_at_entry": ctx["rpos"], "dirs_at_entry": ctx["dirs"],
@@ -915,6 +916,12 @@ class Bot:
         except Exception as e:
             log_event("ERROR", where="self_scan", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
         try:
+            for f in self.selfscan.orderbook_spikes(held_syms, specs):
+                if f["sig"]["id"] not in self.st["traded_ids"]:
+                    scored.append((f["ev"]["score"], f["sig"], f.get("source", "訂單簿爆漲"), f["ev"]))
+        except Exception as e:
+            log_event("ERROR", where="orderbook_spike", error=repr(e)[:300])
+        try:
             for f in self.selfscan.fresh_breaks(held_syms, specs, S.htf_score(dirs)):
                 if f["sig"]["id"] not in self.st["traded_ids"]:
                     scored.append((f["ev"]["score"], f["sig"], f.get("source", "突破"), f["ev"]))
@@ -955,6 +962,17 @@ class Bot:
                 continue
             if not sig.get("breakout") and sig["symbol"] in MAJORS:
                 self.note_skip(sig, "主流幣不靠自選單進場。今天 SOL、XRP 都在驗算轉弱時虧損出場，WLD、XMR 這種榜上的空單有打到 TP1")
+                continue
+            if sig.get("recipe_spike"):
+                same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
+                if len(same) >= S.MAX_SAME_SIDE:
+                    self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
+                    continue
+                try:
+                    self.open_trade(sig, ev, src, reg, size_eq)
+                except ToobitError as e:
+                    self.st["traded_ids"].append(sig["id"])
+                    log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
                 continue
             if sig.get("breakout"):
                 if sig["side"] == "LONG" and not sig.get("after_red"):
