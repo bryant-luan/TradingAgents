@@ -1101,6 +1101,94 @@ class Bot:
         except Exception as e:
             log_event("ERROR", where="reversal_close", trade_id=tr.get("id"), error=repr(e)[:200])
 
+    def resume_cut_trades(self):
+        """Put back a short the stale reversal rule flattened while the move was still on.
+
+        ONE on Nov 8 was sold at 11:32 Taipei even though the 11:15 bar had closed back
+        through the entry. One maker entry, with a fresh 1.5 ATR stop. No chase once
+        the original stop distance has already run 2.5R, and none if price is back
+        through the original entry.
+        """
+        if self.dry:
+            return
+        held = {t["tsym"] for t in self.st["trades"].values()}
+        for rec in self.st.get("closed") or []:
+            if rec.get("resumed") or not str(rec.get("reason") or "").startswith("訊號反轉成立"):
+                continue
+            sym, side = rec.get("symbol"), rec.get("side")
+            if not sym or not side or sym in held:
+                rec["resumed"] = "held" if sym in held else "skip"
+                continue
+            geom = self._logged_entry(rec["id"])
+            if not geom:
+                rec["resumed"] = "skip"
+                continue
+            entry, stop = geom
+            dist = abs(entry - stop)
+            px = self.tb.price(sym)
+            sgn = 1 if side == "LONG" else -1
+            ext = (px - entry) * sgn / dist if dist else 0
+            if ext <= 0 or ext >= S.MAX_EXT_R:
+                log_event("RESUME_SKIP", symbol=sym, side=side, ext_r=round(ext, 2),
+                          note="價格已回到進場另一側，或順方向已超過 2.5R，不追")
+                rec["resumed"] = "skip"
+                continue
+            try:
+                rows = requests.get("https://api.toobit.com/quote/v1/klines",
+                                    params={"symbol": sym, "interval": "15m", "limit": 3}, timeout=10).json()
+            except (requests.RequestException, ValueError):
+                continue
+            if not isinstance(rows, list) or not rows:
+                continue
+            now_ms = time.time() * 1000
+            closed = [b for b in rows if int(b[0]) + 15 * 60 * 1000 <= now_ms]
+            if not closed or (float(closed[-1][4]) - entry) * sgn > 0:
+                log_event("RESUME_SKIP", symbol=sym, side=side, note="最近一根收完的 15 分鐘沒有留在進場價這一側")
+                rec["resumed"] = "skip"
+                continue
+            pl = self.selfscan.plan(sym, side)
+            if not pl:
+                log_event("RESUME_SKIP", symbol=sym, side=side, note="現在的 1.5×ATR 停損放不進去")
+                rec["resumed"] = "skip"
+                continue
+            so = sym.replace("-SWAP-USDT", "USDT")
+            from .selfsignal import TP_R
+            levels = [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": TP_R[i],
+                       "price": pl["tps"][i], "hit": False} for i in range(len(TP_R))]
+            sig = {"id": f"resume:{so}:{side}:{rec['id']}", "symbol": so, "side": side, "status": "ACTIVE",
+                   "timeframe": "15m", "entry_price": pl["price"], "stop_price": pl["stop"], "current_price": pl["price"],
+                   "entry_at": now_iso(), "levels": levels, "signal_path": "BREAKOUT", "breakout": True}
+            why = (f"提前平倉後空單還在：原進場 {entry:.6g}，現價 {px:.6g}，順方向 {ext:.2f}R，"
+                   f"重新掛空，停損改按現在的 1.5×ATR")
+            ev = {"ok": True, "score": 95.0, "tier": "NORMAL", "reasons": [why], "factors": {"source:接回": 0.0},
+                  "skip": None, "cur_r": 0.0, "analysis": {"prob": None, "edge": None, "quality": None, "ev_r": None}}
+            eq, _avail = self.equity()
+            principal = self.st.get("principal") or eq
+            size_eq = eq - S.PROFIT_RESERVE * max(0.0, eq - principal)
+            self.m15 = self.htf = self.ext = self.pre = self.rpos = self.dirs = None
+            log_event("RESUME", symbol=sym, side=side, entry=entry, price=px, ext_r=round(ext, 2),
+                      stop=pl["stop"], note=why)
+            self.open_trade(sig, ev, "突破", (0.0, "RESUME"), size_eq)
+            rec["resumed"] = "sent"
+            save_state(self.st)
+
+    def _logged_entry(self, trade_id: str):
+        entry = stop = None
+        try:
+            with TRADE_LOG.open(encoding="utf-8") as f:
+                for line in f:
+                    if trade_id not in line:
+                        continue
+                    ev = json.loads(line)
+                    if ev.get("event") == "ENTRY" and ev.get("trade_id") == trade_id:
+                        entry = float(ev.get("entry_avg") or ev.get("price"))
+                        stop = float(ev["stop"])
+        except (OSError, ValueError, KeyError):
+            return None
+        if entry is None or stop is None:
+            return None
+        return entry, stop
+
     def watchdog(self):
         tick = time.time()
         while True:
@@ -1148,6 +1236,10 @@ class Bot:
                   daily_stop_pct=S.DAILY_STOP_PCT, lock_ladder=S.LOCK_LADDER, trail_gap_r=S.TRAIL_GAP_R,
                   day_lock=[S.DAY_LOCK_TRIGGER_PCT, S.DAY_LOCK_GIVEBACK], profit_reserve=S.PROFIT_RESERVE,
                   principal=self.st.get("principal"), learned=self.learner.summary())
+        try:
+            self.resume_cut_trades()
+        except Exception as e:
+            log_event("ERROR", where="resume_cut_trades", error=repr(e)[:300])
         while True:
             self.beat = time.time()
             try:
