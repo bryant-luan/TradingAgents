@@ -1,4 +1,4 @@
-"""See One -> Toobit live perpetual bot.
+"""See One live perpetual bot. EXCHANGE=toobit by default; EXCHANGE=gate uses Gate.io.
 
 Run:  python3 -m live.bot            (live loop)
       python3 -m live.bot --once --dry-run   (print one cycle of decisions, place nothing)
@@ -16,14 +16,15 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 
 from . import strategy as S
+from .exchange import connect
 from .learner import Learner
+from .market import klines
 from .shadow import Shadow
 from .selfsignal import MAJORS, SelfScanner, btc_ret1h, in_side, micro_1h, move_2h, move_before, rsi_side
-from .toobit import Toobit, ToobitError
+from .toobit import ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = ROOT / "logs" / "trades"
@@ -111,7 +112,7 @@ class Bot:
         self.dry = dry_run
         if dry_run:
             TRADE_LOG = LOG_DIR / "dry_run.jsonl"
-        self.tb = Toobit(os.environ["TOOBIT_API_KEY"], os.environ["TOOBIT_API_SECRET"])
+        self.tb = connect()
         self.so = S.SeeOne(os.environ["SEEONE_RT_SESSION"])
         self.so.log = log_event
         self.st = load_state()
@@ -1120,11 +1121,7 @@ class Bot:
                 log_event("SIGNAL_REVERSAL", decision="resume", trade_id=tr["id"], symbol=tr["tsym"],
                           side=tr["side"], note="反轉平倉沒有送出。下一根若轉回進場價這一側就留倉，兩根都在反向才平")
             sym, side = tr["tsym"], tr["side"]
-            try:
-                rows = requests.get("https://api.toobit.com/quote/v1/klines",
-                                    params={"symbol": sym, "interval": "15m", "limit": 4}, timeout=10).json()
-            except (requests.RequestException, ValueError):
-                continue
+            rows = klines(sym, "15m", 4)
             if not isinstance(rows, list) or not rows:
                 continue
             parsed = []
@@ -1217,7 +1214,8 @@ class Bot:
             log_event("ERROR", where="seeone_startup", error=repr(e)[:200])
         self.last_history = time.time()
         self.shadow.optimize(force=True)
-        log_event("START", dry_run=self.dry, seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
+        log_event("START", dry_run=self.dry, exchange=self.tb.name,
+                  seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
                   daily_stop_pct=S.DAILY_STOP_PCT, lock_ladder=S.LOCK_LADDER, trail_gap_r=S.TRAIL_GAP_R,
                   day_lock=[S.DAY_LOCK_TRIGGER_PCT, S.DAY_LOCK_GIVEBACK], profit_reserve=S.PROFIT_RESERVE,

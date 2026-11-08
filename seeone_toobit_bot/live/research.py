@@ -19,9 +19,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
-
 from . import strategy as S
+from .market import klines as fetch_klines
 
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / "logs"
@@ -82,13 +81,7 @@ NAMES = {
 def klines(sym: str) -> tuple[str, list]:
     out, end = [], None
     for _ in range(2):
-        p = {"symbol": sym, "interval": "5m", "limit": 1000}
-        if end:
-            p["endTime"] = end
-        try:
-            d = requests.get("https://api.toobit.com/quote/v1/klines", params=p, timeout=15).json()
-        except (requests.RequestException, ValueError):
-            break
+        d = fetch_klines(sym, "5m", 1000, end)
         if not d:
             break
         out = [(int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])) for x in d] + out

@@ -19,7 +19,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .selfsignal import ATR_MULT, MAX_STOP_PCT, MIN_STOP_PCT, atr
-from .toobit import Toobit, ToobitError
+from .exchange import connect
+from .toobit import ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = ROOT / "logs" / "live_state.json"
@@ -47,7 +48,7 @@ def pids(pattern: str) -> list[int]:
 class Monitor:
     def __init__(self):
         load_dotenv(ROOT / ".env")
-        self.tb = Toobit(os.environ["TOOBIT_API_KEY"], os.environ["TOOBIT_API_SECRET"])
+        self.tb = connect()
         self.no_proc_since = None
         self.last_tick = time.time()
         self.resumed_at = 0.0

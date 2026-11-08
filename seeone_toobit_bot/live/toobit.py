@@ -18,6 +18,8 @@ class ToobitError(Exception):
 class Toobit:
     """Toobit USDT-M perpetual client (v1 REST, hedge mode). Quantities are in contracts."""
 
+    name = "toobit"
+
     def __init__(self, key: str, secret: str):
         self.secret = secret.encode()
         self.http = requests.Session()

@@ -4,21 +4,20 @@ since the previous report.
     python3 -m live.report            # since the last report (first run: last 6 hours)
     python3 -m live.report --hours 24 # fixed window, does not move the marker
 
-Read-only: Toobit is queried for balance/positions/prices; See One is not called (its session belongs to the bot).
+Read-only: the active exchange is queried for balance/positions/prices; See One is not called.
 """
 import json
-import os
 import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 
+from .exchange import connect
+from .market import klines
 from .rulescore import line as rule_line
-from .toobit import Toobit
 
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / "logs"
@@ -51,8 +50,7 @@ def events_since(path: Path, since: str) -> list:
 
 
 def btc_trend() -> str:
-    rows = requests.get("https://api.toobit.com/quote/v1/klines",
-                        params={"symbol": "BTC-SWAP-USDT", "interval": "1h", "limit": 25}, timeout=10).json()
+    rows = klines("BTC-SWAP-USDT", "1h", 25)
     c = [float(r[4]) for r in rows] if isinstance(rows, list) else []
     if len(c) < 2:
         return "BTC 價格暫時取不到"
@@ -87,7 +85,7 @@ def main():
         print(f"  主機暫停 {e.get('paused_s', 0) // 60} 分鐘，{tpe(e['ts'])} 恢復")
 
     load_dotenv(ROOT / ".env")
-    tb = Toobit(os.environ["TOOBIT_API_KEY"], os.environ["TOOBIT_API_SECRET"])
+    tb = connect()
     bal = tb.balance()
     pos = {(p["symbol"], p["side"]): p for p in tb.positions()}
     upnl = sum(float(p.get("unrealizedPnL") or 0) for p in pos.values())

@@ -19,6 +19,7 @@ from pathlib import Path
 import requests
 
 from . import strategy as S
+from .market import klines, quote_volumes
 from .localreview import LocalReview
 
 SCAN_EVERY_S = 900          # one analysis-review pass every 15 minutes
@@ -89,8 +90,7 @@ CAL_WINDOW_H = 72
 
 
 def atr(symbol: str, n: int = 14) -> tuple[float, list] | None:
-    rows = requests.get("https://api.toobit.com/quote/v1/klines",
-                        params={"symbol": symbol, "interval": "15m", "limit": n + 1}, timeout=10).json()
+    rows = klines(symbol, "15m", n + 1)
     if len(rows) < n + 1:
         return None
     trs = []
@@ -102,9 +102,7 @@ def atr(symbol: str, n: int = 14) -> tuple[float, list] | None:
 
 def move_before(symbol: str, end_ms: int, side: str, risk: float) -> float | None:
     """Move over the 2h before end_ms in the trade direction, in units of the given stop distance."""
-    rows = requests.get("https://api.toobit.com/quote/v1/klines",
-                        params={"symbol": symbol, "interval": "15m", "limit": EXT_BARS + 1, "endTime": end_ms - 1},
-                        timeout=10).json()
+    rows = klines(symbol, "15m", EXT_BARS + 1, end_ms - 1)
     if len(rows) < EXT_BARS or not risk:
         return None
     sgn = 1 if side == "LONG" else -1
@@ -154,11 +152,7 @@ def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, flo
     Quote volume is base volume times close, summed over those 288 bars (24h).
     """
     empty = (None, None, None, None, None)
-    try:
-        rows = requests.get("https://api.toobit.com/quote/v1/klines",
-                            params={"symbol": symbol, "interval": "5m", "limit": 301}, timeout=10).json()
-    except (requests.RequestException, ValueError):
-        return empty
+    rows = klines(symbol, "5m", 301)
     if not isinstance(rows, list) or len(rows) < 301:
         return empty
     past = rows[:-1][-300:]
@@ -181,22 +175,7 @@ def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, flo
 
 def contract_quote_vol() -> dict[str, float]:
     """24h quote volume in USDT for every USDT-M contract. One public call."""
-    try:
-        rows = requests.get("https://api.toobit.com/quote/v1/contract/ticker/24hr", timeout=15).json()
-    except (requests.RequestException, ValueError):
-        return {}
-    out = {}
-    if not isinstance(rows, list):
-        return out
-    for row in rows:
-        sym = row.get("s")
-        if not sym:
-            continue
-        try:
-            out[sym] = float(row.get("qv") or 0)
-        except (TypeError, ValueError):
-            continue
-    return out
+    return quote_volumes()
 
 
 def rsi_side(rsi_l: float | None, side: str) -> float | None:
@@ -313,10 +292,8 @@ class SelfScanner:
             if age_h < 0.25:
                 still.append(p)
                 continue
-            try:
-                rows = requests.get("https://api.toobit.com/quote/v1/klines",
-                                    params={"symbol": p["tsym"], "interval": "15m", "limit": 100}, timeout=10).json()
-            except requests.RequestException:
+            rows = klines(p["tsym"], "15m", 100)
+            if not rows:
                 still.append(p)
                 continue
             outcome = None
@@ -850,11 +827,7 @@ class SelfScanner:
 
         def one(item):
             tsym, seeone = item
-            try:
-                rows = requests.get("https://api.toobit.com/quote/v1/klines",
-                                    params={"symbol": tsym, "interval": "15m", "limit": 32}, timeout=10).json()
-            except (requests.RequestException, ValueError):
-                return None
+            rows = klines(tsym, "15m", 32)
             if not isinstance(rows, list) or len(rows) < 16:
                 return None
             closed = rows[:-1] if int(rows[-1][0]) >= now_ms - 15 * 60 * 1000 else rows
