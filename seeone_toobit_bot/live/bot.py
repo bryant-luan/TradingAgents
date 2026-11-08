@@ -16,6 +16,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
 from dotenv import load_dotenv
 
 from . import strategy as S
@@ -400,6 +401,7 @@ class Bot:
             "tier": p["tier"], "m15_at_entry": ctx["m15"], "htf_at_entry": ctx["htf"], "ext_r_at_entry": ctx["ext"],
             "pre_signal_r": ctx["pre"], "range_pos_at_entry": ctx["rpos"], "dirs_at_entry": ctx["dirs"],
             "rsi15_at_entry": ctx.get("rsi"),
+            "break_level": sig.get("broken"),
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": p["regime"],
         }
@@ -1018,6 +1020,74 @@ class Bot:
                     log_event("ERROR", trade_id=tr.get("id"), where="fast_guard", error=repr(e)[:200])
             if moved:
                 save_state(self.st)
+            if time.time() - getattr(self, "_rev_at", 0) >= 15:
+                self._rev_at = time.time()
+                try:
+                    self.watch_reversals()
+                except Exception as e:
+                    log_event("ERROR", where="watch_reversals", error=repr(e)[:200])
+
+    def watch_reversals(self):
+        """Record a 15m bar that reverses an open signal, and flatten the position when the reversal is decided."""
+        now_ms = time.time() * 1000
+        for tr in list(self.st["trades"].values()):
+            if tr.get("exit_reason"):
+                continue
+            sym, side = tr["tsym"], tr["side"]
+            try:
+                rows = requests.get("https://api.toobit.com/quote/v1/klines",
+                                    params={"symbol": sym, "interval": "15m", "limit": 3}, timeout=10).json()
+            except (requests.RequestException, ValueError):
+                continue
+            if not isinstance(rows, list) or not rows:
+                continue
+            # The reversal is often the bar that just closed. Looking only at the new bar misses it.
+            picked = None
+            for bar in rows:
+                try:
+                    o, h, l, c = (float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4]))
+                    opened = int(bar[0])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                closed = opened < now_ms - 15 * 60 * 1000
+                view = S.reversal_view(side, tr["entry"], tr.get("break_level"), tr.get("mfe_r") or 0,
+                                       o, h, l, c, closed)
+                if view is None:
+                    continue
+                if picked is None or view["action"] == "exit":
+                    picked = (opened, closed, o, h, l, c, view)
+            if picked is None:
+                continue
+            opened, closed, o, h, l, c, view = picked
+            rec = {"trade_id": tr["id"], "symbol": sym, "side": side, "path": tr.get("path"),
+                   "entry": tr["entry"], "break_level": tr.get("break_level"), "mfe_r": tr.get("mfe_r"),
+                   "bar_open": opened, "bar_closed": closed, "o": o, "h": h, "l": l, **view}
+            if view["action"] == "record":
+                if tr.get("reversal_logged") == opened:
+                    continue
+                tr["reversal_logged"] = opened
+                log_event("SIGNAL_REVERSAL", action="record",
+                          note="訊號反轉先記下來；這根 15 分鐘 K 線收完仍在進場價反向，才平剩餘部位", **rec)
+                save_state(self.st)
+                continue
+            if tr.get("reversal_exit") == opened:
+                continue
+            tr["reversal_exit"] = opened
+            why = (f"訊號反轉：15 分鐘收盤 {c:.6g} 回到進場 {tr['entry']:.6g} 的另一側"
+                   f"（這根反向 {view['against_pct']:.2f}%，收在進場價外 {view['beyond_pct']:.2f}%），平掉剩餘部位")
+            with self._protect_lock:
+                if tr.get("exit_reason"):
+                    continue
+                tr["exit_reason"] = why
+            log_event("SIGNAL_REVERSAL", action="exit", reason=why, note="訊號反轉，剩餘部位改掛單出場", **rec)
+            save_state(self.st)
+            threading.Thread(target=self._close_reversal, args=(tr,), daemon=True).start()
+
+    def _close_reversal(self, tr: dict):
+        try:
+            self.maker_close(tr)
+        except Exception as e:
+            log_event("ERROR", where="reversal_close", trade_id=tr.get("id"), error=repr(e)[:200])
 
     def watchdog(self):
         tick = time.time()

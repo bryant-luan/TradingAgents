@@ -830,7 +830,7 @@ class SelfScanner:
         sig = {"id": f"brk:{sym}:{side}:{int(bar[0])}", "symbol": sym, "side": side, "status": "ACTIVE",
                "timeframe": "15m", "entry_price": price, "stop_price": stop, "current_price": price,
                "entry_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "levels": levels,
-               "signal_path": "BREAKOUT", "path_subtype": None, "breakout": True}
+               "signal_path": "BREAKOUT", "path_subtype": None, "breakout": True, "broken": broken}
         reasons = [
             f"突破備案：15 分鐘收盤{'跌破' if side == 'SHORT' else '漲破'}前 3 小時{'低點' if side == 'SHORT' else '高點'} {broken:.6g}",
             f"這根高低振幅 {span:.1%}，至少 {S.BREAK_MIN_RANGE_PCT:.0%}",

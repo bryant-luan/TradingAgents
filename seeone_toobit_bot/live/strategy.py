@@ -110,6 +110,18 @@ MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop 
 # this shape. Every USDT-M contract is checked. One name per scan.
 # Maker only; if the price has left, the order is dropped.
 BREAK_MIN_RANGE_PCT = 0.01
+# Signal reversal, from the 11:00 Taipei bars on Nov 8.
+# AKE closed +6.6% back through the short. That exits immediately, including while the
+# bar is still forming, because waiting is how the move is given back.
+# ONE's bar closed only +0.41%, but its range was 3.2% and the close finished 0.7%
+# through the entry. A wide bar that settles at least 0.5% through the entry is the
+# same reversal. The 10:45 bar, only 0.3% through, is not.
+# WLD had already reached +1R and the bar closed +0.54% back through the entry. That
+# slower round-trip is recorded while the bar is forming and flattened once it closes.
+REVERSAL_MIN_PCT = 0.01
+REVERSAL_BEYOND_PCT = 0.005
+REVERSAL_ROUNDTRIP_R = 1.0
+REVERSAL_DRIFT_PCT = 0.003
 MAX_SAME_SIDE = 2               # open positions on one side
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
@@ -132,6 +144,38 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 # only locked +1.75R and the runner gave the rest back. After +3R the stop now stays 0.5R
 # behind the high, stepped by 0.25R: +3.02R locks +2.50R, +3.66R locks +3.00R.
 LOCK_LADDER = ((2.0, 0.0), (3.0, 2.5))
+
+
+def reversal_view(side: str, entry: float, break_level, mfe_r, o: float, h: float, l: float, c: float,
+                  bar_closed: bool):
+    """Describe a 15m bar that reverses an open signal. None when it does not.
+
+    ``action`` is ``exit`` or ``record``. An impulse, or a wide bar that settles
+    through the entry, exits immediately. A round-trip back to entry after +1R is
+    recorded while the bar is still forming, and exits once that bar has closed there.
+    """
+    if o <= 0 or entry <= 0:
+        return None
+    sgn = 1 if side == "LONG" else -1
+    if (c - o) * sgn >= 0:
+        return None
+    against = (o - c) * sgn / o
+    beyond = (entry - c) * sgn / entry
+    through_entry = beyond >= 0
+    through_break = break_level is not None and (c - float(break_level)) * sgn <= 0
+    impulse = against >= REVERSAL_MIN_PCT and through_entry
+    wide = (h - l) / o >= REVERSAL_MIN_PCT and beyond >= REVERSAL_BEYOND_PCT
+    failed_break = bool(through_break) and against >= REVERSAL_MIN_PCT
+    roundtrip = (mfe_r or 0) >= REVERSAL_ROUNDTRIP_R and through_entry and against >= REVERSAL_DRIFT_PCT
+    if not (impulse or wide or failed_break or roundtrip):
+        return None
+    action = "exit" if impulse or wide or failed_break or bar_closed else "record"
+    return {"range_pct": round((h - l) / o * 100, 2), "against_pct": round(against * 100, 2),
+            "beyond_pct": round(beyond * 100, 2), "through_entry": through_entry,
+            "through_break": bool(through_break), "impulse": impulse, "wide": wide,
+            "failed_break": failed_break, "roundtrip": roundtrip, "action": action, "close": c}
+
+
 HIGH_BE_TRIGGER_R = 2.0
 TP_STOP_MOVES = False           # moving the stop to break-even / the previous TP on each TP fill (same finding)
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
