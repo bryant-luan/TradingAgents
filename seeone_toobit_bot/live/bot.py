@@ -988,13 +988,16 @@ class Bot:
                 if sig["side"] == "LONG" and not sig.get("after_red"):
                     self.note_skip(sig, "突破做多先停。BMT 平在 -0.18R、ERA 平在 -0.55R，之後價格還在跌")
                     continue
-                if not sig.get("after_red") and htf is not None and htf * sgn < htf_min:
-                    self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
-                                        f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
+                if not sig.get("after_red") and htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
+                    self.note_skip(sig, f"突破備案與 1h/4h 相反（順方向 {htf * sgn:+.2f} < {S.HTF_MIN_DEFAULT}），"
+                                        f"開倉後會被立刻平掉，不開")
                     continue
+                # ENA short at 01:21 Taipei on Nov 9 broke a 1.4% bar while 1h/4h was already
+                # -1.6. The short then ran to -2.2R. Reviewed entries already refuse this
+                # late reading. The backup now uses the same ceiling.
                 if not sig.get("after_red") and htf is not None and htf * sgn >= htf_max:
-                    self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
-                                        f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
+                    self.note_skip(sig, f"突破備案 1h/4h 已強烈偏{'多' if sgn > 0 else '空'} "
+                                        f"(順方向 {htf * sgn:+.2f} ≥ {htf_max:+.2f})，進場偏晚")
                     continue
                 try:
                     if sig.get("broken") is not None and S.break_half_retrace(
