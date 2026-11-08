@@ -596,9 +596,10 @@ class SelfScanner:
                 if passed * 2 < total or side != cands[sym].get("side"):
                     continue
                 cands[sym]["tags"].append(f"客製化:{name} {passed}/{total}")
-        default = "LONG" if regime_label == "BULL" else "SHORT" if regime_label == "BEAR" else None
-        for m in MAJORS:
-            cands.setdefault(m, {"side": default, "tags": ["主流幣"]})
+        # Majors are not forced onto the list. On Nov 8 the only self-analysis trades
+        # that came from this injection were SOL and XRP, and the recheck closed both
+        # at a loss before any target. The potential-board shorts, WLD and XMR, both
+        # reached TP1. A major still enters when a board or a breakout names it.
         # Every USDT-margined contract, including TradFi (stocks, indices, metals, forex).
         # Boards keep the side hint they already have; names See One does not list are skipped later.
         for tsym, spec in self.tb.specs().items():

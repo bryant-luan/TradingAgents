@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .learner import Learner
 from .shadow import Shadow
-from .selfsignal import SelfScanner, btc_ret1h, in_side, micro_1h, move_2h, move_before, rsi_side
+from .selfsignal import MAJORS, SelfScanner, btc_ret1h, in_side, micro_1h, move_2h, move_before, rsi_side
 from .toobit import Toobit, ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -927,6 +927,9 @@ class Bot:
             self.pre = None
             if S.to_toobit(sig["symbol"]) == "ONE-SWAP-USDT":
                 self.note_skip(sig, "ONE 這筆提前平倉後不接回，改開其他幣")
+                continue
+            if not sig.get("breakout") and sig["symbol"] in MAJORS:
+                self.note_skip(sig, "主流幣不靠自選單進場。今天 SOL、XRP 都在驗算轉弱時虧損出場，WLD、XMR 這種榜上的空單有打到 TP1")
                 continue
             if sig.get("breakout"):
                 if not S.BREAK_LONGS and sig["side"] == "LONG":
