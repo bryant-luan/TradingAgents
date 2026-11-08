@@ -7,6 +7,7 @@ The learned thresholds and review calibration are copied once from the Toobit bo
 import json
 import os
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,6 +23,22 @@ def load_gate_env():
     load_dotenv(ROOT / ".env")
     load_dotenv(GATE_ENV, override=True)
     os.environ["EXCHANGE"] = "gate"
+    raw = os.environ.get("GATE_SIM_UNTIL") or ""
+    until = None
+    if raw:
+        try:
+            until = datetime.fromisoformat(raw)
+            if until.tzinfo is None:
+                until = until.replace(tzinfo=timezone.utc)
+        except ValueError:
+            until = None
+    ended = ROOT / "logs" / "gate" / "SIM_ENDED"
+    if until and datetime.now(timezone.utc) < until:
+        os.environ["GATE_PAPER"] = "1"
+    else:
+        os.environ.pop("GATE_PAPER", None)
+        if until and ended.exists():
+            raise SystemExit(0)
 
 
 load_gate_env()

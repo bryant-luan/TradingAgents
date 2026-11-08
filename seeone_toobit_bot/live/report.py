@@ -233,7 +233,8 @@ def report_venue(name: str, hours: float | None, now: datetime, book: set[str], 
             where = "兩邊都有"
         else:
             where = place_label(as_tsym(e.get("symbol") or e.get("trade_id")), book, other)
-        print(f"  {tpe(e['ts'])} {msg}" + (f" | {where}" if where else ""))
+        prefix = "模擬 " if e.get("paper") else ""
+        print(f"  {tpe(e['ts'])} {prefix}{msg}" + (f" | {where}" if where else ""))
     closed = [c for c in st["closed"] if c.get("closed_at", "") > since and c.get("pnl") is not None]
     if closed:
         print(f"  期間已平倉 {len(closed)} 筆，合計 {sum(c['pnl'] for c in closed):+.2f}u，"

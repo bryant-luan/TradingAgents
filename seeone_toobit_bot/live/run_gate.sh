@@ -3,6 +3,10 @@
 # Create logs/gate/STOP to stop for good. Does not touch the Toobit bot.
 cd "$(dirname "$0")/.."
 mkdir -p logs/gate
+if [ -f logs/gate/SIM_ENDED ]; then
+  echo "$(date -u +%FT%TZ) Gate 模擬一天已結束，不自動改送真單" | tee -a logs/gate/live_bot_console.log
+  exit 0
+fi
 rm -f logs/gate/STOP
 if ! grep -Eq '^GATE_API_KEY=.+$' .env.gate && [ -z "$GATE_API_KEY" ]; then
   echo "$(date -u +%FT%TZ) Gate bot not started: GATE_API_KEY is empty in .env.gate" | tee -a logs/gate/live_bot_console.log

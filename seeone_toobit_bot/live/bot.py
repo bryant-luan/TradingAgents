@@ -131,6 +131,7 @@ class Bot:
         if dry_run:
             TRADE_LOG = LOG_DIR / "dry_run.jsonl"
         self.tb = connect()
+        self.paper = os.environ.get("GATE_PAPER") == "1" and getattr(self.tb, "name", "") == "gate"
         self.so = S.SeeOne(os.environ["SEEONE_RT_SESSION"])
         self.so.log = log_event
         self.st = load_state()
@@ -156,6 +157,12 @@ class Bot:
 
     def replace_stop(self, tr: dict, new_stop: float, reason: str):
         sym, side = tr["tsym"], tr["side"]
+        if tr.get("paper"):
+            px = self.tb.fmt_price(sym, new_stop)
+            log_event("STOP_MOVE", trade_id=tr["id"], symbol=sym, side=side, old_stop=tr["stop"], new_stop=px,
+                      reason=reason, paper=True)
+            tr["stop"] = float(px)
+            return
         px = self.tb.fmt_price(sym, new_stop)
         self.tb.set_position_stop(sym, side, px)
         stale = []
@@ -176,11 +183,14 @@ class Bot:
                 self.finish(tid, tr)
                 continue
 
-            if not tr.get("tp_migrated") and not tr.get("exit_reason"):
+            if tr.get("paper"):
+                self._paper_mark(tr)
+            elif not tr.get("tp_migrated") and not tr.get("exit_reason"):
                 self.migrate_tps(tr)
             open_ids = set()
-            for kind in {tp.get("kind", "STOP") for tp in tr["tps"] if not tp["filled"]}:
-                open_ids |= {str(o["orderId"]) for o in self.tb.open_orders(sym, kind)}
+            if not tr.get("paper"):
+                for kind in {tp.get("kind", "STOP") for tp in tr["tps"] if not tp["filled"]}:
+                    open_ids |= {str(o["orderId"]) for o in self.tb.open_orders(sym, kind)}
             newly = [tp for tp in tr["tps"] if not tp["filled"] and not tp.get("cancelled") and tp.get("order_id")
                      and str(tp["order_id"]) not in open_ids]
             for tp in newly:
@@ -308,7 +318,81 @@ class Bot:
         log_event("PROFIT_LOCK", trade_id=tr["id"], symbol=sym, side=side, mfe_r=tr["mfe_r"], lock_r=lk,
                   stop=tr["stop"], reason=why)
 
+    def _paper_mark(self, tr: dict):
+        """Stop and targets for a simulated position, using the live Gate price and no orders."""
+        sym, side = tr["tsym"], tr["side"]
+        px = self.tb.price(sym)
+        sgn = 1 if side == "LONG" else -1
+        tr["paper_px"] = px
+        if (px - float(tr["stop"])) * sgn <= 0 and not tr.get("exit_reason"):
+            tr["paper_exit_px"] = float(tr["stop"])
+            tr["exit_reason"] = f"模擬止損 {tr['stop']}"
+            log_event("LOCK_EXIT" if tr.get("lock_r") is not None else "EXIT", trade_id=tr["id"], symbol=sym,
+                      side=side, price=px, paper=True, reason=tr["exit_reason"])
+            return
+        for tp in tr["tps"]:
+            if tp.get("filled"):
+                continue
+            if (px - float(tp["price"])) * sgn < 0:
+                continue
+            tp["filled"] = True
+            tp["filled_at"] = now_iso()
+            log_event("TP_HIT", trade_id=tr["id"], symbol=sym, side=side, label=tp["label"], price=tp["price"],
+                      qty=tp["qty"], paper=True, reason=f"模擬盤觸及 {tp['label']}")
+
+    def _paper_positions(self) -> dict:
+        out = {}
+        for tr in self.st["trades"].values():
+            if tr.get("exit_reason"):
+                continue
+            out[(tr["tsym"], tr["side"])] = {
+                "symbol": tr["tsym"], "side": tr["side"], "position": tr["contracts"],
+                "avgPrice": tr["entry"], "leverage": tr.get("leverage"), "margin": tr.get("margin"),
+                "unrealizedPnL": 0, "markPrice": tr.get("paper_px") or tr["entry"],
+            }
+        return out
+
+    def _paper_finish(self, tid: str, tr: dict):
+        sym, side = tr["tsym"], tr["side"]
+        sgn = 1 if side == "LONG" else -1
+        close_px = tr.get("paper_exit_px")
+        if close_px is None:
+            try:
+                close_px = self.tb.price(sym)
+            except Exception:
+                close_px = tr["entry"]
+        mult = float(self.tb.specs()[sym]["multiplier"])
+        pnl = (float(close_px) - float(tr["entry"])) * sgn * float(tr["contracts"]) * mult
+        r_result = round(pnl / tr["risk_usdt"], 3) if tr.get("risk_usdt") else None
+        reason = tr.get("exit_reason") or "模擬盤結束"
+        log_event("EXIT", trade_id=tid, symbol=sym, side=side, reason=reason, paper=True,
+                  entry=tr["entry"], close_avg=close_px, realized_pnl_usdt=round(pnl, 4), r_result=r_result,
+                  held_min=round((time.time() - tr["opened_ts"]) / 60, 1))
+        self.st["closed"].append({"id": tid, "symbol": sym, "side": side, "path": tr.get("path"),
+                                  "pnl": round(pnl, 4), "r_result": r_result, "closed_at": now_iso(),
+                                  "reason": reason, "paper": True, "listing": tr.get("listing")})
+        self.st["trades"].pop(tid, None)
+
+    def _end_paper(self):
+        for tid, tr in list(self.st["trades"].items()):
+            if not tr.get("paper"):
+                continue
+            if not tr.get("exit_reason"):
+                tr["exit_reason"] = "模擬一天結束，按現價結算，未送真單"
+                try:
+                    tr["paper_exit_px"] = self.tb.price(tr["tsym"])
+                except Exception:
+                    tr["paper_exit_px"] = tr["entry"]
+            self._paper_finish(tid, tr)
+        log_event("SIM_DONE", exchange="gate", note="Gate 模擬一天結束，程式停止，不會自動改送真單")
+        save_state(self.st)
+        (ROOT / "logs" / "gate" / "SIM_ENDED").write_text(now_iso() + "\n")
+        os._exit(0)
+
     def finish(self, tid: str, tr: dict):
+        if tr.get("paper"):
+            self._paper_finish(tid, tr)
+            return
         sym, side = tr["tsym"], tr["side"]
         for tp in tr["tps"]:
             if not tp["filled"] and tp.get("order_id"):
@@ -395,6 +479,20 @@ class Bot:
         if self.dry:
             log_event("DRY_ENTRY", **entry_info)
             return True
+        if self.paper:
+            self.st["traded_ids"].append(sig["id"])
+            fill = {"filled": sz["contracts"], "maker": sz["contracts"], "taker": 0, "order_ids": [],
+                    "note": "模擬盤，未送交易所"}
+            pos = {"avgPrice": price, "position": sz["contracts"], "leverage": sz["leverage"],
+                   "margin": sz["margin"]}
+            self.record_entry({"sig": sig, "ev": ev, "source": source, "regime": list(regime), "tier": tier,
+                               "sz": sz, "stop": stop, "price": price,
+                               "entry_info": entry_info,
+                               "ctx": {"m15": getattr(self, "m15", None), "htf": getattr(self, "htf", None),
+                                       "ext": getattr(self, "ext", None), "pre": getattr(self, "pre", None),
+                                       "rpos": getattr(self, "rpos", None), "dirs": getattr(self, "dirs", None),
+                                       "rsi": getattr(self, "rsi", None)}}, fill, pos)
+            return True
 
         self.tb.set_isolated(sym)
         self.tb.set_leverage(sym, sz["leverage"])
@@ -451,9 +549,10 @@ class Bot:
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": p["regime"],
             "listing": listing(sym),
+            "paper": self.paper,
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=fill.get("order_ids"),
-                  listing=self.st["trades"][tid]["listing"],
+                  listing=self.st["trades"][tid]["listing"], paper=bool(self.paper),
                   tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **p["entry_info"])
         if hasattr(self, "day_room"):
             self.day_room -= self.st["trades"][tid]["risk_usdt"]
@@ -633,6 +732,14 @@ class Bot:
     def maker_close(self, tr: dict):
         """Exit a whole position with post-only orders at the touch; market only for whatever is left after the retries.
         The exchange-side stop stays in place the whole time."""
+        if tr.get("paper"):
+            try:
+                tr["paper_exit_px"] = self.tb.price(tr["tsym"])
+            except Exception:
+                tr["paper_exit_px"] = tr.get("paper_exit_px") or tr["entry"]
+            log_event("EXIT_FILL", trade_id=tr["id"], symbol=tr["tsym"], side=tr["side"], paper=True,
+                      price=tr["paper_exit_px"], reason=tr.get("exit_reason"))
+            return
         sym, side = tr["tsym"], tr["side"]
         for tp in tr["tps"]:
             if not tp["filled"] and tp.get("order_id"):
@@ -701,6 +808,14 @@ class Bot:
 
     def place_tps(self, sym: str, side: str, entry: float, plan: list) -> list:
         """TPs as post-only limit closes (maker fee); a TP that would cross falls back to a trigger order."""
+        if self.paper:
+            tps = []
+            for tp in plan:
+                if (tp["price"] <= entry) if side == "LONG" else (tp["price"] >= entry):
+                    continue
+                tps.append({**tp, "price": float(self.tb.fmt_price(sym, tp["price"])), "order_id": None,
+                            "kind": "PAPER", "filled": False})
+            return tps
         close_side = "SELL_CLOSE" if side == "LONG" else "BUY_CLOSE"
         tps = []
         for tp in plan:
@@ -824,9 +939,22 @@ class Bot:
             except Exception as e:
                 log_event("ERROR", where="history", error=repr(e)[:200])
         self.shadow.optimize()
-        positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
+        if self.paper:
+            until = os.environ.get("GATE_SIM_UNTIL") or ""
+            try:
+                deadline = datetime.fromisoformat(until)
+                if deadline.tzinfo is None:
+                    deadline = deadline.replace(tzinfo=timezone.utc)
+            except ValueError:
+                deadline = None
+            if deadline and datetime.now(timezone.utc) >= deadline:
+                self._end_paper()
+            positions = self._paper_positions()
+            self.manage(positions, sigmap)
+        else:
+            positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
 
-        if not self.dry:
+        if not self.dry and not self.paper:
             self.manage(positions, sigmap)
             positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
             self.reconcile(positions)
@@ -1242,7 +1370,8 @@ class Bot:
         except Exception:
             tradable = None
         self.st["tradable_contracts"] = tradable
-        log_event("START", dry_run=self.dry, exchange=self.tb.name, tradable_contracts=tradable,
+        log_event("START", dry_run=self.dry, paper=self.paper, exchange=self.tb.name, tradable_contracts=tradable,
+                  sim_until=os.environ.get("GATE_SIM_UNTIL"),
                   seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
                   daily_stop_pct=S.DAILY_STOP_PCT, lock_ladder=S.LOCK_LADDER, trail_gap_r=S.TRAIL_GAP_R,
