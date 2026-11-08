@@ -992,13 +992,6 @@ class Bot:
                     self.note_skip(sig, f"突破備案與 1h/4h 相反（順方向 {htf * sgn:+.2f} < {S.HTF_MIN_DEFAULT}），"
                                         f"開倉後會被立刻平掉，不開")
                     continue
-                # ENA short at 01:21 Taipei on Nov 9 broke a 1.4% bar while 1h/4h was already
-                # -1.6. The short then ran to -2.2R. Reviewed entries already refuse this
-                # late reading. The backup now uses the same ceiling.
-                if not sig.get("after_red") and htf is not None and htf * sgn >= htf_max:
-                    self.note_skip(sig, f"突破備案 1h/4h 已強烈偏{'多' if sgn > 0 else '空'} "
-                                        f"(順方向 {htf * sgn:+.2f} ≥ {htf_max:+.2f})，進場偏晚")
-                    continue
                 try:
                     if sig.get("broken") is not None and S.break_half_retrace(
                             sig["side"], float(sig["broken"]), float(sig["entry_price"]),
