@@ -46,6 +46,10 @@ LOOP_SECONDS = 30
 FAST_GUARD_S = 1               # with a position open, watch price every second
 SPIKE_DROP_R = 0.45             # one-second adverse jump treated as a wick
 DEEP_ADVERSE_R = -0.85          # exit before a wick can slip through the full stop
+# After a target has paid, the runner is cut at -0.35R instead of -0.85R.
+# PONS on Nov 8 hit TP1, then the rest fell to -0.94R and the day finished -0.36R.
+# WLD's worst print after TP1 was only -0.18R, so this line would have left it on.
+AFTER_TP_DEEP_R = -0.35
 # A normal cycle with several maker entries/exits stays well under this.
 WATCHDOG_S = 1200
 SLIPPAGE_BUFFER = 0.0003
@@ -236,8 +240,9 @@ class Bot:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
         elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
-        elif cur_r <= DEEP_ADVERSE_R:
-            tr["exit_reason"] = (f"浮虧 {cur_r:+.2f}R 已深於 {DEEP_ADVERSE_R}R，先平倉，避免插針滑過止損")
+        elif cur_r <= (AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R):
+            line = AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R
+            tr["exit_reason"] = (f"浮虧 {cur_r:+.2f}R 已深於 {line}R，先平倉，避免插針滑過止損")
         if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧")):
             log_event("ADVERSE_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, cur_r=round(cur_r, 3),
                       reason=tr["exit_reason"])
