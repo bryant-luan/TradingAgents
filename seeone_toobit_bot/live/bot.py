@@ -46,10 +46,13 @@ LOOP_SECONDS = 30
 FAST_GUARD_S = 1               # with a position open, watch price every second
 SPIKE_DROP_R = 0.45             # one-second adverse jump treated as a wick
 DEEP_ADVERSE_R = -0.85          # exit before a wick can slip through the full stop
-# After a target has paid, the runner is cut at -0.35R instead of -0.85R.
-# PONS on Nov 8 hit TP1, then the rest fell to -0.94R and the day finished -0.36R.
-# WLD's worst print after TP1 was only -0.18R, so this line would have left it on.
-AFTER_TP_DEEP_R = -0.35
+# After TP1 the exchange stop moves here, and the runner is also cut here.
+# Nine trades still have their 1-minute bars. The worst pullback that finished
+# green was WLD at -0.18R, and that trade ended +0.59R. A stop at the entry
+# would have taken that runner off for about +0.30R. PONS fell to -1.35R after
+# TP1 and finished -0.36R. -0.25R keeps WLD and turns PONS into about +0.12R.
+# On those nine the mean is +0.77R, against +0.75R with the stop left alone.
+AFTER_TP_DEEP_R = -0.25
 # Open profit that never reached a target is still protected. Once the best price
 # is +0.25R, a return to the entry is a giveback and the position is closed.
 # ERA peaked at +0.25R and finished -0.55R. SOL peaked near +0.34R and the recheck
@@ -170,22 +173,18 @@ class Bot:
                 tp["filled_at"] = now_iso()
                 log_event("TP_HIT", trade_id=tid, symbol=sym, side=side, label=tp["label"], price=tp["price"],
                           qty=tp["qty"], reason=f"{tp['label']} ({tp['r']}R) 觸發，部分平倉 {tp['qty']} 張")
-            if newly and S.TP_STOP_MOVES:
-                filled = [i for i, tp in enumerate(tr["tps"]) if tp["filled"]]
-                k = max(filled)
-                if k == 0:
-                    buf = tr.get("be_buffer", 0.0012)
-                    target = tr["entry"] * (1 + buf if side == "LONG" else 1 - buf)
-                    why = "TP1 達成，止損移至保本(含手續費)"
-                else:
-                    target = tr["tps"][k - 1]["price"]
-                    why = f"{tr['tps'][k]['label']} 達成，止損移至 {tr['tps'][k - 1]['label']}"
-                better = target > tr["stop"] if side == "LONG" else target < tr["stop"]
-                if better and not all(tp["filled"] for tp in tr["tps"]):
+            if any(tp.get("filled") and tp.get("label") == "TP1" for tp in tr["tps"]) and not tr.get("exit_reason"):
+                if not tr.get("init_dist"):
+                    mult = float(self.tb.specs()[sym]["multiplier"])
+                    tr["init_dist"] = (tr["risk_usdt"] / (tr["contracts"] * mult) if tr["contracts"]
+                                       else abs(tr["entry"] - tr["stop"]))
+                sgn = 1 if side == "LONG" else -1
+                target = tr["entry"] + sgn * AFTER_TP_DEEP_R * tr["init_dist"]
+                if tr["init_dist"] and (target - tr["stop"]) * sgn > 0 and not all(tp.get("filled") for tp in tr["tps"]):
                     try:
-                        self.replace_stop(tr, target, why)
+                        self.replace_stop(tr, target, "TP1 達成，止損前移到 -0.25R")
                     except ToobitError as e:
-                        log_event("ERROR", trade_id=tid, where="replace_stop", error=str(e))
+                        log_event("ERROR", trade_id=tid, where="tp1_stop", error=str(e))
 
             ref_eq = self.st.get("day_start_equity") or 0
             # A fresh signal that only partly filled is not dust. ALGO long at 19:07
