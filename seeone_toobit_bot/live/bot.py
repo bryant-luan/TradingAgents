@@ -183,7 +183,12 @@ class Bot:
                         log_event("ERROR", trade_id=tid, where="replace_stop", error=str(e))
 
             ref_eq = self.st.get("day_start_equity") or 0
-            if (not tr.get("exit_reason") and not any(tp["filled"] for tp in tr["tps"])
+            # A fresh signal that only partly filled is not dust. ALGO long at 19:07
+            # Taipei on Nov 8 was a qualified review; the maker kept 32,791 of 353,265
+            # contracts and this cleanup flattened it at +0.06R. Price later reached +1R.
+            partial_keep = "保留已成交" in str((tr.get("entry_fill") or {}).get("note") or "")
+            if (not tr.get("exit_reason") and not partial_keep
+                    and not any(tp["filled"] for tp in tr["tps"])
                     and tr["risk_usdt"] < ref_eq * S.MIN_RISK_PCT * 0.5):
                 tr["exit_reason"] = (f"小倉位清理: 風險僅 {tr['risk_usdt']:.2f}u "
                                      f"(< {S.MIN_RISK_PCT:.0%} 權益的一半)，釋出倉位給正常尺寸的單")
