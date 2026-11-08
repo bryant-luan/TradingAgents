@@ -1053,56 +1053,45 @@ class Bot:
                 continue
             if not isinstance(rows, list) or not rows:
                 continue
-            pending = tr.get("reversal_bar")
+            parsed = []
             for bar in rows:
                 try:
-                    o, h, l, c = (float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4]))
-                    opened = int(bar[0])
+                    parsed.append((int(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4])))
                 except (TypeError, ValueError, IndexError):
                     continue
-                closed = opened < now_ms - 15 * 60 * 1000
+            events, pending = S.reversal_plan(side, tr["entry"], tr.get("break_level"), tr.get("mfe_r") or 0,
+                                              parsed, now_ms)
+            tr["reversal_bar"] = pending
+            for ev in events:
                 base = {"trade_id": tr["id"], "symbol": sym, "side": side, "path": tr.get("path"),
-                        "entry": tr["entry"], "mfe_r": tr.get("mfe_r"), "bar_open": opened,
-                        "bar_closed": closed, "o": o, "h": h, "l": l}
-                if pending and opened > pending:
-                    back = S.reversal_back(side, tr["entry"], o, c)
-                    if back is not None:
-                        if tr.get("reversal_back") != opened:
-                            tr["reversal_back"] = opened
-                            log_event("SIGNAL_REVERSAL", decision="back",
-                                      note="訊號再度反轉，價格回到進場價這一側，原方向的倉留著",
-                                      **base, **back)
-                            changed = True
-                        pending = None
-                        continue
-                    if closed and S.reversal_still_against(side, tr["entry"], c) and tr.get("reversal_exit") != opened:
-                        tr["reversal_exit"] = opened
-                        tr["reversal_closing"] = True
-                        why = (f"訊號反轉成立：前一根已到進場價另一側，這根 15 分鐘收盤 {c:.6g} 仍在那一側，平掉剩餘部位")
-                        with self._protect_lock:
-                            if tr.get("exit_reason"):
-                                tr["reversal_closing"] = False
-                                continue
-                            tr["exit_reason"] = why
-                        log_event("SIGNAL_REVERSAL", decision="exit", reason=why,
-                                  note="連續兩根 15 分鐘都在進場價反向，剩餘部位改掛單出場", **base)
-                        changed = True
-                        threading.Thread(target=self._close_reversal, args=(tr,), daemon=True).start()
-                        pending = None
-                        break
-                    continue
-                view = S.reversal_view(side, tr["entry"], tr.get("break_level"), tr.get("mfe_r") or 0,
-                                       o, h, l, c, closed)
-                if view is None:
-                    continue
-                pending = opened
-                if tr.get("reversal_logged") != opened:
+                        "entry": tr["entry"], "mfe_r": tr.get("mfe_r"), "bar_open": ev["opened"],
+                        "bar_closed": ev["closed"], "o": ev["o"], "h": ev["h"], "l": ev["l"]}
+                if ev["decision"] == "record" and tr.get("reversal_logged") != ev["opened"]:
                     log_event("SIGNAL_REVERSAL", decision="record",
                               note="訊號反轉先記下來。下一根 15 分鐘也收在進場價反向才平；轉回來就留倉",
-                              **base, **{k: v for k, v in view.items() if k not in base})
-                    tr["reversal_logged"] = opened
+                              **base, **{k: v for k, v in ev.items() if k not in base and k not in ("decision", "opened", "closed")})
+                    tr["reversal_logged"] = ev["opened"]
                     changed = True
-            tr["reversal_bar"] = pending
+                elif ev["decision"] == "back" and tr.get("reversal_back") != ev["opened"]:
+                    log_event("SIGNAL_REVERSAL", decision="back",
+                              note="訊號再度反轉，價格回到進場價這一側，原方向的倉留著",
+                              **base, **{k: v for k, v in ev.items() if k not in base and k not in ("decision", "opened", "closed")})
+                    tr["reversal_back"] = ev["opened"]
+                    changed = True
+                elif ev["decision"] == "exit" and tr.get("reversal_exit") != ev["opened"]:
+                    tr["reversal_exit"] = ev["opened"]
+                    tr["reversal_closing"] = True
+                    why = (f"訊號反轉成立：前一根已到進場價另一側，這根 15 分鐘收盤 {ev['c']:.6g} 仍在那一側，"
+                           f"而且後面沒有 K 線轉回進場價這一側，平掉剩餘部位")
+                    with self._protect_lock:
+                        if tr.get("exit_reason"):
+                            tr["reversal_closing"] = False
+                            continue
+                        tr["exit_reason"] = why
+                    log_event("SIGNAL_REVERSAL", decision="exit", reason=why,
+                              note="連續兩根 15 分鐘都在進場價反向，後面也沒有轉回，剩餘部位改掛單出場", **base)
+                    changed = True
+                    threading.Thread(target=self._close_reversal, args=(tr,), daemon=True).start()
         if changed:
             save_state(self.st)
 

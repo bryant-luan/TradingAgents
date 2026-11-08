@@ -118,6 +118,11 @@ BREAK_MIN_RANGE_PCT = 0.01
 # bar also finishes on that side of the entry. If the next bar comes back through
 # the entry, with the original trade, the reversal is recorded as failed and the
 # position stays.
+# ONE at 11:32 Taipei on Nov 8 was closed too early. Once the best price passed
+# +1R, the 10:45 close counted as a reversal and 11:00 was still above the entry,
+# so the short was flattened. The 11:15 bar had already closed back through the
+# entry and the short was still on. A later bar back through the entry cancels
+# that exit.
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
@@ -199,6 +204,41 @@ def reversal_still_against(side: str, entry: float, c: float) -> bool:
         return False
     sgn = 1 if side == "LONG" else -1
     return (entry - c) * sgn / entry >= 0
+
+
+def reversal_plan(side: str, entry: float, break_level, mfe_r, bars, now_ms: float):
+    """Walk 15m bars oldest first. Return (events, pending_open_ms).
+
+    ``events`` are ``record``, ``back``, and at most one ``exit``. An exit seen on
+    an older bar is dropped when a later bar has come back through the entry.
+    """
+    pending = None
+    events = []
+    exit_at = None
+    for opened, o, h, l, c in bars:
+        closed = opened + 15 * 60 * 1000 <= now_ms
+        if pending is not None and opened > pending:
+            back = reversal_back(side, entry, o, c)
+            if back is not None:
+                events.append({"decision": "back", "opened": opened, "closed": closed,
+                               "o": o, "h": h, "l": l, "c": c, **back})
+                pending = None
+                exit_at = None
+                continue
+            if closed and reversal_still_against(side, entry, c):
+                exit_at = {"decision": "exit", "opened": opened, "closed": closed,
+                           "o": o, "h": h, "l": l, "c": c}
+            continue
+        view = reversal_view(side, entry, break_level, mfe_r, o, h, l, c, closed)
+        if view is None:
+            continue
+        pending = opened
+        events.append({"decision": "record", "opened": opened, "closed": closed,
+                       "o": o, "h": h, "l": l, "c": c,
+                       **{k: v for k, v in view.items() if k != "bar_closed"}})
+    if exit_at is not None:
+        events.append(exit_at)
+    return events, pending
 
 
 HIGH_BE_TRIGGER_R = 2.0
