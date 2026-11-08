@@ -168,6 +168,24 @@ def public_klines(symbol: str, interval: str, limit: int = 100, end_ms: int | No
     return _bars(rows, mult)
 
 
+def public_names() -> set[str]:
+    """Tradable USDT-M symbols in the bot's BTC-SWAP-USDT form."""
+    try:
+        rows = requests.get(f"{HOST}{PREFIX}/futures/usdt/contracts", timeout=20).json()
+    except (requests.RequestException, ValueError):
+        return set()
+    out = set()
+    if not isinstance(rows, list):
+        return out
+    for contract in rows:
+        name = contract.get("name") or ""
+        if contract.get("status") != "trading" or contract.get("in_delisting"):
+            continue
+        if name.endswith("_USDT") and name.count("_") == 1:
+            out.add(from_gate(name))
+    return out
+
+
 def public_quote_volumes() -> dict[str, float]:
     try:
         rows = requests.get(f"{HOST}{PREFIX}/futures/usdt/tickers", timeout=20).json()

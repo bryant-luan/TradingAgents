@@ -15,6 +15,15 @@ class ToobitError(Exception):
     pass
 
 
+def public_names() -> set[str]:
+    """Tradable USDT-M symbols, for comparing the Gate list without signing in."""
+    try:
+        info = requests.get(f"{BASE}/api/v1/exchangeInfo", timeout=20).json()
+    except (requests.RequestException, ValueError):
+        return set()
+    return {c["symbol"] for c in info.get("contracts", []) if c.get("status") == "TRADING"}
+
+
 class Toobit:
     """Toobit USDT-M perpetual client (v1 REST, hedge mode). Quantities are in contracts."""
 

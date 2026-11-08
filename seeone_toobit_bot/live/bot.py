@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from . import strategy as S
 from .exchange import connect, exchange_name
 from .learner import Learner
-from .market import klines
+from .market import klines, listing
 from .shadow import Shadow
 from .selfsignal import MAJORS, SelfScanner, btc_ret1h, in_side, micro_1h, move_2h, move_before, rsi_side
 from .toobit import ToobitError
@@ -450,8 +450,10 @@ class Bot:
             "break_level": sig.get("broken"),
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": p["regime"],
+            "listing": listing(sym),
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=fill.get("order_ids"),
+                  listing=self.st["trades"][tid]["listing"],
                   tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **p["entry_info"])
         if hasattr(self, "day_room"):
             self.day_room -= self.st["trades"][tid]["risk_usdt"]

@@ -19,7 +19,7 @@ from pathlib import Path
 import requests
 
 from . import strategy as S
-from .market import klines, quote_volumes
+from .market import klines, listing, quote_volumes
 from .localreview import LocalReview
 
 SCAN_EVERY_S = 900          # one analysis-review pass every 15 minutes
@@ -901,8 +901,11 @@ class SelfScanner:
         ]
         ev = {"ok": True, "score": 95.0, "tier": "NORMAL", "reasons": reasons, "factors": {"source:突破": 0.0},
               "skip": None, "cur_r": 0.0, "analysis": {"prob": None, "edge": None, "quality": None, "ev_r": None}}
+        tsym = S.to_toobit(sym)
+        where = listing(tsym)
         self.log("BREAKOUT", symbol=sym, side=side, range_pct=round(span * 100, 2),
-                 broken=broken, price=price, stop=stop, note="備案，掛不到就算")
+                 broken=broken, price=price, stop=stop, listing=where,
+                 note="備案，掛不到就算" + ("。這個幣只在本所" if where == "only" else ""))
         return [{"sig": sig, "ev": ev, "source": "突破"}]
 
     def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
