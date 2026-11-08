@@ -13,6 +13,7 @@ probability threshold, so the filter tightens or loosens based on how well 分�
 import json
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
@@ -770,54 +771,53 @@ class SelfScanner:
         if time.time() - self.last_break < SCAN_EVERY_S:
             return []
         self.last_break = time.time()
-        vols = contract_quote_vol()
-        names = [s for s in (specs or {}) if vols.get(s, 0) >= S.BREAK_MIN_QUOTE]
-        names.sort(key=lambda s: vols.get(s, 0), reverse=True)
-        best = None
         now_ms = time.time() * 1000
-        for tsym in names:
-            if tsym in held:
-                continue
-            seeone = (specs[tsym] or {}).get("seeone")
-            if not seeone:
-                continue
+        names = [(tsym, (spec or {}).get("seeone")) for tsym, spec in (specs or {}).items()
+                 if tsym not in held and (spec or {}).get("seeone")]
+
+        def one(item):
+            tsym, seeone = item
             try:
                 rows = requests.get("https://api.toobit.com/quote/v1/klines",
                                     params={"symbol": tsym, "interval": "15m", "limit": 20}, timeout=10).json()
             except (requests.RequestException, ValueError):
-                continue
+                return None
             if not isinstance(rows, list) or len(rows) < 16:
-                continue
+                return None
             closed = rows[:-1] if int(rows[-1][0]) >= now_ms - 15 * 60 * 1000 else rows
             if len(closed) < 15:
-                continue
+                return None
             bar, prev = closed[-1], closed[-2]
             prior = closed[-14:-2]
             o, h, l, c = (float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4]))
             if o <= 0 or (h - l) / o < S.BREAK_MIN_RANGE_PCT:
-                continue
+                return None
             hi, lo = max(float(x[2]) for x in prior), min(float(x[3]) for x in prior)
             prev_c = float(prev[4])
-            side = None
-            broken = None
+            side = broken = None
             if c < lo and prev_c >= lo:
                 side, broken = "SHORT", lo
             elif c > hi and prev_c <= hi:
                 side, broken = "LONG", hi
             if side is None:
-                continue
+                return None
             atr_v = sum(max(float(x[2]) - float(x[3]), abs(float(x[2]) - float(p[4])), abs(float(x[3]) - float(p[4])))
                         for p, x in zip(closed[-15:-1], closed[-14:])) / 14
             sgn = 1 if side == "LONG" else -1
             dist = max(abs(c - broken), ATR_MULT * atr_v, MIN_STOP_PCT * c)
             if dist / c > MAX_STOP_PCT:
-                continue
+                return None
             start = float(closed[-9][1])
             if start <= 0 or (c - start) * sgn / dist >= S.MAX_EXT_R:
-                continue
-            span = (h - l) / o
-            if best is None or span > best[0]:
-                best = (span, seeone, side, c, dist, bar, broken)
+                return None
+            return ((h - l) / o, seeone, side, c, dist, bar, broken)
+
+        best = None
+        with ThreadPoolExecutor(16) as pool:
+            for hit in pool.map(one, names):
+                if hit and (best is None or hit[0] > best[0]):
+                    best = hit
+        self.log("BREAKOUT_SCAN", checked=len(names), found=None if best is None else best[1])
         if best is None:
             self.log("BREAKOUT", found=None, note="這一輪沒有剛收在 3 小時區間外的 15 分鐘 K 線")
             return []
