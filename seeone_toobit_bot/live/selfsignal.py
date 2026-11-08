@@ -813,12 +813,15 @@ class SelfScanner:
             return ((h - l) / o, seeone, side, c, dist, bar, broken)
 
         best = None
-        htf_skipped = 0
+        htf_skipped = long_skipped = 0
         with ThreadPoolExecutor(16) as pool:
             for hit in pool.map(one, names):
                 if not hit:
                     continue
                 side = hit[2]
+                if not S.BREAK_LONGS and side == "LONG":
+                    long_skipped += 1
+                    continue
                 sgn = 1 if side == "LONG" else -1
                 if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
                     htf_skipped += 1
@@ -826,7 +829,7 @@ class SelfScanner:
                 if best is None or hit[0] > best[0]:
                     best = hit
         self.log("BREAKOUT_SCAN", checked=len(names), htf_skipped=htf_skipped,
-                 found=None if best is None else best[1])
+                 long_skipped=long_skipped, found=None if best is None else best[1])
         if best is None:
             self.log("BREAKOUT", found=None, note="這一輪沒有剛收在 3 小時區間外的 15 分鐘 K 線")
             return []

@@ -114,8 +114,12 @@ MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop 
 # on Nov 8 was opened and closed two seconds later, -0.31R, with the higher
 # timeframe at +0.95. BMT long the same hour was with the higher timeframe.
 # Its break failed, and the two-bar reversal exit cut it at -0.18R while price
-# went on to about -0.76R. That exit stays.
+# went on to about -0.76R. ERA long at 13:16 the same day filled at 0.07732,
+# above the break close, and the same exit cut it at 0.07631, -0.55R. Price
+# then went to about -0.81R. Both long breaks failed and kept falling, so new
+# breakout entries are short only. The two-bar exit stays for a long already open.
 BREAK_MIN_RANGE_PCT = 0.01
+BREAK_LONGS = False
 # Signal reversal, from the 11:00 Taipei bars on Nov 8, and the 11:15 bar that
 # reversed again. AKE closed +6.6% back through the short, then the next bar was
 # already -3.4% and back through the entry. WLD closed +0.54% through the entry,

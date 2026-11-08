@@ -929,6 +929,9 @@ class Bot:
                 self.note_skip(sig, "ONE 這筆提前平倉後不接回，改開其他幣")
                 continue
             if sig.get("breakout"):
+                if not S.BREAK_LONGS and sig["side"] == "LONG":
+                    self.note_skip(sig, "突破做多先停。BMT 平在 -0.18R、ERA 平在 -0.55R，之後價格還在跌")
+                    continue
                 if htf is not None and htf * sgn < S.HTF_MIN_DEFAULT:
                     self.note_skip(sig, f"突破備案與 1h/4h 相反（順方向 {htf * sgn:+.2f} < {S.HTF_MIN_DEFAULT}），"
                                         f"開倉後會被立刻平掉，不開")
