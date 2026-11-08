@@ -54,6 +54,9 @@ AFTER_TP_DEEP_R = -0.35
 # is +0.25R, a return to the entry is a giveback and the position is closed.
 # ERA peaked at +0.25R and finished -0.55R. SOL peaked near +0.34R and the recheck
 # closed it at -0.72R. Neither had filled a target.
+# Not on the entry bar. ARIA short at 17:49 Taipei on Nov 8 reached +0.42R and
+# tagged the entry again inside that same 15-minute bar; scratching it there
+# locked -0.01R while the bar's low was still the open profit.
 GIVEBACK_ARM_R = 0.25
 GIVEBACK_EXIT_R = 0.0
 # A normal cycle with several maker entries/exits stays well under this.
@@ -246,7 +249,8 @@ class Bot:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
         elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
-        elif tr.get("mfe_r", 0) >= GIVEBACK_ARM_R and cur_r <= GIVEBACK_EXIT_R:
+        elif (tr.get("mfe_r", 0) >= GIVEBACK_ARM_R and cur_r <= GIVEBACK_EXIT_R
+              and time.time() >= (int(tr["opened_ts"]) // 900) * 900 + 900):
             tr["exit_reason"] = (f"最高浮盈曾到 {tr['mfe_r']:+.2f}R，現在回到 {cur_r:+.2f}R，獲利吐回進場價，平倉")
         elif cur_r <= (AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R):
             line = AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R
