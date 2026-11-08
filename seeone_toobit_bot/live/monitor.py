@@ -64,6 +64,9 @@ def pids(pattern: str) -> list[int]:
 class Monitor:
     def __init__(self):
         load_dotenv(ROOT / ".env")
+        if os.environ.get("EXCHANGE", "").strip().lower() in ("gate", "gateio", "gate.io"):
+            load_dotenv(ROOT / ".env.gate", override=True)
+            os.environ["EXCHANGE"] = "gate"
         use_venue(exchange_name())
         MON_LOG.parent.mkdir(parents=True, exist_ok=True)
         self.tb = connect()
