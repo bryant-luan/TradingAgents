@@ -1116,7 +1116,7 @@ class SelfScanner:
         self.save()
         self._write_align()
         self.log("SELF_SCAN", reviewed_symbols=reviewed, shadow=shadowed, seeone_open=seeone_open,
-                 universe=len(by_symbol),
+                 universe=len(by_symbol), tradable_contracts=len(specs or {}),
                  tradefi=sum(1 for c in by_symbol.values() if "TradFi" in c["tags"]),
                  watched=[(w["symbol"], w["side"], w["prob"], w["edge"]) for w in watched],
                  qualified=[(f["sig"]["symbol"], f["sig"]["side"], f["ev"]["score"], f["ev"]["analysis"]["edge"]) for f in found],

@@ -908,6 +908,8 @@ class Bot:
         rhits = S.recipe_hits(self.so.recipes())
         pexp = S.path_expectancy(signals, self.st["closed"])
         specs = self.tb.specs()
+        # Each venue publishes its own contract list. A coin listed only on the other exchange is not traded here.
+        self.st["tradable_contracts"] = len(specs)
         held_syms = {s for s, _ in positions} | {t["tsym"] for t in self.st["trades"].values()}
 
         cands = [(s, "官方訊號") for s in signals if s.get("status") == "ACTIVE"]
@@ -1233,7 +1235,12 @@ class Bot:
             log_event("ERROR", where="seeone_startup", error=repr(e)[:200])
         self.last_history = time.time()
         self.shadow.optimize(force=True)
-        log_event("START", dry_run=self.dry, exchange=self.tb.name,
+        try:
+            tradable = len(self.tb.specs())
+        except Exception:
+            tradable = None
+        self.st["tradable_contracts"] = tradable
+        log_event("START", dry_run=self.dry, exchange=self.tb.name, tradable_contracts=tradable,
                   seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
                   daily_stop_pct=S.DAILY_STOP_PCT, lock_ladder=S.LOCK_LADDER, trail_gap_r=S.TRAIL_GAP_R,

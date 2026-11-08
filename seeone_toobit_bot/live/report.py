@@ -127,7 +127,16 @@ def btc_trend(venue: str) -> str:
     return "  ".join(parts)
 
 
-def report_venue(name: str, hours: float | None, now: datetime):
+def contract_book(name: str) -> set[str]:
+    """Symbols this venue can actually trade. The other venue's list is not a substitute."""
+    os.environ["EXCHANGE"] = name
+    try:
+        return set(connect().specs())
+    except Exception:
+        return set()
+
+
+def report_venue(name: str, hours: float | None, now: datetime, book: set[str]):
     cfg = VENUES[name]
     mark = json.loads(cfg["mark"].read_text()) if cfg["mark"].exists() else {}
     since_dt = now - timedelta(hours=hours) if hours else (
@@ -163,6 +172,8 @@ def report_venue(name: str, hours: float | None, now: datetime):
         day = f"，今日 {equity - day0:+.2f}u ({(equity - day0) / day0:+.1%})" if day0 else ""
         print(f"帳戶: 權益 {equity:.2f}u (餘額 {float(bal['balance']):.2f} + 未實現 {upnl:+.2f}){day}"
               f"{'，已鎖利' if st.get('day_lock_armed') else ''}")
+    if book:
+        print(f"可交易合約: {len(book)}。只交易本所有的幣，另一所多出來的不下單。")
 
     print(f"持倉 ({len(pos)}):")
     for t in st["trades"].values():
@@ -237,8 +248,14 @@ def main():
     if not names:
         names = list(VENUES)
     now = datetime.now(timezone.utc)
+    books = {name: contract_book(name) for name in VENUES}
+    if "toobit" in names and "gate" in names and books["toobit"] and books["gate"]:
+        a, b = books["toobit"], books["gate"]
+        print(f"合約清單不同：Toobit {len(a)}、Gate {len(b)}，兩邊都有 {len(a & b)}，"
+              f"只在 Toobit {len(a - b)}，只在 Gate {len(b - a)}。")
+        print()
     for name in names:
-        report_venue(name, hours, now)
+        report_venue(name, hours, now, books.get(name) or set())
 
 
 if __name__ == "__main__":
