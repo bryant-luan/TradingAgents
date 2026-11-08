@@ -229,16 +229,23 @@ def reversal_still_against(side: str, entry: float, c: float) -> bool:
     return (entry - c) * sgn / entry >= 0
 
 
-def reversal_plan(side: str, entry: float, break_level, mfe_r, bars, now_ms: float):
+def reversal_plan(side: str, entry: float, break_level, mfe_r, bars, now_ms: float,
+                  opened_ts_ms: float | None = None):
     """Walk 15m bars oldest first. Return (events, pending_open_ms).
 
     ``events`` are ``record``, ``back``, and at most one ``exit``. An exit seen on
     an older bar is dropped when a later bar has come back through the entry.
+    Bars that finished before the position existed are ignored. IDOL short at
+    19:26 Taipei on Nov 8 filled at 0.030787, below the bars that had just closed
+    higher. Those earlier closes were treated as a reversal and the short was
+    out 30 seconds later, -0.13R, while the breakdown bar was still forming.
     """
     pending = None
     events = []
     exit_at = None
     for opened, o, h, l, c in bars:
+        if opened_ts_ms is not None and opened + 15 * 60 * 1000 <= opened_ts_ms:
+            continue
         closed = opened + 15 * 60 * 1000 <= now_ms
         if pending is not None and opened > pending:
             back = reversal_back(side, entry, o, c)

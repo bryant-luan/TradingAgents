@@ -1091,7 +1091,7 @@ class Bot:
                 except (TypeError, ValueError, IndexError):
                     continue
             events, pending = S.reversal_plan(side, tr["entry"], tr.get("break_level"), tr.get("mfe_r") or 0,
-                                              parsed, now_ms)
+                                              parsed, now_ms, tr["opened_ts"] * 1000)
             tr["reversal_bar"] = pending
             for ev in events:
                 base = {"trade_id": tr["id"], "symbol": sym, "side": side, "path": tr.get("path"),
