@@ -128,6 +128,20 @@ BREAK_LONG_MIN_RANGE = 0.06
 BREAK_LONG_DROP = 0.02
 
 
+def break_half_retrace(side: str, broken: float, close: float, price: float) -> bool:
+    """True when price has already given back half of the close-to-level break.
+
+    EDGEX short at 19:11 Taipei on Nov 8: the bar closed 0.333 through 0.3362,
+    but the fill was 0.3346, halfway back to that level. It is now about -0.51R.
+    IDOL filled at 0.030787, through the 0.031295 close, so it was still in the break.
+    """
+    gap = (broken - close) if side == "SHORT" else (close - broken)
+    if gap <= 0:
+        return False
+    back = (price - close) if side == "SHORT" else (close - price)
+    return back > 0 and back / gap >= 0.5
+
+
 def long_after_red(range_pct: float, close_4h_ago: float, prev_close: float) -> bool:
     """A long break only after a 4-hour drop and a green bar of at least 6%."""
     if range_pct < BREAK_LONG_MIN_RANGE or close_4h_ago <= 0:

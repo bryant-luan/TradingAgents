@@ -520,6 +520,8 @@ class Bot:
         risk = abs(entry - stop)
         cur_r = (px - entry) / risk * (1 if side == "LONG" else -1) if risk else 0
         away = px > stop * 1.001 if side == "LONG" else px < stop * 0.999
+        if sig.get("broken") is not None and S.break_half_retrace(side, float(sig["broken"]), entry, px):
+            return False
         return away and cur_r <= self.learner.p["entry_r_window"][1]
 
     def maker_entry(self, sym: str, side: str, contracts: int, stop: float, sig: dict, spec: dict) -> dict:
@@ -958,6 +960,11 @@ class Bot:
                                         f"開倉後會被立刻平掉，不開")
                     continue
                 try:
+                    if sig.get("broken") is not None and S.break_half_retrace(
+                            sig["side"], float(sig["broken"]), float(sig["entry_price"]),
+                            self.tb.price(S.to_toobit(sig["symbol"]))):
+                        self.note_skip(sig, "突破後價格已收回區間一半以上，不追這根回檔")
+                        continue
                     self.open_trade(sig, ev, src, reg, size_eq)
                 except ToobitError as e:
                     self.st["traded_ids"].append(sig["id"])
