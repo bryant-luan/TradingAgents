@@ -27,11 +27,8 @@ MIN_STOP_PCT = 0.008
 MAX_STOP_PCT = 0.06
 TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
 DEFAULT_MIN_PROB = 60.0          # de-biased probability of TP1 before SL
-# With one side reviewed, edge is exactly 2*prob - 100, so a floor of 25 silently
-# required 62.5% probability. Inside the live price gates the trades under that
-# floor won 81% at +0.95R (161 rows); the trades at or above it won 65% at +0.42R.
-# The favored side is still required (edge >= 0). A wider gap is not.
-MIN_EDGE = 0.0
+# ELSA/AIO review: the chosen side must lead the other by 25 points.
+MIN_EDGE = 25.0
 # The review finds several names. Trying only the top three dropped XRP and RUNE on
 # 11-08 06:10 Taipei after the higher-scoring names could not be sized. One same-side
 # gap still allows a single new position.
@@ -49,10 +46,7 @@ RANGE_BARS = 12                  # 3h of closed 15m bars for the entry range pos
 BTC_COUNTER_ATR = 2.0            # BTC off its 2h extreme against the trade by this many ATRs = market turning
 EXT_TAG_R = 2.0
 MIN_QUALITY = 60.0
-# The replay book never used this hurdle. A floor of +0.20R blocked XRP on 11-08 05:55
-# Taipei: probability 54%, quality 78, expectancy +0.14R, and every price gate passed.
-# Negative expectancy after fees still does not enter.
-MIN_EV_R = 0.0
+MIN_EV_R = 0.20
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 RECHECK_OPEN_S = 900
@@ -623,7 +617,7 @@ class SelfScanner:
         atr_v, rows = a
         price = self.tb.price(tsym)
         dist = max(ATR_MULT * atr_v, MIN_STOP_PCT * price)
-        if dist / price > MAX_STOP_PCT or dist / price >= S.ENTRY_MAX_STOP_PCT:
+        if dist / price > MAX_STOP_PCT:
             return None
         sgn = 1 if side == "LONG" else -1
         move = (price - float(rows[-EXT_BARS][1])) / dist
@@ -729,7 +723,6 @@ class SelfScanner:
                 sides.append((side, band))
         if not sides:
             return []
-        qv = contract_quote_vol() if any(band == "strong_short" for _, band in sides) else {}
         btc = (self.btc or {}).get("ret1h")
         ranked = []
         looked = 0
@@ -742,26 +735,15 @@ class SelfScanner:
             looked += 1
             try:
                 pl = self.plan(tsym, "LONG")
-                atr_ratio, _ret, _vol, _qv, px15 = micro_1h(tsym)
             except Exception:
                 continue
             if not pl or pl.get("rpos") is None:
                 continue
             best = None
-            for side, band in sides:
+            for side, _band in sides:
                 sgn = 1 if side == "LONG" else -1
                 rp = pl["rpos"] if side == "LONG" else 1 - pl["rpos"]
                 if rp > S.MAX_RANGE_POS:
-                    continue
-                if band == "strong_short" and qv.get(tsym, 0) < S.QUOTE_VOL_MIN_DEFAULT:
-                    continue
-                # A name the price gates will refuse should not spend a See One call.
-                # ETH on 11-08 passed the review and then died on an expanded 1h range.
-                if atr_ratio is not None and side == "LONG" and atr_ratio < S.ATR_RATIO_MIN_DEFAULT:
-                    continue
-                if atr_ratio is not None and side == "SHORT" and atr_ratio >= S.ATR_RATIO_MAX_SHORT:
-                    continue
-                if px15 is not None and px15 * sgn < S.PX15_DIR_MIN_DEFAULT:
                     continue
                 htf_dir = None if htf is None else htf * sgn
                 btc_dir = None if btc is None else btc * sgn
@@ -893,7 +875,7 @@ class SelfScanner:
                     if m15 is None:
                         return True
                     sgn = 1 if sd == "LONG" else -1
-                    return S.M15_MIN_DEFAULT <= m15 * sgn < S.M15_MAX_DEFAULT
+                    return m15 * sgn < S.M15_MAX_DEFAULT
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.direc_window(direc, sd) is not None and m15_ok(sd)]
@@ -1198,8 +1180,7 @@ class SelfScanner:
         if aux:
             reasons.append(f"空頭預備輔助（不決定進場）: 近15分鐘漲跌 {px15:+.2f}%，分數 {aux:+d}")
         if c.get("strong_liquid_short"):
-            reasons.append(f"流動強勢空：1h/4h 順方向 {S.HTF_STRONG_SHORT_LO:.1f}–{S.HTF_STRONG_SHORT_HI:.1f}，"
-                           f"且 24h 成交額須達 {S.QUOTE_VOL_MIN_DEFAULT / 1e6:.0f} 百萬")
+            reasons.append("流動強勢空：這條路徑目前不開新倉")
         if c.get("fade_entry"):
             reasons.append("逆勢帶：1h/4h 略微相反，其餘條件與核心相同。這一段回放勝率與平均 R 都在核心之上")
         if high:

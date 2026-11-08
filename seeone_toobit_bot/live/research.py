@@ -54,21 +54,14 @@ def _htf_blocked(f: dict) -> bool:
 
 
 LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "the live filter would skip it")
-    "大週期不在核心、也不是流動強勢空": ("2026-11-07T22:00:00+00:00",
-                                      lambda f: _htf_blocked(f)),
-    "BTC 1h 不在允許範圍": ("2026-11-07T22:00:00+00:00",
-                         lambda f: f["btc1h_dir_pct"] is not None and not S.btc_dir_ok(
-                             f["btc1h_dir_pct"], "LONG" if f.get("side_long") else "SHORT")),
-    "波動比：多 < 0.8 / 空 ≥ 1.29": ("2026-11-07T07:00:00+00:00",
-                                  lambda f: f["atr_ratio"] is not None and (f["atr_ratio"] < S.ATR_RATIO_MIN_DEFAULT if f.get("side_long") else f["atr_ratio"] >= S.ATR_RATIO_MAX_SHORT)),
-    "近 15m 漲跌 (方向) < -0.484": ("2026-11-06T10:30:00+00:00",
-                                   lambda f: f.get("px15_dir_pct") is not None and f["px15_dir_pct"] < S.PX15_DIR_MIN_DEFAULT),
-    "3h 區間位置 ≥ 0.45": ("2026-11-06T05:00:00+00:00",
-                          lambda f: f["rpos"] is not None and f["rpos"] >= S.MAX_RANGE_POS),
-    "止損距離 ≥ 1.8%": ("2026-11-07T22:30:00+00:00",
-                     lambda f: f.get("stop_pct") is not None and f["stop_pct"] >= S.ENTRY_MAX_STOP_PCT * 100),
-    "15m 順方向 < -0.5": ("2026-11-07T23:55:00+00:00",
-                        lambda f: f.get("m15") is not None and f["m15"] < S.M15_MIN_DEFAULT),
+    "大週期不在 -0.5～1.5": ("2026-11-08T00:40:00+00:00", lambda f: _htf_blocked(f)),
+    "BTC 1h 順方向 < 0": ("2026-11-08T00:40:00+00:00",
+                        lambda f: f["btc1h_dir_pct"] is not None and not S.btc_dir_ok(
+                            f["btc1h_dir_pct"], "LONG" if f.get("side_long") else "SHORT")),
+    "3h 區間位置 > 1.05": ("2026-11-08T00:40:00+00:00",
+                         lambda f: f["rpos"] is not None and f["rpos"] > S.MAX_RANGE_POS),
+    "15m 順方向 ≥ 2.5": ("2026-11-05T07:24:00+00:00",
+                      lambda f: f.get("m15") is not None and f["m15"] >= S.M15_MAX_DEFAULT),
 }
 # Features already gated live (BTC 4h measured redundant with BTC 1h inside the live gates).
 LIVE_FEATURES = {"htf", "btc1h_dir_pct", "m15", "rpos", "prob", "rsi15_dir", "atr_ratio", "rs1h_vs_btc",
@@ -109,22 +102,9 @@ def records() -> list:
     htf_min = learned.get("htf_min", S.HTF_MIN_DEFAULT)
     rpos_max = learned.get("range_pos_max", S.MAX_RANGE_POS)
     res = json.loads((LOGS / "self_calib.json").read_text())["resolved"]
-    # The cap, the floor, and the RSI floor stay open so the fade bands can be measured.
-    # A row below the core floor is kept only when it sits in a live fade band.
-    def htf_kept(r) -> bool:
-        h = r.get("htf")
-        if h is None or h >= htf_min:
-            return True
-        side = r.get("side")
-        if side == "LONG":
-            return S.HTF_FADE_LONG[0] <= h < S.HTF_FADE_LONG[1]
-        if side == "SHORT":
-            return S.HTF_FADE_SHORT[0] <= h < S.HTF_FADE_SHORT[1]
-        return False
-
     g = sorted((r for r in res if r["prob"] >= MIN_PROB
                 and (r.get("m15") is None or r["m15"] <= m15_max)
-                and htf_kept(r)
+                and (r.get("htf") is None or r["htf"] >= htf_min)
                 and (r.get("rpos") is None or r["rpos"] <= rpos_max)), key=lambda r: r["ts"])
     last, out = {}, []
     for r in g:

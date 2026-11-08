@@ -309,11 +309,6 @@ class Bot:
         spec = self.tb.specs()[sym]
         price = self.tb.price(sym)
         stop = float(sig["stop_price"])
-        sl_pct = abs(price - stop) / price if price else 0
-        if sl_pct >= S.ENTRY_MAX_STOP_PCT:
-            self.note_skip(sig, f"止損距離 {sl_pct:.1%} 過寬 (≥ {S.ENTRY_MAX_STOP_PCT:.1%})。"
-                                f"這一段回放勝率約 49%、後半轉負，等止損收回 1.8% 以內再進")
-            return False
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):
             self.note_skip(sig, f"現價 {price} 已貼近/穿越止損 {stop}")
             return False
@@ -911,7 +906,7 @@ class Bot:
             btc1h = btc_ret1h()
         except Exception:
             btc1h = None
-        moves, micros = {}, {}
+        moves = {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if self._margin_full(size_eq):
                 break
@@ -932,63 +927,20 @@ class Bot:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                     f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
-            if m15 * sgn < S.M15_MIN_DEFAULT:
-                self.note_skip(sig, f"See One 15m 方向 {m15:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
-                                    f"(順方向 {m15 * sgn:+.1f} < {S.M15_MIN_DEFAULT:+.1f})，短線已經反過來，等轉回再進")
+            if htf is not None and htf * sgn < htf_min:
+                self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
+                                    f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
                 continue
-            quiet = sig.get("quiet_strong_short") or sig.get("quiet_strong_long")
-            direc = None if htf is None else htf * sgn
-            band = S.direc_window(direc, sig["side"], htf_min, htf_max)
-            # The extra bands are only for our own reviews. An official signal there
-            # has not been measured, so it still stops at the core window.
-            strong = band == "strong_short" and src == SELF_SOURCE and sig.get("strong_liquid_short")
-            fade = band in ("fade_long", "fade_short") and src == SELF_SOURCE and sig.get("fade_entry")
-            if htf is not None and not strong and not fade and band != "core" and not (quiet and htf * sgn < 2.5):
-                if band in ("strong_short", "fade_long", "fade_short"):
-                    why = "這一段只開放給自選驗算"
-                else:
-                    why = "這一段沒有正期望"
-                self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f}，{'做多' if sgn > 0 else '做空'}順方向 {direc:+.1f} "
-                                    f"不在可進場區間（核心 {htf_min:+.1f}～{htf_max:+.1f}，"
-                                    f"逆勢多 {S.HTF_FADE_LONG[0]:.1f}～{S.HTF_FADE_LONG[1]:.1f}，"
-                                    f"逆勢空 {S.HTF_FADE_SHORT[0]:.1f}～{S.HTF_FADE_SHORT[1]:.1f}，"
-                                    f"流動空 {S.HTF_STRONG_SHORT_LO:.1f}～{S.HTF_STRONG_SHORT_HI:.1f}），{why}，不進")
+            if htf is not None and htf * sgn >= htf_max:
+                self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
+                                    f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
                 continue
             aligned = None if btc1h is None else btc1h * sgn
-            if not strong and not sig.get("quiet_strong_short") and not S.btc_dir_ok(aligned, sig["side"]):
+            if not S.btc_dir_ok(aligned, sig["side"]):
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
-                                    f"(順方向 {aligned:+.2f}%；做空允許 ≥ {S.BTC1H_MIN_SHORT:+.2f}%，"
-                                    f"或 {S.BTC1H_SHORT_POCKET[0]:+.2f}%～{S.BTC1H_SHORT_POCKET[1]:+.2f}%)，等大盤同向再進")
+                                    f"(順方向 {aligned:+.2f}% < {S.BTC1H_MIN_DEFAULT:+.2f}%)，等大盤同向再進")
                 continue
             tsym = S.to_toobit(sig["symbol"])
-            if tsym not in micros:
-                try:
-                    micros[tsym] = micro_1h(tsym)
-                except Exception:
-                    micros[tsym] = (None, None, None, None, None)
-            atr_ratio, _ret1h, _vol_ratio, quote_vol, px15 = micros[tsym]
-            if strong and (quote_vol is None or quote_vol < S.QUOTE_VOL_MIN_DEFAULT):
-                shown = 0.0 if quote_vol is None else quote_vol / 1e6
-                self.note_skip(sig, f"{sig['symbol']} 24h 成交額 {shown:.0f} 百萬 < {S.QUOTE_VOL_MIN_DEFAULT / 1e6:.0f} 百萬。"
-                                    f"大週期已在 {S.HTF_STRONG_SHORT_LO:.1f}–{S.HTF_STRONG_SHORT_HI:.1f} 的空單帶，"
-                                    f"成交額不到這條線的回放是虧的，不進")
-                continue
-            atr_min = self.learner.p.get("atr_ratio_min", S.ATR_RATIO_MIN_DEFAULT)
-            if sgn > 0 and atr_ratio is not None and atr_ratio < atr_min:
-                self.note_skip(sig, f"{sig['symbol']} 近 1 小時平均波幅只有約 25 小時的 {atr_ratio:.2f} 倍 "
-                                    f"(< {atr_min:.2f})，做多在盤整段期望值差，等波動回到常態再進")
-                continue
-            if sgn < 0 and atr_ratio is not None and atr_ratio >= S.ATR_RATIO_MAX_SHORT:
-                self.note_skip(sig, f"{sig['symbol']} 近 1 小時平均波幅已是約 25 小時的 {atr_ratio:.2f} 倍 "
-                                    f"(≥ {S.ATR_RATIO_MAX_SHORT:.2f})，做空在波動已放大時期望值差，等收斂再進")
-                continue
-            # Volume, 24h quote volume, and relative strength vs BTC stay off this path.
-            # Inside the ELSA window they removed trades that were still positive (11-07 replay).
-            px15_min = self.learner.p.get("px15_dir_min", S.PX15_DIR_MIN_DEFAULT)
-            if px15 is not None and px15 * sgn < px15_min:
-                self.note_skip(sig, f"{sig['symbol']} 近 15 分鐘順方向 {px15 * sgn:+.2f}% "
-                                    f"(< {px15_min:.3f}%)，短線已逆著要進的方向走，等轉回再進")
-                continue
             if tsym not in moves:
                 try:
                     moves[tsym] = move_2h(tsym)
@@ -1002,12 +954,9 @@ class Bot:
                 continue
             self.ext = mv["r"] * sgn if mv else None
             self.rpos = in_side(mv["rpos"], sig["side"]) if mv and mv.get("rpos") is not None else None
-            rpos_max = min(self.learner.p.get("range_pos_max", S.MAX_RANGE_POS), S.MAX_RANGE_POS)
-            if self.rpos is not None and self.rpos > rpos_max:
-                where = "靠近低點" if sgn > 0 else "靠近高點"
-                self.note_skip(sig, f"{sig['symbol']} 近 3 小時區間位置 {self.rpos:.2f}（上限 {rpos_max:.2f}）。"
-                                    f"{'做多' if sgn > 0 else '做空'}只在{where}反轉進場，"
-                                    f"現價已離開這一段，不追")
+            if self.rpos is not None and self.rpos > S.MAX_RANGE_POS:
+                self.note_skip(sig, f"{sig['symbol']} 現價已超出近 3 小時{'高點' if sgn > 0 else '低點'} "
+                                    f"(區間位置 {self.rpos:.2f} > {S.MAX_RANGE_POS:.2f})，追在突破延伸段，等回到區間內再進")
                 continue
             self.rsi = rsi = rsi_side(mv.get("rsi"), sig["side"]) if mv else None
             rsi_min = self.learner.p.get("rsi_min", S.RSI_MIN_DEFAULT)

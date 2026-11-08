@@ -1,9 +1,10 @@
 """Score live trades opened under the current entry rules against the replay baseline.
 
-The baseline is the 167-row replay of the rules loaded at 2026-11-08 07:55 Taipei.
-The 15m score in the trade's direction must be at least -0.5, and the stop
-under 1.8%. Win rate 89.2%, mean +1.15R. A 15m score below -0.5 is already
-against the trade; that band was 34 rows at 79% and +0.86R.
+The baseline is the ELSA/AIO entry set loaded at 2026-11-08 08:40 Taipei:
+1h/4h direction in [-0.5, 1.5), BTC's last hour not against the trade,
+15m score under 2.5, and 3h range position at or under 1.05.
+On the resolved reviews that set is 704 rows, win rate 57.7%, mean +0.31R.
+The review still requires a 25-point edge, quality 60, and +0.20R after fees.
 
 Keep the rules while a live sample is still small, or while both win rate and mean R
 are at least that baseline. If five or more trades have closed and either number is
@@ -15,9 +16,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TRADES = ROOT / "logs" / "trades" / "live_trades.jsonl"
 
-RULE_SINCE = "2026-11-07T23:55:00+00:00"
-BASE_WIN = 0.892
-BASE_R = 1.152
+RULE_SINCE = "2026-11-08T00:40:00+00:00"
+BASE_WIN = 0.577
+BASE_R = 0.313
 MIN_CLOSED = 5
 
 

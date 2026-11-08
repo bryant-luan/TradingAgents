@@ -69,41 +69,15 @@ HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
-# Floor on that same score. Below -0.5 the 15m is already against the trade
-# (XRP short on 11-08 was +0.7 raw, so -0.7 in the short's direction).
-# That band was 34 trades, 79% wins, +0.86R. The rest was 167 trades,
-# 89% wins, +1.15R, both halves above 88% (11-08 replay).
-M15_MIN_DEFAULT = -0.5
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
-# Cap on the 1h/4h direction in the trade's direction. 1.8 still keeps the core book
-# near 78% wins. The next sliver, 1.8 to 2.0, won 40% and about 0R, so it stays shut.
-# Shorts from 2.0 to 2.5 are a separate band: with 24h quote volume at or above the
-# floor and the 3h extreme, 19 reviews won 79% and +0.53R, both halves positive.
-HTF_MAX_DEFAULT = 1.8
-HTF_STRONG_SHORT_LO = 2.0
-HTF_STRONG_SHORT_HI = 2.5
-# Mildly against the 1h/4h, with the other gates still on. Longs in [-0.8, -0.5) were
-# 31 trades, 77% wins, +0.98R. Shorts in [-1.5, -0.5) were 23 trades, 83% wins, +1.18R.
-# Both halves positive. Added to the book: 281 trades, 78.6% wins, +0.87R (11-08 replay).
-HTF_FADE_LONG = (-0.8, -0.5)
-HTF_FADE_SHORT = (-1.5, -0.5)
+# ELSA/AIO entries used this cap. Later bands (1.8, fade, liquid 2.0–2.5) are not entry gates.
+HTF_MAX_DEFAULT = 1.5
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
-# 3h range position in the trade's direction: 0 = at the reversal extreme (long at the low,
-# short at the high), 1 = at the other extreme. Replays through 11-06 12:00 Taipei: entries at
-# or above 0.45 averaged about -0.23R in both halves and on both sides; entries below 0.45
-# averaged about +0.06R, and the shorts in that zone (shorting the high) about +0.31R.
-# Locked here. The old 1.05 cap only blocked prices already outside the range.
-MAX_RANGE_POS = 0.45
+# ELSA/AIO: only block a price already outside the 3h range. 0 = reversal extreme, 1 = the other side.
+MAX_RANGE_POS = 1.05
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
-# Floor on BTC's last-hour move in the trade's direction, percent.
-# Longs stay at 0. Shorts may be 0.08% against BTC. There is also a pocket from
-# -0.30% to -0.15%: 24 shorts, 83% wins, +0.74R, both halves positive. The gap
-# between -0.15% and -0.08% was three losers, so it stays closed. Adding the pocket
-# lifts the core book to 208 trades, 78.4% wins, +0.84R (11-08 replay).
-BTC1H_MIN_LONG = 0.0
-BTC1H_MIN_SHORT = -0.08
-BTC1H_SHORT_POCKET = (-0.30, -0.15)
+# ELSA/AIO: BTC's last hour must not be against the trade, both sides.
 BTC1H_MIN_DEFAULT = 0.0
 # Last-hour average bar range vs the ~25h average, on 5m bars.
 # Longs under 0.8 averaged -0.46R, both halves negative. The same low-range shorts averaged +0.26R,
@@ -142,10 +116,6 @@ QUIET_MAX_SAME_SIDE = 3
 QUIET_ENTRIES = False
 SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
-# Inside the live gates, stops of 1.8% or more won 49% and +0.18R, and the later
-# half was negative. Stops under 1.8% won 87% at +1.10R, both halves above 86%.
-# The 0.8% stops the account can size sit in that better band (94.7%, +1.29R).
-ENTRY_MAX_STOP_PCT = 0.018
 MAKER_FEE, TAKER_FEE = 0.0002, 0.0006
 MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more than this fraction of 1R
 
@@ -185,11 +155,9 @@ def htf_score(dirs: dict) -> float | None:
 
 def direc_window(direc: float | None, side: str, htf_min: float | None = None,
                  htf_max: float | None = None) -> str | None:
-    """Which entry band this side is in. `direc` is the 1h/4h score in the trade's direction.
+    """ELSA/AIO window. `direc` is the 1h/4h score in the trade's direction.
 
-    'core' is the main window. 'strong_short' is the liquid-short band above it.
-    'fade_long' and 'fade_short' are the mildly-against bands that still won.
-    None means this side is not reviewed and not opened.
+    'core' is [-0.5, 1.5). None means this side is not reviewed and not opened.
     """
     if direc is None:
         return None
@@ -197,12 +165,6 @@ def direc_window(direc: float | None, side: str, htf_min: float | None = None,
     hi = HTF_MAX_DEFAULT if htf_max is None else htf_max
     if lo <= direc < hi:
         return "core"
-    if side == "SHORT" and HTF_STRONG_SHORT_LO <= direc < HTF_STRONG_SHORT_HI:
-        return "strong_short"
-    if side == "LONG" and HTF_FADE_LONG[0] <= direc < HTF_FADE_LONG[1]:
-        return "fade_long"
-    if side == "SHORT" and HTF_FADE_SHORT[0] <= direc < HTF_FADE_SHORT[1]:
-        return "fade_short"
     return None
 
 
@@ -210,12 +172,7 @@ def btc_dir_ok(aligned_pct: float | None, side: str) -> bool:
     """`aligned_pct` is BTC's last-hour return already signed in the trade's direction."""
     if aligned_pct is None:
         return True
-    if side == "LONG":
-        return aligned_pct >= BTC1H_MIN_LONG
-    if aligned_pct >= BTC1H_MIN_SHORT:
-        return True
-    lo, hi = BTC1H_SHORT_POCKET
-    return lo <= aligned_pct < hi
+    return aligned_pct >= BTC1H_MIN_DEFAULT
 
 
 def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:
