@@ -1,13 +1,14 @@
-"""Status report for a human or agent check-in: health, account, open positions, entries/exits and market trend
-since the previous report.
+"""Separate status reports for the Toobit bot and the Gate bot.
 
-    python3 -m live.report            # since the last report (first run: last 6 hours)
-    python3 -m live.report --hours 24 # fixed window, does not move the marker
+    python3 -m live.report            # both, since each venue's last report
+    python3 -m live.report --hours 24 # both, fixed window, markers stay put
+    python3 -m live.report toobit     # one venue
+    python3 -m live.report gate
 
-Read-only: the active exchange is queried for balance/positions/prices; See One is not called.
+Read-only. See One is not called. Each venue has its own log, book, and time marker.
 """
 import json
-import subprocess
+import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -21,11 +22,30 @@ from .rulescore import line as rule_line
 
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / "logs"
-MARK = LOGS / "report_mark.json"
 TPE = timezone(timedelta(hours=8))
 WATCH = {"ENTRY", "EXIT", "ADOPT", "ADOPT_CLOSE", "SELF_EXIT_DECISION", "PROFIT_LOCK", "STOP_MOVE", "TP_HIT",
          "DAY_LOCK_ARMED", "DAY_LOCK_HIT", "HALT", "LOCK_EXIT", "SMALL_CLOSE", "STOP_RESTORED"}
 HEALTH = {"WATCHDOG_RESTART", "HOST_RESUMED", "ERROR", "START"}
+VENUES = {
+    "toobit": {
+        "title": "Toobit",
+        "state": LOGS / "live_state.json",
+        "log": LOGS / "live_bot_console.log",
+        "mark": LOGS / "report_mark.json",
+        "trades": LOGS / "trades" / "live_trades.jsonl",
+        "bot_cmd": "live.bot",
+        "gate": False,
+    },
+    "gate": {
+        "title": "Gate",
+        "state": LOGS / "gate" / "live_state.json",
+        "log": LOGS / "gate" / "live_bot_console.log",
+        "mark": LOGS / "gate" / "report_mark.json",
+        "trades": LOGS / "gate" / "trades" / "live_trades.jsonl",
+        "bot_cmd": "live.gate_bot",
+        "gate": True,
+    },
+}
 
 
 def tpe(ts: str | float) -> str:
@@ -49,7 +69,51 @@ def events_since(path: Path, since: str) -> list:
     return out
 
 
-def btc_trend() -> str:
+def _cmdline(pid: int) -> str:
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+    except OSError:
+        return ""
+
+
+def _environ(pid: int) -> dict:
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+    except OSError:
+        return {}
+    out = {}
+    for item in raw:
+        if b"=" not in item:
+            continue
+        k, v = item.split(b"=", 1)
+        out[k.decode(errors="replace")] = v.decode(errors="replace")
+    return out
+
+
+def _pids() -> list[int]:
+    out = []
+    for name in Path("/proc").iterdir():
+        if name.name.isdigit() and int(name.name) != os.getpid():
+            out.append(int(name.name))
+    return out
+
+
+def running(bot_cmd: str, gate: bool) -> tuple[bool, bool]:
+    """Whether this venue's bot and its monitor are alive. The two monitors share a module name."""
+    bot = mon = False
+    for pid in _pids():
+        cmd = _cmdline(pid)
+        if bot_cmd in cmd and "live.report" not in cmd:
+            bot = True
+        if "live.monitor" in cmd:
+            is_gate = _environ(pid).get("EXCHANGE", "").lower() in ("gate", "gateio", "gate.io")
+            if is_gate == gate:
+                mon = True
+    return bot, mon
+
+
+def btc_trend(venue: str) -> str:
+    os.environ["EXCHANGE"] = venue
     rows = klines("BTC-SWAP-USDT", "1h", 25)
     c = [float(r[4]) for r in rows] if isinstance(rows, list) else []
     if len(c) < 2:
@@ -63,37 +127,42 @@ def btc_trend() -> str:
     return "  ".join(parts)
 
 
-def main():
-    hours = float(sys.argv[sys.argv.index("--hours") + 1]) if "--hours" in sys.argv else None
-    mark = json.loads(MARK.read_text()) if MARK.exists() else {}
-    now = datetime.now(timezone.utc)
+def report_venue(name: str, hours: float | None, now: datetime):
+    cfg = VENUES[name]
+    mark = json.loads(cfg["mark"].read_text()) if cfg["mark"].exists() else {}
     since_dt = now - timedelta(hours=hours) if hours else (
         datetime.fromisoformat(mark["ts"]) if mark.get("ts") else now - timedelta(hours=6))
     since = since_dt.isoformat(timespec="seconds")
-    st = json.loads((LOGS / "live_state.json").read_text())
-    evs = events_since(LOGS / "live_bot_console.log", since)
+    st = json.loads(cfg["state"].read_text()) if cfg["state"].exists() else {
+        "trades": {}, "closed": [], "day_start_equity": None}
+    evs = events_since(cfg["log"], since)
 
-    print(f"== 報告 {tpe(now.isoformat())} (台北)，涵蓋 {tpe(since)} 起")
-    bot = subprocess.run(["pgrep", "-f", "python3 -u -m live.bot"], capture_output=True).returncode == 0
-    mon = subprocess.run(["pgrep", "-f", "python3 -u -m live.monitor"], capture_output=True).returncode == 0
-    age = time.time() - (LOGS / "live_state.json").stat().st_mtime
+    print(f"== {cfg['title']} 報告 {tpe(now.isoformat())} (台北)，涵蓋 {tpe(since)} 起")
+    bot, mon = running(cfg["bot_cmd"], cfg["gate"])
+    age = None if not cfg["state"].exists() else time.time() - cfg["state"].stat().st_mtime
     hc = {k: sum(1 for e in evs if e["event"] == k) for k in HEALTH}
     resumed = [e for e in evs if e["event"] == "HOST_RESUMED"]
-    print(f"健康: 機器人 {'運行' if bot else '停止'} / 監控 {'運行' if mon else '停止'} / 狀態檔 {age:.0f}s 前更新 / "
+    age_s = "尚無" if age is None else f"{age:.0f}s 前更新"
+    print(f"健康: 機器人 {'運行' if bot else '停止'} / 監控 {'運行' if mon else '停止'} / 狀態檔 {age_s} / "
           f"重啟 {hc['START']} 次 / 看門狗 {hc['WATCHDOG_RESTART']} 次 / 錯誤 {hc['ERROR']} 次")
     for e in resumed:
         print(f"  主機暫停 {e.get('paused_s', 0) // 60} 分鐘，{tpe(e['ts'])} 恢復")
 
-    load_dotenv(ROOT / ".env")
-    tb = connect()
-    bal = tb.balance()
-    pos = {(p["symbol"], p["side"]): p for p in tb.positions()}
-    upnl = sum(float(p.get("unrealizedPnL") or 0) for p in pos.values())
-    equity = float(bal["balance"]) + upnl
-    day0 = st.get("day_start_equity")
-    day = f"，今日 {equity - day0:+.2f}u ({(equity - day0) / day0:+.1%})" if day0 else ""
-    print(f"帳戶: 權益 {equity:.2f}u (餘額 {float(bal['balance']):.2f} + 未實現 {upnl:+.2f}){day}"
-          f"{'，已鎖利' if st.get('day_lock_armed') else ''}")
+    os.environ["EXCHANGE"] = name
+    try:
+        tb = connect()
+        bal = tb.balance()
+        pos = {(p["symbol"], p["side"]): p for p in tb.positions()}
+    except Exception as e:
+        print(f"帳戶: 連線失敗 ({type(e).__name__})")
+        pos, bal = {}, None
+    if bal is not None:
+        upnl = sum(float(p.get("unrealizedPnL") or 0) for p in pos.values())
+        equity = float(bal["balance"]) + upnl
+        day0 = st.get("day_start_equity")
+        day = f"，今日 {equity - day0:+.2f}u ({(equity - day0) / day0:+.1%})" if day0 else ""
+        print(f"帳戶: 權益 {equity:.2f}u (餘額 {float(bal['balance']):.2f} + 未實現 {upnl:+.2f}){day}"
+              f"{'，已鎖利' if st.get('day_lock_armed') else ''}")
 
     print(f"持倉 ({len(pos)}):")
     for t in st["trades"].values():
@@ -133,7 +202,7 @@ def main():
               f"平均 {sum(c['r_result'] or 0 for c in closed) / len(closed):+.2f}R")
 
     m = st.get("market") or {}
-    trend = btc_trend()
+    trend = btc_trend(name)
     if m:
         d = m.get("dirs", {})
         print(f"趨勢: {trend} | See One 15m {d.get('15m')} 1h {d.get('1h')} 4h {d.get('4h')} "
@@ -153,9 +222,23 @@ def main():
                 k = k[:20]
             why[k] = why.get(k, 0) + 1
         print("略過原因: " + "、".join(f"{k} {v}" for k, v in sorted(why.items(), key=lambda x: -x[1])[:6]))
-    print(rule_line())
+    print(rule_line(cfg["trades"]))
     if not hours:
-        MARK.write_text(json.dumps({"ts": now.isoformat(timespec="seconds")}))
+        cfg["mark"].parent.mkdir(parents=True, exist_ok=True)
+        cfg["mark"].write_text(json.dumps({"ts": now.isoformat(timespec="seconds")}))
+    print()
+
+
+def main():
+    load_dotenv(ROOT / ".env")
+    load_dotenv(ROOT / ".env.gate", override=True)
+    hours = float(sys.argv[sys.argv.index("--hours") + 1]) if "--hours" in sys.argv else None
+    names = [a for a in sys.argv[1:] if a in VENUES]
+    if not names:
+        names = list(VENUES)
+    now = datetime.now(timezone.utc)
+    for name in names:
+        report_venue(name, hours, now)
 
 
 if __name__ == "__main__":

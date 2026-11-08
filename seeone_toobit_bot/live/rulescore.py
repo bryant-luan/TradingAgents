@@ -22,11 +22,12 @@ BASE_R = 0.313
 MIN_CLOSED = 5
 
 
-def _rows() -> list[dict]:
-    if not TRADES.exists():
+def _rows(path: Path | None = None) -> list[dict]:
+    src = path or TRADES
+    if not src.exists():
         return []
     out = []
-    for line in TRADES.read_text(encoding="utf-8").splitlines():
+    for line in src.read_text(encoding="utf-8").splitlines():
         try:
             out.append(json.loads(line))
         except ValueError:
@@ -34,10 +35,10 @@ def _rows() -> list[dict]:
     return out
 
 
-def score() -> dict:
+def score(path: Path | None = None) -> dict:
     opened = {}
     closed = {}
-    for ev in _rows():
+    for ev in _rows(path):
         tid = ev.get("trade_id")
         if not tid or ev.get("ts", "") < RULE_SINCE:
             continue
@@ -71,8 +72,8 @@ def score() -> dict:
     }
 
 
-def line() -> str:
-    s = score()
+def line(path: Path | None = None) -> str:
+    s = score(path)
     live = "尚無平倉" if s["win_rate"] is None else f"勝率 {s['win_rate']:.0%}、平均 {s['mean_r']:+.3f}R"
     verdict = {"hold": "樣本未滿，繼續使用", "keep": "不低於基準，繼續使用", "optimize": "低於基準，應優化規則"}[s["verdict"]]
     return (f"規則成績 (自 11-07 16:36 台北): 已平 {s['n']} 筆、持倉 {s['open']}，{live}。"
