@@ -1,7 +1,8 @@
 """Pick the futures venue. The bot speaks Toobit-shaped symbols and order fields either way.
 
 EXCHANGE=toobit (default) keeps the live account on Toobit.
-EXCHANGE=gate uses Gate.io USDT-M perpetuals and needs GATE_API_KEY plus GATE_API_SECRET.
+The Gate bot is a second process, live.gate_bot, and reads .env.gate.
+Both use the rules in strategy.py.
 """
 import os
 from pathlib import Path

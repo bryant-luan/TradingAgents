@@ -1,5 +1,6 @@
 # 環境變量
 .env
+.env.gate
 
 # Python
 __pycache__/

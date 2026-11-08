@@ -4,12 +4,12 @@
 cd "$(dirname "$0")/.."
 mkdir -p logs/gate
 rm -f logs/gate/STOP
-if ! grep -Eq '^GATE_API_KEY=.+$' .env && [ -z "$GATE_API_KEY" ]; then
-  echo "$(date -u +%FT%TZ) Gate bot not started: GATE_API_KEY is empty" | tee -a logs/gate/live_bot_console.log
+if ! grep -Eq '^GATE_API_KEY=.+$' .env.gate && [ -z "$GATE_API_KEY" ]; then
+  echo "$(date -u +%FT%TZ) Gate bot not started: GATE_API_KEY is empty in .env.gate" | tee -a logs/gate/live_bot_console.log
   exit 1
 fi
-if ! grep -Eq '^GATE_API_SECRET=.+$' .env && [ -z "$GATE_API_SECRET" ]; then
-  echo "$(date -u +%FT%TZ) Gate bot not started: GATE_API_SECRET is empty" | tee -a logs/gate/live_bot_console.log
+if ! grep -Eq '^GATE_API_SECRET=.+$' .env.gate && [ -z "$GATE_API_SECRET" ]; then
+  echo "$(date -u +%FT%TZ) Gate bot not started: GATE_API_SECRET is empty in .env.gate" | tee -a logs/gate/live_bot_console.log
   exit 1
 fi
 pid=""
