@@ -125,7 +125,6 @@ MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop 
 BREAK_MIN_RANGE_PCT = 0.01
 BREAK_LONGS = False
 BREAK_LONG_MIN_RANGE = 0.06
-BREAK_LONG_DROP = 0.02
 
 
 def break_half_retrace(side: str, broken: float, close: float, price: float) -> bool:
@@ -142,11 +141,14 @@ def break_half_retrace(side: str, broken: float, close: float, price: float) -> 
     return back > 0 and back / gap >= 0.5
 
 
-def long_after_red(range_pct: float, close_4h_ago: float, prev_close: float) -> bool:
-    """A long break only after a 4-hour drop and a green bar of at least 6%."""
-    if range_pct < BREAK_LONG_MIN_RANGE or close_4h_ago <= 0:
-        return False
-    return (close_4h_ago - prev_close) / close_4h_ago >= BREAK_LONG_DROP
+def long_break(range_pct: float) -> bool:
+    """A long break only when that 15-minute bar's range is at least 6%.
+
+    JCT at 16:15 Taipei on Nov 8 closed through the prior 3-hour high, range 7.9%,
+    and the prior 2 hours were +1.89R. The old 4-hour-drop requirement rejected it.
+    The 15:00 bar was already +2.81R and stays out. BMT and ERA were about 4%.
+    """
+    return range_pct >= BREAK_LONG_MIN_RANGE
 # Signal reversal, from the 11:00 Taipei bars on Nov 8, and the 11:15 bar that
 # reversed again. AKE closed +6.6% back through the short, then the next bar was
 # already -3.4% and back through the entry. WLD closed +0.54% through the entry,

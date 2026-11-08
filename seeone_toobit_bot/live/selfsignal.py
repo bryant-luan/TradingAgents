@@ -874,11 +874,8 @@ class SelfScanner:
                 side, broken = "LONG", hi
             if side is None:
                 return None
-            if side == "LONG":
-                if len(closed) < 17:
-                    return None
-                if not S.long_after_red((h - l) / o, float(closed[-17][4]), float(closed[-2][4])):
-                    return None
+            if side == "LONG" and not S.long_break((h - l) / o):
+                return None
             atr_v = sum(max(float(x[2]) - float(x[3]), abs(float(x[2]) - float(p[4])), abs(float(x[3]) - float(p[4])))
                         for p, x in zip(closed[-15:-1], closed[-14:])) / 14
             sgn = 1 if side == "LONG" else -1
@@ -921,8 +918,7 @@ class SelfScanner:
                "after_red": side == "LONG"}
         reasons = [
             f"突破備案：15 分鐘收盤{'跌破' if side == 'SHORT' else '漲破'}前 3 小時{'低點' if side == 'SHORT' else '高點'} {broken:.6g}",
-            f"這根高低振幅 {span:.1%}，至少 {S.BREAK_MIN_RANGE_PCT:.0%}"
-            + ("；先連跌再一根大綠 K" if side == "LONG" else ""),
+            f"這根高低振幅 {span:.1%}，至少 {(S.BREAK_LONG_MIN_RANGE if side == 'LONG' else S.BREAK_MIN_RANGE_PCT):.0%}",
             "只做剛收出去的那一根；下一根還在外面就當沒了",
             "只掛單，價格離開進場區間不追",
         ]
