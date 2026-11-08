@@ -53,15 +53,11 @@ DEEP_ADVERSE_R = -0.85          # exit before a wick can slip through the full s
 # TP1 and finished -0.36R. -0.25R keeps WLD and turns PONS into about +0.12R.
 # On those nine the mean is +0.77R, against +0.75R with the stop left alone.
 AFTER_TP_DEEP_R = -0.25
-# Open profit that never reached a target is still protected. Once the best price
-# is +0.25R, a return to the entry is a giveback and the position is closed.
-# ERA peaked at +0.25R and finished -0.55R. SOL peaked near +0.34R and the recheck
-# closed it at -0.72R. Neither had filled a target.
-# Not on the entry bar. ARIA short at 17:49 Taipei on Nov 8 reached +0.42R and
-# tagged the entry again inside that same 15-minute bar; scratching it there
-# locked -0.01R while the bar's low was still the open profit.
+# +0.25R marks a trade that has worked, for the higher-timeframe exit only.
+# Closing the whole position at the entry used to sit beside the +2R lock and the
+# -0.25R stop after TP1. HOT's long on Nov 8 peaked at +0.70R and was closed at
+# the entry for +2.22 USDT. HMSTR peaked at +0.37R and was closed for +0.43 USDT.
 GIVEBACK_ARM_R = 0.25
-GIVEBACK_EXIT_R = 0.0
 # A legal entry is not flattened by a later higher-timeframe reading while it is
 # still near the entry. ARX long at 20:11 Taipei on Nov 8 was allowed at -0.4.
 # Eleven minutes later the score was -1.25 and the guard closed -0.11R. WLD, XMR,
@@ -264,13 +260,10 @@ class Bot:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
         elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
-        elif (tr.get("mfe_r", 0) >= GIVEBACK_ARM_R and cur_r <= GIVEBACK_EXIT_R
-              and time.time() >= (int(tr["opened_ts"]) // 900) * 900 + 900):
-            tr["exit_reason"] = (f"最高浮盈曾到 {tr['mfe_r']:+.2f}R，現在回到 {cur_r:+.2f}R，獲利吐回進場價，平倉")
         elif cur_r <= (AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R):
             line = AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R
             tr["exit_reason"] = (f"浮虧 {cur_r:+.2f}R 已深於 {line}R，先平倉，避免插針滑過止損")
-        if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧", "最高浮盈")):
+        if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧")):
             log_event("ADVERSE_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, cur_r=round(cur_r, 3),
                       reason=tr["exit_reason"])
             self.maker_close(tr)
