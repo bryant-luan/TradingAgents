@@ -1153,9 +1153,11 @@ class Bot:
                     self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                         f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
                     continue
-                if not sig.get("after_red") and htf is not None and htf * sgn >= htf_max:
+                brk_max = (max(htf_max, S.BREAK_SHORT_HTF_MAX_PAPER)
+                           if self.paper and sig["side"] == "SHORT" else htf_max)
+                if not sig.get("after_red") and htf is not None and htf * sgn >= brk_max:
                     self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
-                                        f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
+                                        f"(順方向 {htf * sgn:+.1f} ≥ 上限 {brk_max:+.1f})，大週期走勢已走一段，進場偏晚")
                     continue
                 if not sig.get("after_red") and m15 * sgn >= m15_max:
                     self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "

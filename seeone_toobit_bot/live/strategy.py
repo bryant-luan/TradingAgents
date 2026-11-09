@@ -127,6 +127,9 @@ MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop 
 # 4% and are not. The higher-timeframe floor does not block this long: the
 # decline is why the spike is there.
 BREAK_MIN_RANGE_PCT = 0.01
+# Paper trial only (Gate sim). Blocked breakdown shorts at 1.5-2.0 averaged about +1R
+# on Nov 8-9 (Toobit 6, Gate 4); at 3.0+ 15 of 16 were stopped. Live keeps HTF_MAX_DEFAULT.
+BREAK_SHORT_HTF_MAX_PAPER = 2.0
 BREAK_LONG_MIN_RANGE = 0.06
 BREAK_LONG_DROP = 0.02
 
