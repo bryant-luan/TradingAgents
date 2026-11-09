@@ -33,6 +33,8 @@ STATE_FILE = ROOT / "logs" / "live_state.json"
 PAUSE_FILE = ROOT / "logs" / "PAUSE"
 # Holds a UTC date: on that day the daily profit lock and its give-back stop are off (daily loss stop still applies).
 LOCK_OFF_FILE = ROOT / "logs" / "DAY_LOCK_OFF"
+# Present: this venue ignores the daily loss ceiling and sizes at the normal risk. Toobit only unless the same file is created under logs/gate.
+RISK_OPEN_FILE = ROOT / "logs" / "RISK_OPEN"
 LEARN_FILE = ROOT / "logs" / "learned_params.json"
 INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
@@ -41,13 +43,14 @@ CALIB_FILE = ROOT / "logs" / "self_calib.json"
 
 def use_venue(venue: str):
     """Point this process at one book. Gate keeps the same rules and a separate state file."""
-    global LOG_DIR, TRADE_LOG, STATE_FILE, PAUSE_FILE, LOCK_OFF_FILE, LEARN_FILE, INSIGHT_LOG, SHADOW_FILE, CALIB_FILE
+    global LOG_DIR, TRADE_LOG, STATE_FILE, PAUSE_FILE, LOCK_OFF_FILE, RISK_OPEN_FILE, LEARN_FILE, INSIGHT_LOG, SHADOW_FILE, CALIB_FILE
     base = ROOT / "logs" / "gate" if venue == "gate" else ROOT / "logs"
     LOG_DIR = base / "trades"
     TRADE_LOG = LOG_DIR / "live_trades.jsonl"
     STATE_FILE = base / "live_state.json"
     PAUSE_FILE = base / "PAUSE"
     LOCK_OFF_FILE = base / "DAY_LOCK_OFF"
+    RISK_OPEN_FILE = base / "RISK_OPEN"
     LEARN_FILE = base / "learned_params.json"
     INSIGHT_LOG = LOG_DIR / "insights.jsonl"
     SHADOW_FILE = base / "shadow_archive.json"
@@ -1012,7 +1015,15 @@ class Bot:
                 self.record_signal_snapshots(signals)
             return
         loss_floor = self.st["day_start_equity"] * (1 - S.DAILY_STOP_PCT)
-        if equity < loss_floor:
+        if RISK_OPEN_FILE.exists():
+            if self.st.get("risk_open_logged") != day:
+                self.st.pop("halted", None)
+                self.st["risk_open_logged"] = day
+                log_event("RISK_OPEN", day=day, equity=round(equity, 2),
+                          day_start_equity=self.st.get("day_start_equity"),
+                          reason="使用者指示額度全開：不因當日虧損上限停手，單筆仍照原風險、原進場規則")
+            self.day_room = equity
+        elif equity < loss_floor:
             if not self.st.get("halted"):
                 self.st["halted"] = True
                 log_event("HALT", reason=f"當日虧損達 {S.DAILY_STOP_PCT:.0%}，今日停止開新倉",
@@ -1020,7 +1031,8 @@ class Bot:
             if signals is not None:
                 self.record_signal_snapshots(signals)
             return
-        self.day_room = equity - loss_floor - self.open_risk()
+        else:
+            self.day_room = equity - loss_floor - self.open_risk()
         if sigmap is None:
             return
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
