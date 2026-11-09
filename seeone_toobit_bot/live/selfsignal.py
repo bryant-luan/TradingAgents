@@ -742,22 +742,18 @@ class SelfScanner:
         return [c for _, c in ranked[:6]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:
-        """One maker order when a crash/explosion recipe fully matches.
+        """One maker long when the explosion recipe fully matches.
 
-        Long: JCT's card at 12:23 Taipei on Nov 8, price still 0.002574.
-        Short: the 空頭爆擊暴跌預備 cards on Nov 8. PONS 05:07 from 0.17588,
-        LYN 12:19 from 0.02492, CT 17:21 from 0.12404, ONE 20:10 from 0.0019073.
-        A name that has already run 2.5R in the trade direction is not chased.
+        The short-crash recipe is off. XPL, ERA and both IRYS shorts all
+        finished near -0.9R within about 16 minutes. The Nov 8 cards
+        (PONS, LYN, CT, ONE) are not traded.
+        A name that has already run 2.5R is not chased.
         """
         if time.time() - self.last_spike < SCAN_EVERY_S:
             return []
         self.last_spike = time.time()
-        out = []
-        for side, token in (("LONG", "爆漲"), ("SHORT", "暴跌")):
-            sig = self._spike_side(side, token, held, specs)
-            if sig:
-                out.append(sig)
-        return out
+        sig = self._spike_side("LONG", "爆漲", held, specs)
+        return [sig] if sig else []
 
     def _spike_side(self, side: str, token: str, held: set, specs: dict) -> dict | None:
         best = None
