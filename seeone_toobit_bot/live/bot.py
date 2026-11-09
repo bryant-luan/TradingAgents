@@ -1149,6 +1149,10 @@ class Bot:
                     log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
                 continue
             if sig.get("breakout"):
+                same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
+                if len(same) >= S.MAX_SAME_SIDE:
+                    self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
+                    continue
                 if sig["side"] == "LONG" and not sig.get("after_red"):
                     self.note_skip(sig, "突破做多先停。BMT 平在 -0.18R、ERA 平在 -0.55R，之後價格還在跌")
                     continue
