@@ -703,13 +703,15 @@ class SelfScanner:
     def _near_extreme(self, ordered: list, htf: float | None, specs: dict, held: set) -> list:
         """Names whose 3h price is still near the reversal extreme on an open side.
 
-        The review budget is REVIEWS_PER_SCAN See One calls. Names already through the range,
-        on a side self-scan does not open, or with a stop too wide to open, no longer take a call.
+        The review budget is REVIEWS_PER_SCAN See One calls. Names already through the range
+        cannot be opened, so they no longer take a call. Setups self-scan can open (side in
+        SELF_SIDES, stop under SELF_MAX_SL_PCT) go first; the rest of the budget keeps the
+        calibration records coming when no such setup exists.
         """
         if htf is None:
             return []
         sides = []
-        for side in S.SELF_SIDES:
+        for side in ("LONG", "SHORT"):
             direc = htf if side == "LONG" else -htf
             band = S.direc_window(direc, side)
             if band:
@@ -720,7 +722,7 @@ class SelfScanner:
         ranked = []
         looked = 0
         for c in ordered:
-            if looked >= 160 or len(ranked) >= 30:
+            if looked >= 160 or sum(1 for t, _, _ in ranked if t) >= REVIEWS_PER_SCAN:
                 break
             tsym = S.to_toobit(c["symbol"])
             if tsym not in specs or tsym in held:
@@ -730,9 +732,10 @@ class SelfScanner:
                 pl = self.plan(tsym, "LONG")
             except Exception:
                 continue
-            if not pl or pl.get("rpos") is None or pl["dist"] / pl["price"] >= S.SELF_MAX_SL_PCT:
+            if not pl or pl.get("rpos") is None:
                 continue
-            best = None
+            narrow = pl["dist"] / pl["price"] < S.SELF_MAX_SL_PCT
+            best, tradable = None, False
             for side, _band in sides:
                 sgn = 1 if side == "LONG" else -1
                 rp = pl["rpos"] if side == "LONG" else 1 - pl["rpos"]
@@ -744,11 +747,12 @@ class SelfScanner:
                 prob = est.get("prob") if est else None
                 if best is None or (prob or -1) > best:
                     best = prob or -1
+                tradable = tradable or (narrow and side in S.SELF_SIDES)
             if best is None:
                 continue
-            ranked.append((best, c))
-        ranked.sort(key=lambda x: -x[0])
-        return [c for _, c in ranked[:REVIEWS_PER_SCAN]]
+            ranked.append((tradable, best, c))
+        ranked.sort(key=lambda x: (not x[0], -x[1]))
+        return [c for _, _, c in ranked[:REVIEWS_PER_SCAN]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:
         """One maker long when the explosion recipe fully matches.
@@ -1048,10 +1052,9 @@ class SelfScanner:
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.direc_window(direc, sd) is not None and m15_ok(sd)]
-                tradable = [sd for sd in eligible if sd in S.SELF_SIDES]
-                if not tradable or d / px >= S.SELF_MAX_SL_PCT:
-                    continue
-                hint = c.get("side") if c.get("side") in tradable else tradable[0]
+                tradable = [sd for sd in eligible if sd in S.SELF_SIDES] if d / px < S.SELF_MAX_SL_PCT else []
+                pick = tradable or eligible
+                hint = c.get("side") if c.get("side") in pick else pick[0]
                 # Both sides are only needed to measure the model's long/short bias. Once that bias is known,
                 # one call plus the saved bias matches the old de-bias math and cuts the request in half.
                 both = (reviewed + 1) % BIAS_EVERY == 0 and len(eligible) == 2
