@@ -172,9 +172,12 @@ def long_after_red(range_pct: float, close_4h_ago: float, prev_close: float) -> 
 REVERSAL_EXIT = False
 # Gate-only names: COOL, FATCOIN, FLORK, ZZZ on 11-09, all four lost.
 SKIP_GATE_ONLY = True
-# Self-scan on live accounts. Nov 4-8: 32 closes, about even. Nov 9-10: 14 closes, 2 winners,
-# about -160 USDT, while the model put TP1-first at 60-77%. Paper books keep taking it.
-SELF_SCAN_LIVE = False
+# Self-scan takes shorts with a stop under 1% only. Over 3,153 resolved reviews (prob >= 55),
+# TP1 came first on 75% / 73% of those shorts (Nov 4-6 / Nov 7-10) and beat wider stops every day.
+# Review longs hit 49% / 35%, below the 1R break-even. Self-scan stops at 1-1.8% hit 56% / 40-50%
+# and were 1 win in 9 live closes, -101 USDT.
+SELF_SIDES = ("SHORT",)
+SELF_MAX_SL_PCT = 0.01
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0

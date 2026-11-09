@@ -1196,10 +1196,16 @@ class Bot:
             # Self-scan shorts once the blend is already BEAR: 7 closes, net about -81 USDT.
             # The two winners (AKE, XRP on Nov 4) do not cover JCT, UAI, Q, HUMA and BNT.
             # Softer-bear shorts such as XMR stay eligible. Quiet shorts and the crash recipe do too.
-            if src == SELF_SOURCE and not self.paper and not S.SELF_SCAN_LIVE:
-                self.note_skip(sig, "自選驗算實盤暫停，只記錄：11-09 到 11-10 共 14 筆只贏 2 筆、淨虧約 160u，"
-                                    "模型給的先到 TP1 機率 60-77%，實際約 14%")
+            if src == SELF_SOURCE and sig["side"] not in S.SELF_SIDES:
+                self.note_skip(sig, "自選驗算只做空：分析驗算看多的單先到 TP1 只有 49%（11-04~06）/ 35%（11-07~10），"
+                                    "低於 1R 打平線")
                 continue
+            if src == SELF_SOURCE:
+                sl_pct = abs(float(sig["entry_price"]) - float(sig["stop_price"])) / float(sig["entry_price"])
+                if sl_pct >= S.SELF_MAX_SL_PCT:
+                    self.note_skip(sig, f"自選驗算止損 {sl_pct:.2%} ≥ {S.SELF_MAX_SL_PCT:.0%}：止損 1-1.8% 的評估只有 40-56% "
+                                        f"先到 TP1，實盤 9 筆只贏 1 筆；1% 以下的空單 73-75%")
+                    continue
             if src == SELF_SOURCE and sig["side"] == "SHORT" and reg[0] <= S.REGIME_BEAR:
                 self.note_skip(sig, f"自選驗算做空時綜合方向 {reg[0]:+.1f} 已是空頭區間 (≤ {S.REGIME_BEAR:+.1f})，"
                                     f"這段實測淨虧，BNT 開倉 7 分鐘就打到止損")
