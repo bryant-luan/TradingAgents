@@ -1112,7 +1112,7 @@ class Bot:
                                     f"{datetime.fromtimestamp(cd + 8 * 3600, timezone.utc):%H:%M})")
                 continue
             self.pre = None
-            if S.to_toobit(sig["symbol"]) == "ONE-SWAP-USDT":
+            if S.to_toobit(sig["symbol"]) == "ONE-SWAP-USDT" and not sig.get("recipe_spike"):
                 self.note_skip(sig, "ONE 這筆提前平倉後不接回，改開其他幣")
                 continue
             if not sig.get("breakout") and sig["symbol"] in MAJORS:

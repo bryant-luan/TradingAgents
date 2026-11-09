@@ -742,16 +742,24 @@ class SelfScanner:
         return [c for _, c in ranked[:6]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:
-        """One maker long when the order-book explosion recipe fully matches.
+        """One maker order when a crash/explosion recipe fully matches.
 
-        JCT's card at 12:23 Taipei on Nov 8 was this recipe, with price still at
-        0.002574. The official long was first seen at 16:38, after a target had
-        already been hit, and was not chased. A name already up 2.5R over the
-        last 2 hours is still not chased.
+        Long: JCT's card at 12:23 Taipei on Nov 8, price still 0.002574.
+        Short: the 空頭爆擊暴跌預備 cards on Nov 8. PONS 05:07 from 0.17588,
+        LYN 12:19 from 0.02492, CT 17:21 from 0.12404, ONE 20:10 from 0.0019073.
+        A name that has already run 2.5R in the trade direction is not chased.
         """
         if time.time() - self.last_spike < SCAN_EVERY_S:
             return []
         self.last_spike = time.time()
+        out = []
+        for side, token in (("LONG", "爆漲"), ("SHORT", "暴跌")):
+            sig = self._spike_side(side, token, held, specs)
+            if sig:
+                out.append(sig)
+        return out
+
+    def _spike_side(self, side: str, token: str, held: set, specs: dict) -> dict | None:
         best = None
         matched = 0
         for r in self.so.recipes():
@@ -759,9 +767,11 @@ class SelfScanner:
             rules = rec.get("rules") or []
             name = rec.get("name") or ""
             metrics = {x.get("metric") for x in rules}
-            if not rec.get("enabled", True) or "爆漲" not in name or not {"depth-delta", "order-wall"} <= metrics:
+            if not rec.get("enabled", True) or token not in name:
                 continue
-            if S.recipe_direction(name, rules) != "LONG":
+            if side == "LONG" and not {"depth-delta", "order-wall"} <= metrics:
+                continue
+            if S.recipe_direction(name, rules) != side:
                 continue
             rows = list((r.get("evaluation") or {}).get("results") or [])
             seen = set()
@@ -770,42 +780,44 @@ class SelfScanner:
                 if base and row.get("match"):
                     seen.add(base)
                     pot = ((row.get("readings") or {}).get("potential") or {}).get("score") or 0
-                    best, matched = self._spike_pick(best, matched, base, name, pot, held, specs)
+                    best, matched = self._spike_pick(best, matched, base, name, pot, held, specs, side)
             for base, hit in (r.get("members") or {}).items():
                 base = str(base).upper()
                 if hit and base not in seen:
-                    best, matched = self._spike_pick(best, matched, base, name, 0, held, specs)
-        self.log("ORDERBOOK_SPIKE", matched=matched, found=None if best is None else best[0])
+                    best, matched = self._spike_pick(best, matched, base, name, 0, held, specs, side)
+        self.log("ORDERBOOK_SPIKE", side=side, matched=matched, found=None if best is None else best[0])
         if best is None:
-            return []
+            return None
         sym, name, pl, _pot = best
-        price, dist = pl["price"], pl["dist"]
-        tps = pl["tps"]
+        price = pl["price"]
         levels = [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": TP_R[i],
-                   "price": tps[i], "hit": False} for i in range(len(TP_R))]
+                   "price": pl["tps"][i], "hit": False} for i in range(len(TP_R))]
         day = time.strftime("%Y-%m-%d", time.gmtime())
-        sig = {"id": f"rcp:{sym}:LONG:{day}", "symbol": sym, "side": "LONG", "status": "ACTIVE",
+        verb = "漲" if side == "LONG" else "跌"
+        label = "訂單簿爆漲" if side == "LONG" else "空頭爆擊"
+        sig = {"id": f"rcp:{sym}:{side}:{day}", "symbol": sym, "side": side, "status": "ACTIVE",
                "timeframe": "15m", "entry_price": price, "stop_price": pl["stop"], "current_price": price,
                "entry_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "levels": levels,
                "signal_path": "ORDERBOOK", "path_subtype": name, "recipe_spike": True}
         reasons = [
-            f"訂單簿爆漲配方「{name}」六項全中",
+            f"{label}配方「{name}」全中",
             "只掛單，價格離開進場區間不追",
-            "近 2 小時已漲超過 2.5R 的不追",
+            f"近 2 小時已{verb}超過 2.5R 的不追",
         ]
-        ev = {"ok": True, "score": 96.0, "tier": "NORMAL", "reasons": reasons, "factors": {"source:訂單簿爆漲": 0.0},
+        ev = {"ok": True, "score": 96.0, "tier": "NORMAL", "reasons": reasons, "factors": {f"source:{label}": 0.0},
               "skip": None, "cur_r": 0.0, "analysis": {"prob": None, "edge": None, "quality": None, "ev_r": None}}
-        self.log("ORDERBOOK_SPIKE", symbol=sym, side="LONG", recipe=name, price=price, stop=pl["stop"],
+        self.log("ORDERBOOK_SPIKE", symbol=sym, side=side, recipe=name, price=price, stop=pl["stop"],
                  move_r=pl["move_r"], note="配方全中，掛不到就算")
-        return [{"sig": sig, "ev": ev, "source": "訂單簿爆漲"}]
+        return {"sig": sig, "ev": ev, "source": label}
 
-    def _spike_pick(self, best, matched, base, name, pot, held, specs):
+    def _spike_pick(self, best, matched, base, name, pot, held, specs, side):
         sym = base + "USDT"
         tsym = S.to_toobit(sym)
         if tsym in held or tsym not in specs:
             return best, matched
-        pl = self.plan(tsym, "LONG")
-        if not pl or pl["move_r"] >= S.MAX_EXT_R:
+        pl = self.plan(tsym, side)
+        signed = pl["move_r"] if pl and side == "LONG" else (None if not pl else -pl["move_r"])
+        if not pl or signed >= S.MAX_EXT_R:
             return best, matched
         matched += 1
         if best is None or pot > best[3]:
