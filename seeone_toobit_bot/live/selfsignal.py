@@ -53,6 +53,15 @@ MIN_QUALITY = 60.0
 MIN_EV_R = 0.20
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
+# See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst; six per scan per bot
+# left both books near 48/hour. Ten per scan keeps the 15s gap and stays well under the old pace.
+REVIEWS_PER_SCAN = 10
+# One side plus the saved bias replaces a two-sided review; every BIAS_EVERY-th name still reviews both.
+BIAS_EVERY = 6
+# Both bots review the same See One symbols on one account. A fresh review with a similar stop width is reused.
+SHARED_REVIEW_FILE = S.ENV_FILE.parent / "logs" / "review_cache.json"
+SHARED_REVIEW_TTL_S = 600
+SHARED_REVIEW_SL_TOL = 0.15
 RECHECK_OPEN_S = 900
 EXIT_PROB_BELOW = 40.0
 EXIT_PROB_DROP = 25.0        # close when the next-target probability falls this many points from entry
@@ -219,10 +228,43 @@ class SelfScanner:
                 "language": "zh-TW"}
         return self.so.request("POST", "/api/analysis-review", deadline=S.REVIEW_DEADLINE_S, json=body)
 
-    def review(self, symbol: str, side: str, stop: float, tps: list, tf: str = "15M") -> dict:
+    def _shared(self) -> dict:
+        try:
+            data = json.loads(SHARED_REVIEW_FILE.read_text())
+        except (OSError, ValueError):
+            return {}
+        now = time.time()
+        return {k: v for k, v in data.items() if now - v.get("ts", 0) < SHARED_REVIEW_TTL_S}
+
+    def _share(self, key: str, sl_pct: float, rv: dict):
+        data = self._shared()
+        data[key] = {"ts": time.time(), "sl_pct": sl_pct, "rv": rv}
+        tmp = SHARED_REVIEW_FILE.with_suffix(f".{id(self)}.tmp")
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False))
+            tmp.replace(SHARED_REVIEW_FILE)
+        except OSError:
+            pass
+
+    def review(self, symbol: str, side: str, stop: float, tps: list, tf: str = "15M", share: bool = False) -> dict:
+        """share=True only for fresh plans, whose TPs are fixed R multiples from the current price."""
+        px = self.tb.price(S.to_toobit(symbol))
+        if not share:
+            return self._review_aligned(symbol, side, stop, tps, tf, px)
+        sl_pct = abs(px - stop) / px if px else 0.0
+        key = f"{symbol}|{side}|{tf}"
+        hit = self._shared().get(key)
+        if hit and sl_pct and abs(hit["sl_pct"] - sl_pct) <= SHARED_REVIEW_SL_TOL * sl_pct:
+            self.shared_hits = getattr(self, "shared_hits", 0) + 1
+            return json.loads(json.dumps(hit["rv"]))
+        rv = self._review_aligned(symbol, side, stop, tps, tf, px)
+        if sl_pct:
+            self._share(key, sl_pct, rv)
+        return rv
+
+    def _review_aligned(self, symbol: str, side: str, stop: float, tps: list, tf: str, px: float) -> dict:
         """分析驗算 on See One's own price basis: See One's market price can sit apart from Toobit's, so the Toobit
         stop/TPs are scaled by the See One/Toobit price ratio to keep the same R geometry."""
-        px = self.tb.price(S.to_toobit(symbol))
         risk = max(abs(px - stop), px * MIN_STOP_PCT)
         cached = self.basis.get(symbol)
         ratio = cached[0] if cached and time.time() - cached[1] < BASIS_TTL_S else 1.0
@@ -661,13 +703,13 @@ class SelfScanner:
     def _near_extreme(self, ordered: list, htf: float | None, specs: dict, held: set) -> list:
         """Names whose 3h price is still near the reversal extreme on an open side.
 
-        The review budget is six See One calls. Names already through the range
-        cannot be opened, so they no longer take a call.
+        The review budget is REVIEWS_PER_SCAN See One calls. Names already through the range,
+        on a side self-scan does not open, or with a stop too wide to open, no longer take a call.
         """
         if htf is None:
             return []
         sides = []
-        for side in ("LONG", "SHORT"):
+        for side in S.SELF_SIDES:
             direc = htf if side == "LONG" else -htf
             band = S.direc_window(direc, side)
             if band:
@@ -678,7 +720,7 @@ class SelfScanner:
         ranked = []
         looked = 0
         for c in ordered:
-            if looked >= 80 or len(ranked) >= 24:
+            if looked >= 160 or len(ranked) >= 30:
                 break
             tsym = S.to_toobit(c["symbol"])
             if tsym not in specs or tsym in held:
@@ -688,7 +730,7 @@ class SelfScanner:
                 pl = self.plan(tsym, "LONG")
             except Exception:
                 continue
-            if not pl or pl.get("rpos") is None:
+            if not pl or pl.get("rpos") is None or pl["dist"] / pl["price"] >= S.SELF_MAX_SL_PCT:
                 continue
             best = None
             for side, _band in sides:
@@ -706,7 +748,7 @@ class SelfScanner:
                 continue
             ranked.append((best, c))
         ranked.sort(key=lambda x: -x[0])
-        return [c for _, c in ranked[:6]]
+        return [c for _, c in ranked[:REVIEWS_PER_SCAN]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:
         """One maker long when the explosion recipe fully matches.
@@ -892,6 +934,7 @@ class SelfScanner:
             return []
         seeone_open = self.so.review_not_before <= time.time()
         self.last_scan = time.time()
+        self.shared_hits = 0
         self.resolve()
         split = self.learner.p.get("tp_split") or S.TP_SPLIT
         min_prob = self.min_prob()
@@ -943,10 +986,10 @@ class SelfScanner:
             ordered.sort(key=lambda c: 0 if qv_map.get(S.to_toobit(c["symbol"]), 0) >= qv_min else 1)
             btc_5m = micro_1h("BTC-SWAP-USDT")[1]
         if seeone_open:
-            # Local plans are free. Spend the six See One calls on names already sitting
+            # Local plans are free. Spend the See One calls on names already sitting
             # near the 3h extreme on a side the window allows, including the liquid-short band.
             ordered = self._near_extreme(ordered, htf, specs, held)
-        limit = 40 if not seeone_open else 6
+        limit = 40 if not seeone_open else REVIEWS_PER_SCAN
         pl_long = None
         for c in ordered[:limit]:
             sym = c["symbol"]
@@ -1005,18 +1048,18 @@ class SelfScanner:
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.direc_window(direc, sd) is not None and m15_ok(sd)]
-                if not eligible:
+                tradable = [sd for sd in eligible if sd in S.SELF_SIDES]
+                if not tradable or d / px >= S.SELF_MAX_SL_PCT:
                     continue
-                hint = c.get("side") if c.get("side") in eligible else eligible[0]
+                hint = c.get("side") if c.get("side") in tradable else tradable[0]
                 # Both sides are only needed to measure the model's long/short bias. Once that bias is known,
                 # one call plus the saved bias matches the old de-bias math and cuts the request in half.
-                # Every fourth name still reviews both sides so the bias can move.
-                samples = self.d.setdefault("bias_samples", [])
-                both = (reviewed + 1) % 4 == 0 and len(eligible) == 2
-                rv = {hint: self.review(sym, hint, plans[hint]["stop"], plans[hint]["tps"])}
+                both = (reviewed + 1) % BIAS_EVERY == 0 and len(eligible) == 2
+                rv = {hint: self.review(sym, hint, plans[hint]["stop"], plans[hint]["tps"], share=True)}
                 if both:
                     other_side = "SHORT" if hint == "LONG" else "LONG"
-                    rv[other_side] = self.review(sym, other_side, plans[other_side]["stop"], plans[other_side]["tps"])
+                    rv[other_side] = self.review(sym, other_side, plans[other_side]["stop"], plans[other_side]["tps"],
+                                                 share=True)
             except Exception as e:
                 self.log("ERROR", where="self_review", symbol=sym, error=repr(e)[:300])
                 # SeeOneLimited is raised only after a real 429 (or when the shared cooldown is
@@ -1042,7 +1085,7 @@ class SelfScanner:
                 bias = (raw["LONG"] + raw["SHORT"] - 100) / 2
                 samples.append(round(bias, 2))
                 del samples[:-40]
-                side = max(raw, key=raw.get)
+                side = max((sd for sd in raw if sd in S.SELF_SIDES), key=raw.get, default=max(raw, key=raw.get))
             else:
                 bias = sum(samples[-20:]) / len(samples[-20:]) if len(samples) >= 4 else 13.0
                 side = next(iter(raw))
@@ -1077,7 +1120,7 @@ class SelfScanner:
                          min_quality=MIN_QUALITY, min_ev=MIN_EV_R)
                 continue
             try:
-                p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H").get("probability") or 0) - bias
+                p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H", share=True).get("probability") or 0) - bias
             except Exception:
                 p1h = 0.0
             if p1h < CONFIRM_MIN_PROB:
@@ -1094,6 +1137,7 @@ class SelfScanner:
         self.save()
         self._write_align()
         self.log("SELF_SCAN", reviewed_symbols=reviewed, shadow=shadowed, seeone_open=seeone_open,
+                 shared_reviews=getattr(self, "shared_hits", 0),
                  universe=len(by_symbol), tradable_contracts=len(specs or {}),
                  tradefi=sum(1 for c in by_symbol.values() if "TradFi" in c["tags"]),
                  watched=[(w["symbol"], w["side"], w["prob"], w["edge"]) for w in watched],
