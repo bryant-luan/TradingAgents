@@ -172,6 +172,9 @@ def long_after_red(range_pct: float, close_4h_ago: float, prev_close: float) -> 
 REVERSAL_EXIT = False
 # Gate-only names: COOL, FATCOIN, FLORK, ZZZ on 11-09, all four lost.
 SKIP_GATE_ONLY = True
+# Self-scan on live accounts. Nov 4-8: 32 closes, about even. Nov 9-10: 14 closes, 2 winners,
+# about -160 USDT, while the model put TP1-first at 60-77%. Paper books keep taking it.
+SELF_SCAN_LIVE = False
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
