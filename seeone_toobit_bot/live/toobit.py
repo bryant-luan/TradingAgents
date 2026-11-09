@@ -73,6 +73,8 @@ class Toobit:
                     "min_contracts": int(Decimal(f["LOT_SIZE"]["minQty"]) / mult),
                     "tick": Decimal(f["PRICE_FILTER"]["tickSize"]),
                     "max_leverage": int(float(c["riskLimits"][0]["maxLeverage"])) if c.get("riskLimits") else 20,
+                    "mmr_tiers": [(float(t["value"]), float(t["maintMargin"]), int(float(t["maxLeverage"])))
+                                  for t in c.get("riskLimits") or []],
                     "seeone": seeone,
                     "rwa": bool(c.get("isRwa")) or "TradFi" in cats,
                     "categories": cats,

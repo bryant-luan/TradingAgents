@@ -59,6 +59,7 @@ RISK_PCT = 0.05                 # equity risked per trade at the stop
 MIN_RISK_PCT = 0.05             # never open below this risk: a trade that can't be sized this big is skipped
 MAX_MIN_SIZE_RISK_PCT = 0.07    # allow exchange-minimum size only up to this risk
 MAX_LEVERAGE = 25
+LIQ_STOP_MULT = 1.25    # liquidation must sit at least 1.25x the stop distance from entry
 MAX_POSITIONS = 3
 MAX_TOTAL_MARGIN_PCT = 0.70
 MARGIN_PER_TRADE_PCT = 0.07
@@ -848,9 +849,15 @@ def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct
             return None
         contracts = spec["min_contracts"]
     notional = contracts * mult * price
-    # 0.60 keeps the stop inside the liquidation distance at higher leverage.
-    # A 2.3% stop can use 25x; the old 0.40 cap held that stop near 17x.
-    lev_cap = max(1, min(spec["max_leverage"], MAX_LEVERAGE, math.floor(0.60 / sl_pct)))
+    # Liquidation sits about (1/leverage - maintenance rate) from entry, so the maintenance rate
+    # has to come off before the stop fits. AKE short on Nov 9: 10x with a 5% maintenance rate
+    # liquidated at +5.1% while the stop was at +5.74%, losing the whole 40 USDT margin (-1.74R).
+    tiers = spec.get("mmr_tiers") or []
+    tier = next((t for t in tiers if notional <= t[0]), tiers[-1] if tiers else None)
+    mmr = tier[1] if tier else 0.5 / spec["max_leverage"]
+    tier_max = tier[2] if tier else spec["max_leverage"]
+    need = max(sl_pct / 0.60, sl_pct * LIQ_STOP_MULT + mmr)
+    lev_cap = max(1, min(spec["max_leverage"], tier_max, MAX_LEVERAGE, math.floor(1 / need)))
     leverage = max(1, min(lev_cap, math.ceil(notional / (MARGIN_PER_TRADE_PCT * equity))))
     margin = notional / leverage
     if margin > margin_cap_pct * equity:

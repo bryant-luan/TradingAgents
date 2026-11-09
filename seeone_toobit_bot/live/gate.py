@@ -283,6 +283,9 @@ class Gate:
                     "min_contracts": int(contract.get("order_size_min") or 1),
                     "tick": Decimal(str(contract.get("order_price_round") or "0.00000001")),
                     "max_leverage": int(float(contract.get("leverage_max") or 20)),
+                    "mmr_tiers": ([(float("inf"), float(contract["maintenance_rate"]),
+                                    int(float(contract.get("leverage_max") or 20)))]
+                                  if contract.get("maintenance_rate") else []),
                     "seeone": name[:-5] + "USDT",
                     "rwa": False,
                     "categories": [],
