@@ -11,7 +11,6 @@ Every review is also stored and later resolved against Toobit candles (TP1 or SL
 probability threshold, so the filter tightens or loosens based on how well 分析驗算 actually predicts.
 """
 import json
-import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -76,10 +75,6 @@ M15_PASS = 0.50
 HTF_BUCKETS = [(-99.0, -0.5), (-0.5, 0.5), (0.5, 99.0)]
 # Cap side of the same score: the cap is the top of the highest bucket reached while every bucket below passes.
 HTF_CAP_BUCKETS = [(-99.0, 0.5), (0.5, 1.5), (1.5, 2.5), (2.5, 99.0)]
-# 15m RSI in the trade direction; the floor is the bottom of the lowest bucket that still passes, scanning down.
-RSI_BUCKETS = [(0.0, 40.0), (40.0, 50.0), (50.0, 60.0), (60.0, 101.0)]
-# BTC 1h move in the trade direction, percent.
-BTC1H_BUCKETS = [(-99.0, -0.3), (-0.3, 0.0), (0.0, 0.3), (0.3, 99.0)]
 # Reviews taken in the same scan all ride the same market move, so sample counts overstate the evidence.
 # The gates keep their defaults until the records span this many distinct hours.
 GATE_MIN_HOURS = 24
@@ -264,9 +259,6 @@ class SelfScanner:
         return ratio
 
     # ------------------------------------------------------------------ calibration of 分析驗算 probabilities
-    def calibrated(self) -> bool:
-        return bool(self.learner.p.get("self_calibrated"))
-
     def min_prob(self) -> float:
         return self.learner.p.get("self_min_prob", DEFAULT_MIN_PROB)
 
@@ -529,31 +521,6 @@ class SelfScanner:
         if self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT) != S.QUOTE_VOL_MIN_DEFAULT:
             self.learner.p["quote_vol_min"] = S.QUOTE_VOL_MIN_DEFAULT
             self.learner.save()
-
-    def _calibrate_floor(self, rows: list, key: str, buckets: list, param: str, default: float, event: str, note: str):
-        """Floor = bottom of the lowest bucket reached scanning down from the top while every bucket passes;
-        the lowest bucket's bottom (no floor) when all pass."""
-        if not self._gate_ready(rows, key, param, default):
-            return
-        table = []
-        for lo, hi in buckets:
-            b = [r["hit"] for r in rows if r.get(key) is not None and lo <= r[key] < hi]
-            table.append((lo, hi, len(b), round(sum(b) / len(b), 3) if b else None))
-        if any(n < M15_MIN_N for _, _, n, _ in table[-2:]):
-            return
-        floor = buckets[-1][0]
-        for lo, _, n, rate in reversed(table):
-            if n < M15_MIN_N or rate < M15_PASS:
-                break
-            floor = lo
-        old = self.learner.p.get(param, default)
-        self.learner.p[param] = floor
-        self.learner.save()
-        if floor != old or not self.learner.p.get(f"{param}_logged"):
-            self.learner.p[f"{param}_logged"] = True
-            self.log(event, **{f"{param}_old": old, f"{param}_new": floor},
-                     buckets=[{f"{key}_in_side": f"{lo}~{hi}", "n": n, "tp1_first_rate": r} for lo, hi, n, r in table],
-                     note=note)
 
     # ------------------------------------------------------------------ scanning
     def universe(self, regime_label: str, rhits: dict) -> list:

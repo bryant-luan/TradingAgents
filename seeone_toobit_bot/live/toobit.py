@@ -89,10 +89,6 @@ class Toobit:
         r = requests.get(f"{BASE}/quote/v1/ticker/bookTicker", params={"symbol": symbol}, timeout=10).json()
         return float(r[0]["b"]), float(r[0]["a"])
 
-    def fee_rates(self, symbol: str) -> dict:
-        r = self._request("GET", "/api/v1/futures/commissionRate", {"symbol": symbol})
-        return {"maker": float(r["openMakerFee"]), "taker": float(r["openTakerFee"])}
-
     def user_trades(self, symbol: str, limit: int = 100) -> list:
         return self._request("GET", "/api/v1/futures/userTrades", {"symbol": symbol, "limit": limit})
 

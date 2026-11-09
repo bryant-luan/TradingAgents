@@ -127,7 +127,6 @@ MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop 
 # 4% and are not. The higher-timeframe floor does not block this long: the
 # decline is why the spike is there.
 BREAK_MIN_RANGE_PCT = 0.01
-BREAK_LONGS = False
 BREAK_LONG_MIN_RANGE = 0.06
 BREAK_LONG_DROP = 0.02
 
@@ -292,7 +291,6 @@ def reversal_plan(side: str, entry: float, break_level, mfe_r, bars, now_ms: flo
 
 
 HIGH_BE_TRIGGER_R = 2.0
-TP_STOP_MOVES = False           # moving the stop to break-even / the previous TP on each TP fill (same finding)
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
 TRAIL_GAP_R = 0.5               # beyond +3R, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
@@ -622,9 +620,6 @@ class SeeOne:
     def recipes(self) -> list:
         return self._cached("recipes", 180, "/app/api/customized-signals").get("recipes", [])
 
-    def core_trend_metrics(self) -> dict:
-        return self._get("/api/metrics", path="CORE TREND")
-
 
 def to_toobit(symbol: str) -> str:
     return symbol[:-4] + "-SWAP-USDT" if symbol.endswith("USDT") else symbol
@@ -688,12 +683,6 @@ def recipe_hits(recipes: list) -> dict:
             if hit and str(base).upper() not in seen:
                 out.setdefault(str(base).upper(), []).append((name, side, len(rules), len(rules)))
     return out
-
-
-def recipe_for(hits: dict, base: str, side: str) -> tuple | None:
-    """Best same-direction recipe progress for this asset, or None."""
-    rows = [h for h in hits.get(base, []) if h[1] == side]
-    return max(rows, key=lambda h: h[2] / h[3]) if rows else None
 
 
 def path_expectancy(signals: list, own_trades: list) -> dict:

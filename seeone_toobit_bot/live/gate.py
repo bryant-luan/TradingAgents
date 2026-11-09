@@ -301,12 +301,6 @@ class Gate:
                            params={"contract": to_gate(symbol), "limit": 1}, timeout=10).json()
         return float(row["bids"][0]["p"]), float(row["asks"][0]["p"])
 
-    def fee_rates(self, symbol: str) -> dict:
-        row = self._request("GET", "/futures/usdt/fee", {"contract": to_gate(symbol)})
-        if isinstance(row, list):
-            row = row[0]
-        return {"maker": float(row.get("maker_fee") or 0), "taker": float(row.get("taker_fee") or 0)}
-
     def fmt_price(self, symbol: str, price: float) -> str:
         tick = self.specs()[symbol]["tick"]
         return str((Decimal(str(price)) / tick).quantize(Decimal(1), rounding=ROUND_DOWN) * tick)

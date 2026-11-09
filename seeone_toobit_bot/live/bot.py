@@ -23,7 +23,7 @@ from .exchange import connect, exchange_name
 from .learner import Learner
 from .market import klines, listing
 from .shadow import Shadow
-from .selfsignal import MAJORS, SelfScanner, btc_ret1h, in_side, micro_1h, move_2h, move_before, rsi_side
+from .selfsignal import MAJORS, SelfScanner, btc_ret1h, in_side, move_2h, move_before, rsi_side
 from .toobit import ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -962,7 +962,7 @@ class Bot:
             positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
             self.reconcile(positions)
 
-        equity, avail = self.equity()
+        equity, _ = self.equity()
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         bal = self.realized
         if self.st["day"] != day or "day_start_balance" not in self.st:
