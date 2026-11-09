@@ -69,6 +69,9 @@ HIGH_RISK_PCT = 0.10            # high-conviction tier (CLANKER-type setups): eq
 HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
+# Live closes, 5m bars: 12 trades peaked between +0.3R and +0.9R and finished red (-99 USDT).
+# All 29 that reached +1R finished green. Half the size comes off at that first target.
+TP1_MIN_WEIGHT = 0.50
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
 # ELSA/AIO entries used this cap. Later bands (1.8, fade, liquid 2.0–2.5) are not entry gates.
@@ -875,7 +878,11 @@ def tp_plan(sig: dict, contracts: int, min_contracts: int, split: list | None = 
     """Split contracts over the signal's TP1..TP5; fold undersized slices into the previous one."""
     levels = sorted((l for l in sig.get("levels", []) if str(l.get("label", "")).startswith("TP")),
                     key=lambda l: l.get("sequence", int(l["label"][2:])))
-    split = split or TP_SPLIT
+    split = list(split or TP_SPLIT)
+    if len(split) > 1 and split[0] < TP1_MIN_WEIGHT:
+        rest = sum(split[1:]) or 1.0
+        scale = (1 - TP1_MIN_WEIGHT) / rest
+        split = [TP1_MIN_WEIGHT] + [x * scale for x in split[1:]]
     plan, left = [], contracts
     for i, lvl in enumerate(levels[:5]):
         qty = left if i == len(levels[:5]) - 1 else int(contracts * split[i])
