@@ -69,10 +69,11 @@ NORMAL_MARGIN_CAP_PCT = 0.28
 HIGH_RISK_PCT = 0.10            # high-conviction tier (CLANKER-type setups): equity at risk at the stop
 HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
-TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
-# Live closes, 5m bars: 12 trades peaked between +0.3R and +0.9R and finished red (-99 USDT).
-# All 29 that reached +1R finished green. Half the size comes off at that first target.
-TP1_MIN_WEIGHT = 0.50
+# Replayed on 5m bars over 12h: 552 self-scan short reviews (stop < 0.9%) and 94 live/paper entries.
+# Taking half at TP1 averaged +0.47R / -0.09R. This split with the -0.5R stop after TP1 (bot.py)
+# averaged +0.80R / -0.02R, ahead in both Nov 4-6 and Nov 7-10 and on 6 of 7 days.
+# The shadow optimizer's split is logged as a suggestion only.
+TP_SPLIT = [0.10, 0.10, 0.20, 0.30, 0.30]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
 # ELSA/AIO entries used this cap. Later bands (1.8, fade, liquid 2.0–2.5) are not entry gates.
@@ -178,6 +179,10 @@ SKIP_GATE_ONLY = True
 # and were 1 win in 9 live closes, -101 USDT.
 SELF_SIDES = ("SHORT",)
 SELF_MAX_SL_PCT = 0.01
+# Self-scan shorts (stop < 0.9%) with BTC up 0-0.3% in the last hour averaged +0.53R / +0.75R
+# (Nov 4-6 / Nov 7-10) on the exit replay, against +0.55R / +0.35R with BTC already falling.
+# Other sources keep BTC1H_MIN_DEFAULT; the replay only covers self-scan reviews.
+SELF_BTC1H_MIN = -0.3
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
@@ -889,10 +894,6 @@ def tp_plan(sig: dict, contracts: int, min_contracts: int, split: list | None = 
     levels = sorted((l for l in sig.get("levels", []) if str(l.get("label", "")).startswith("TP")),
                     key=lambda l: l.get("sequence", int(l["label"][2:])))
     split = list(split or TP_SPLIT)
-    if len(split) > 1 and split[0] < TP1_MIN_WEIGHT:
-        rest = sum(split[1:]) or 1.0
-        scale = (1 - TP1_MIN_WEIGHT) / rest
-        split = [TP1_MIN_WEIGHT] + [x * scale for x in split[1:]]
     plan, left = [], contracts
     for i, lvl in enumerate(levels[:5]):
         qty = left if i == len(levels[:5]) - 1 else int(contracts * split[i])

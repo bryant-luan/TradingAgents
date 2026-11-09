@@ -940,7 +940,7 @@ class SelfScanner:
         self.last_scan = time.time()
         self.shared_hits = 0
         self.resolve()
-        split = self.learner.p.get("tp_split") or S.TP_SPLIT
+        split = S.TP_SPLIT
         min_prob = self.min_prob()
         try:
             self.btc = self.btc_counter()

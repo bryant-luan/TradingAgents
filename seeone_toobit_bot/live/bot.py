@@ -69,12 +69,9 @@ FAST_GUARD_S = 1               # with a position open, watch price every second
 SPIKE_DROP_R = 0.45             # one-second adverse jump treated as a wick
 DEEP_ADVERSE_R = -0.85          # exit before a wick can slip through the full stop
 # After TP1 the exchange stop moves here, and the runner is also cut here.
-# Nine trades still have their 1-minute bars. The worst pullback that finished
-# green was WLD at -0.18R, and that trade ended +0.59R. A stop at the entry
-# would have taken that runner off for about +0.30R. PONS fell to -1.35R after
-# TP1 and finished -0.36R. -0.25R keeps WLD and turns PONS into about +0.12R.
-# On those nine the mean is +0.77R, against +0.75R with the stop left alone.
-AFTER_TP_DEEP_R = -0.25
+# With TP1 at 10% of the size, the 552-review replay averaged +0.80R at -0.5R,
+# +0.76R at -0.25R and lower at the entry, ahead in both halves of Nov 4-10.
+AFTER_TP_DEEP_R = -0.5
 # +0.25R marks a trade that has worked, for the higher-timeframe exit only.
 # Closing the whole position at the entry used to sit beside the +2R lock and the
 # -0.25R stop after TP1. HOT's long on Nov 8 peaked at +0.70R and was closed at
@@ -210,7 +207,7 @@ class Bot:
                 target = float(self.tb.fmt_price(sym, tr["entry"] + sgn * AFTER_TP_DEEP_R * tr["init_dist"]))
                 if tr["init_dist"] and (target - tr["stop"]) * sgn > 0 and not all(tp.get("filled") for tp in tr["tps"]):
                     try:
-                        self.replace_stop(tr, target, "TP1 達成，止損前移到 -0.25R")
+                        self.replace_stop(tr, target, f"TP1 達成，止損前移到 {AFTER_TP_DEEP_R:+.2f}R")
                     except ToobitError as e:
                         log_event("ERROR", trade_id=tid, where="tp1_stop", error=str(e))
 
@@ -479,7 +476,7 @@ class Bot:
             self.note_skip(sig, f"這筆保證金 {sz['margin']:.0f}u、{sz['leverage']}x，"
                                 f"剩餘保證金額度 {max(0, room):.0f}u，總上限 {S.MAX_TOTAL_MARGIN_PCT:.0%}，再開不下")
             return False
-        plan = S.tp_plan(sig, sz["contracts"], spec["min_contracts"], self.learner.p.get("tp_split"))
+        plan = S.tp_plan(sig, sz["contracts"], spec["min_contracts"])
         entry_info = dict(signal_id=sig["id"], source=source, symbol=sym, side=side, price=price,
                           stop=stop, sizing=sz, tp_plan=plan, score=ev["score"], regime=regime,
                           path=sig.get("signal_path"), subtype=sig.get("path_subtype"),
@@ -536,7 +533,7 @@ class Bot:
         spec = self.tb.specs()[sym]
         entry = float(pos.get("avgPrice") or p["price"])
         contracts = fill["filled"] or sz["contracts"]
-        plan = S.tp_plan(sig, contracts, spec["min_contracts"], self.learner.p.get("tp_split"))
+        plan = S.tp_plan(sig, contracts, spec["min_contracts"])
         tps = self.place_tps(sym, side, p.get("tp_ref", entry), plan)
         sz = {**sz, "contracts": contracts}
         entry_fee = S.MAKER_FEE if fill["maker"] >= fill["taker"] else S.TAKER_FEE
@@ -1229,9 +1226,10 @@ class Bot:
                                     f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
                 continue
             aligned = None if btc1h is None else btc1h * sgn
-            if not S.btc_dir_ok(aligned, sig["side"]):
+            btc_min = S.SELF_BTC1H_MIN if src == SELF_SOURCE else S.BTC1H_MIN_DEFAULT
+            if aligned is not None and aligned < btc_min:
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
-                                    f"(順方向 {aligned:+.2f}% < {S.BTC1H_MIN_DEFAULT:+.2f}%)，等大盤同向再進")
+                                    f"(順方向 {aligned:+.2f}% < {btc_min:+.2f}%)，等大盤同向再進")
                 continue
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in moves:
