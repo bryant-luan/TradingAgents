@@ -207,7 +207,7 @@ class Bot:
                     tr["init_dist"] = (tr["risk_usdt"] / (tr["contracts"] * mult) if tr["contracts"]
                                        else abs(tr["entry"] - tr["stop"]))
                 sgn = 1 if side == "LONG" else -1
-                target = tr["entry"] + sgn * AFTER_TP_DEEP_R * tr["init_dist"]
+                target = float(self.tb.fmt_price(sym, tr["entry"] + sgn * AFTER_TP_DEEP_R * tr["init_dist"]))
                 if tr["init_dist"] and (target - tr["stop"]) * sgn > 0 and not all(tp.get("filled") for tp in tr["tps"]):
                     try:
                         self.replace_stop(tr, target, "TP1 達成，止損前移到 -0.25R")
