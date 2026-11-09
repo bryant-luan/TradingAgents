@@ -166,6 +166,11 @@ def long_after_red(range_pct: float, close_4h_ago: float, prev_close: float) -> 
 # so the short was flattened. The 11:15 bar had already closed back through the
 # entry and the short was still on. A later bar back through the entry cancels
 # that exit.
+# Off since 11-09. Of 9 losing reversal exits, 5 later reached +1R before the stop
+# (SIGN, ACT, LYN, Q, UAI) and 4 hit the stop. Still logged as would_exit.
+REVERSAL_EXIT = False
+# Gate-only names: COOL, FATCOIN, FLORK, ZZZ on 11-09, all four lost.
+SKIP_GATE_ONLY = True
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0

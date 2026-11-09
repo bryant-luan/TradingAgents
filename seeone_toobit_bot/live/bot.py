@@ -442,6 +442,9 @@ class Bot:
     # ------------------------------------------------------------------ entries
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
+        if S.SKIP_GATE_ONLY and getattr(self.tb, "name", "") == "gate" and listing(sym) == "only":
+            self.note_skip(sig, "只在 Gate 上市的幣先不開：11-09 COOL、FATCOIN、FLORK、ZZZ 4 筆全虧")
+            return False
         spec = self.tb.specs()[sym]
         price = self.tb.price(sym)
         stop = float(sig["stop_price"])
@@ -1333,6 +1336,11 @@ class Bot:
                     changed = True
                 elif ev["decision"] == "exit" and tr.get("reversal_exit") != ev["opened"]:
                     tr["reversal_exit"] = ev["opened"]
+                    if not S.REVERSAL_EXIT:
+                        log_event("SIGNAL_REVERSAL", decision="would_exit",
+                                  note="15 分鐘反轉平倉已關閉，只記錄；倉位交給止損、-0.85R 與插針保護", **base)
+                        changed = True
+                        continue
                     tr["reversal_closing"] = True
                     why = (f"訊號反轉成立：前一根已到進場價另一側，這根 15 分鐘收盤 {ev['c']:.6g} 仍在那一側，"
                            f"而且後面沒有 K 線轉回進場價這一側，平掉剩餘部位")
