@@ -62,6 +62,13 @@ BIAS_EVERY = 6
 SHARED_REVIEW_FILE = S.ENV_FILE.parent / "logs" / "review_cache.json"
 SHARED_REVIEW_TTL_S = 600
 SHARED_REVIEW_SL_TOL = 0.15
+# Self-scan longs open only in an up-trending market whose recent long reviews are working.
+# Over Nov 4-10 long reviews lost on the replay in every bucket, including 1h/4h >= +1 (-0.5R to -0.65R),
+# but almost none of that week was an up-trend, so the gate learns from fresh resolved reviews instead.
+LONG_TREND_HTF = 0.5
+LONG_GATE_HOURS = 48
+LONG_GATE_MIN_N = 20
+LONG_GATE_HIT = 0.60
 RECHECK_OPEN_S = 900
 EXIT_PROB_BELOW = 40.0
 EXIT_PROB_DROP = 25.0        # close when the next-target probability falls this many points from entry
@@ -700,7 +707,29 @@ class SelfScanner:
             self._pairs().append(rec)
         self.log("LOCAL_SIM", **rec, note="自建驗算模擬，不下單；有 See One 機率的才計入對齊")
 
-    def _near_extreme(self, ordered: list, htf: float | None, specs: dict, held: set) -> list:
+    def long_gate(self, htf: float | None, btc1h: float | None) -> tuple[bool, str]:
+        if htf is None or htf < LONG_TREND_HTF:
+            return False, f"大盤 1h/4h 方向 {htf if htf is not None else '未知'} 未達多頭 +{LONG_TREND_HTF}"
+        if btc1h is not None and btc1h < 0:
+            return False, f"BTC 近 1 小時 {btc1h:+.2f}%，大盤沒有同步向上"
+        cutoff = time.time() - LONG_GATE_HOURS * 3600
+        rows = [r for r in self.d["resolved"] if r["side"] == "LONG" and r["ts"] >= cutoff
+                and r.get("htf") is not None and r["htf"] >= LONG_TREND_HTF and r.get("prob", 0) >= 50]
+        if len(rows) < LONG_GATE_MIN_N:
+            return False, f"近 {LONG_GATE_HOURS} 小時大盤偏多時的多單驗算只有 {len(rows)} 筆（需 {LONG_GATE_MIN_N}）"
+        hit = sum(r["hit"] for r in rows) / len(rows)
+        note = f"近 {LONG_GATE_HOURS} 小時大盤偏多時的多單驗算先到 TP1 {hit:.0%}（{len(rows)} 筆）"
+        if hit < LONG_GATE_HIT:
+            return False, f"{note} < {LONG_GATE_HIT:.0%}"
+        return True, note
+
+    def sides(self, htf: float | None, btc1h: float | None) -> tuple:
+        if "LONG" in S.SELF_SIDES or not self.long_gate(htf, btc1h)[0]:
+            return S.SELF_SIDES
+        return S.SELF_SIDES + ("LONG",)
+
+    def _near_extreme(self, ordered: list, htf: float | None, specs: dict, held: set,
+                      open_sides: tuple = S.SELF_SIDES) -> list:
         """Names whose 3h price is still near the reversal extreme on an open side.
 
         The review budget is REVIEWS_PER_SCAN See One calls. Names already through the range
@@ -747,7 +776,7 @@ class SelfScanner:
                 prob = est.get("prob") if est else None
                 if best is None or (prob or -1) > best:
                     best = prob or -1
-                tradable = tradable or (narrow and side in S.SELF_SIDES)
+                tradable = tradable or (narrow and side in open_sides)
             if best is None:
                 continue
             ranked.append((tradable, best, c))
@@ -946,6 +975,8 @@ class SelfScanner:
             self.btc = self.btc_counter()
         except Exception:
             self.btc = {"up": 0.0, "down": 0.0}
+        open_sides = self.sides(htf, self.btc.get("ret1h"))
+        long_note = self.long_gate(htf, self.btc.get("ret1h"))[1]
         found, watched, reviewed, by_symbol = [], [], 0, {}
         for c in self.universe(regime[1], rhits):
             by_symbol.setdefault(c["symbol"], c)
@@ -992,7 +1023,7 @@ class SelfScanner:
         if seeone_open:
             # Local plans are free. Spend the See One calls on names already sitting
             # near the 3h extreme on a side the window allows, including the liquid-short band.
-            ordered = self._near_extreme(ordered, htf, specs, held)
+            ordered = self._near_extreme(ordered, htf, specs, held, open_sides)
         limit = 40 if not seeone_open else REVIEWS_PER_SCAN
         pl_long = None
         for c in ordered[:limit]:
@@ -1052,7 +1083,7 @@ class SelfScanner:
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.direc_window(direc, sd) is not None and m15_ok(sd)]
-                tradable = [sd for sd in eligible if sd in S.SELF_SIDES] if d / px < S.SELF_MAX_SL_PCT else []
+                tradable = [sd for sd in eligible if sd in open_sides] if d / px < S.SELF_MAX_SL_PCT else []
                 pick = tradable or eligible
                 hint = c.get("side") if c.get("side") in pick else pick[0]
                 # Both sides are only needed to measure the model's long/short bias. Once that bias is known,
@@ -1088,7 +1119,7 @@ class SelfScanner:
                 bias = (raw["LONG"] + raw["SHORT"] - 100) / 2
                 samples.append(round(bias, 2))
                 del samples[:-40]
-                side = max((sd for sd in raw if sd in S.SELF_SIDES), key=raw.get, default=max(raw, key=raw.get))
+                side = max((sd for sd in raw if sd in open_sides), key=raw.get, default=max(raw, key=raw.get))
             else:
                 bias = sum(samples[-20:]) / len(samples[-20:]) if len(samples) >= 4 else 13.0
                 side = next(iter(raw))
@@ -1140,7 +1171,7 @@ class SelfScanner:
         self.save()
         self._write_align()
         self.log("SELF_SCAN", reviewed_symbols=reviewed, shadow=shadowed, seeone_open=seeone_open,
-                 shared_reviews=getattr(self, "shared_hits", 0),
+                 shared_reviews=getattr(self, "shared_hits", 0), open_sides=list(open_sides), long_gate=long_note,
                  universe=len(by_symbol), tradable_contracts=len(specs or {}),
                  tradefi=sum(1 for c in by_symbol.values() if "TradFi" in c["tags"]),
                  watched=[(w["symbol"], w["side"], w["prob"], w["edge"]) for w in watched],

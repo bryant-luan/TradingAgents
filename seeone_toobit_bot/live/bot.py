@@ -1193,9 +1193,8 @@ class Bot:
             # Self-scan shorts once the blend is already BEAR: 7 closes, net about -81 USDT.
             # The two winners (AKE, XRP on Nov 4) do not cover JCT, UAI, Q, HUMA and BNT.
             # Softer-bear shorts such as XMR stay eligible. Quiet shorts and the crash recipe do too.
-            if src == SELF_SOURCE and sig["side"] not in S.SELF_SIDES:
-                self.note_skip(sig, "自選驗算只做空：分析驗算看多的單先到 TP1 只有 49%（11-04~06）/ 35%（11-07~10），"
-                                    "低於 1R 打平線")
+            if src == SELF_SOURCE and sig["side"] not in self.selfscan.sides(htf, btc1h):
+                self.note_skip(sig, "自選驗算做多未開放：" + self.selfscan.long_gate(htf, btc1h)[1])
                 continue
             if src == SELF_SOURCE:
                 sl_pct = abs(float(sig["entry_price"]) - float(sig["stop_price"])) / float(sig["entry_price"])
