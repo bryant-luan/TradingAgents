@@ -1151,6 +1151,12 @@ class Bot:
                         self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
                                             f"(順方向 {aligned:+.2f}% < {S.BTC1H_MIN_DEFAULT:+.2f}%)，等大盤同向再進")
                         continue
+                # 1h/4h can still sit inside the entry band while 15m has already pushed the blend
+                # into a bear regime. Both BEAR breakout shorts (ENA, IREN) were stopped out.
+                if sig["side"] == "SHORT" and reg[0] <= S.REGIME_BEAR:
+                    self.note_skip(sig, f"綜合方向 {reg[0]:+.1f} 已是空頭區間 (≤ {S.REGIME_BEAR:+.1f})，"
+                                        f"15 分鐘跌破發生在大勢已空之後。ENA、IREN 這種單直接打到止損")
+                    continue
                 try:
                     if sig.get("broken") is not None and S.break_half_retrace(
                             sig["side"], float(sig["broken"]), float(sig["entry_price"]),
@@ -1161,6 +1167,13 @@ class Bot:
                 except ToobitError as e:
                     self.st["traded_ids"].append(sig["id"])
                     log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
+                continue
+            # Self-scan shorts once the blend is already BEAR: 7 closes, net about -81 USDT.
+            # The two winners (AKE, XRP on Nov 4) do not cover JCT, UAI, Q, HUMA and BNT.
+            # Softer-bear shorts such as XMR stay eligible. Quiet shorts and the crash recipe do too.
+            if src == SELF_SOURCE and sig["side"] == "SHORT" and reg[0] <= S.REGIME_BEAR:
+                self.note_skip(sig, f"自選驗算做空時綜合方向 {reg[0]:+.1f} 已是空頭區間 (≤ {S.REGIME_BEAR:+.1f})，"
+                                    f"這段實測淨虧，BNT 開倉 7 分鐘就打到止損")
                 continue
             if src != SELF_SOURCE:
                 self.pre = self.pre_move(sig)
