@@ -109,7 +109,8 @@ class Toobit:
 
     def positions(self, symbol: str | None = None) -> list:
         rows = self._request("GET", "/api/v1/futures/positions", {"symbol": symbol})
-        return [p for p in rows if float(p.get("position") or 0) > 0]
+        # Orders take whole contracts, so a fractional remainder (0.1 BTC contract) can never be closed by the bot.
+        return [p for p in rows if float(p.get("position") or 0) >= 1]
 
     def history_positions(self, symbol: str, limit: int = 5) -> list:
         return self._request("GET", "/api/v1/futures/historyPositions", {"symbol": symbol, "limit": limit})
