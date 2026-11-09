@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
