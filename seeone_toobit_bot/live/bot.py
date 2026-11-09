@@ -387,9 +387,13 @@ class Bot:
                 except Exception:
                     tr["paper_exit_px"] = tr["entry"]
             self._paper_finish(tid, tr)
-        log_event("SIM_DONE", exchange="gate", note="Gate 模擬一天結束，程式停止，不會自動改送真單")
+        go_live = os.environ.get("GATE_LIVE_AFTER_SIM") == "1"
+        log_event("SIM_DONE", exchange="gate", live_next=go_live,
+                  note=("Gate 模擬結束，模擬倉已按現價結算；使用者指示轉實盤，重啟後送真單" if go_live
+                        else "Gate 模擬一天結束，程式停止，不會自動改送真單"))
         save_state(self.st)
-        (ROOT / "logs" / "gate" / "SIM_ENDED").write_text(now_iso() + "\n")
+        if not go_live:
+            (ROOT / "logs" / "gate" / "SIM_ENDED").write_text(now_iso() + "\n")
         os._exit(0)
 
     def finish(self, tid: str, tr: dict):
