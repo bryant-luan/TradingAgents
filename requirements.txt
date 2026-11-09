@@ -1,1 +1,1 @@
-.
+-r seeone_toobit_bot/requirements.txt
