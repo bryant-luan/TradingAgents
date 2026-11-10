@@ -810,18 +810,13 @@ class SelfScanner:
         return [c for _, _, c in ranked[:REVIEWS_PER_SCAN]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:
-        """One maker long when the explosion recipe fully matches.
+        """Order-book longs are off.
 
-        The short-crash recipe is off. XPL, ERA and both IRYS shorts all
-        finished near -0.9R within about 16 minutes. The Nov 8 cards
-        (PONS, LYN, CT, ONE) are not traded.
-        A name that has already run 2.5R is not chased.
+        Seven live closes averaged -0.39R (-19 USDT). HOLO and MINA each
+        stopped on both books. S (+1.45R) and MANTRA (+0.5R) did not cover
+        them. The short-crash recipe was already off.
         """
-        if time.time() - self.last_spike < SCAN_EVERY_S:
-            return []
-        self.last_spike = time.time()
-        sig = self._spike_side("LONG", "爆漲", held, specs)
-        return [sig] if sig else []
+        return []
 
     def _spike_side(self, side: str, token: str, held: set, specs: dict) -> dict | None:
         best = None
@@ -924,10 +919,10 @@ class SelfScanner:
             if side is None:
                 return None
             if side == "LONG":
-                if len(closed) < 17:
-                    return None
-                if not S.long_after_red((h - l) / o, float(closed[-17][4]), float(closed[-2][4])):
-                    return None
+                # Every live breakout long lost. The 6% green bar after a drop
+                # (DJT, FATCOIN, FLORK) stopped out, and the earlier plain breaks
+                # (BMT, ERA) did too. Five closes, average -0.59R.
+                return None
             atr_v = sum(max(float(x[2]) - float(x[3]), abs(float(x[2]) - float(p[4])), abs(float(x[3]) - float(p[4])))
                         for p, x in zip(closed[-15:-1], closed[-14:])) / 14
             sgn = 1 if side == "LONG" else -1
@@ -1117,6 +1112,8 @@ class SelfScanner:
                     tradable = ["LONG"] + [sd for sd in tradable if sd != "LONG"]
                 can_open = set(open_sides) | ({"LONG"} if bounce else set())
                 pick = tradable or eligible
+                if not pick:
+                    continue
                 hint = c.get("side") if c.get("side") in pick else pick[0]
                 # Both sides are only needed to measure the model's long/short bias. Once that bias is known,
                 # one call plus the saved bias matches the old de-bias math and cuts the request in half.

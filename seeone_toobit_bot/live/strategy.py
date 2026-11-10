@@ -151,7 +151,11 @@ def break_half_retrace(side: str, broken: float, close: float, price: float) -> 
 
 
 def long_after_red(range_pct: float, close_4h_ago: float, prev_close: float) -> bool:
-    """A long break only after a 4-hour drop and a green bar of at least 6%."""
+    """A long break only after a 4-hour drop and a green bar of at least 6%.
+
+    Live breakout scans no longer take longs. DJT, FATCOIN and FLORK, the three
+    that passed this test, all stopped out.
+    """
     if range_pct < BREAK_LONG_MIN_RANGE or close_4h_ago <= 0:
         return False
     return (close_4h_ago - prev_close) / close_4h_ago >= BREAK_LONG_DROP
