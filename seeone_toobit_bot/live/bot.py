@@ -1073,19 +1073,8 @@ class Bot:
             self.st["day_lock_armed"] = True
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
-                      reason=f"當日已實現獲利達 {S.DAY_TARGET_ARM_USDT:.0f}u。進場仍用同一套規則，不看時段；"
-                             f"到 {S.DAY_TARGET_CAP_USDT:.0f}u 停止開新倉；"
-                             f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則提前停止")
-        floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
-        if self.st.get("day_lock_armed") and start + gained < floor:
-            if not self.st.get("day_lock_hit"):
-                self.st["day_lock_hit"] = True
-                log_event("DAY_LOCK_HIT", day_start_balance=round(start, 2), day_peak_balance=round(peak, 2),
-                          balance=round(start + gained, 2), floor=round(floor, 2),
-                          reason="當日已實現獲利回吐過半，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
-            if signals is not None:
-                self.record_signal_snapshots(signals)
-            return
+                      reason=f"當日已實現獲利達 {S.DAY_TARGET_ARM_USDT:.0f}u。進場仍用同一套規則，"
+                             f"一路放到 {S.DAY_TARGET_CAP_USDT:.0f}u 才停止開新倉")
         loss_floor = self.st["day_start_equity"] * (1 - S.DAILY_STOP_PCT)
         if RISK_OPEN_FILE.exists():
             if self.st.get("risk_open_logged") != day:

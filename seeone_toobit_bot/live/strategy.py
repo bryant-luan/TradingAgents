@@ -342,7 +342,7 @@ DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades 
 TRAIL_GAP_R = 1.0               # beyond +3R, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
 # Today's profit target, in USDT of realized closed trades. Entries use the same rules at every
-# hour and after +50. +50 only starts the giveback watch. At +100 new entries stop.
+# hour. New entries stop at +100. A pullback after +50 does not stop the day.
 DAY_TARGET_ARM_USDT = 50.0
 DAY_TARGET_CAP_USDT = 100.0
 DAY_LOCK_TRIGGER_PCT = 0.10     # kept for logs; the live trigger is the USDT band above
