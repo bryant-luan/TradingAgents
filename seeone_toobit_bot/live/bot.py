@@ -215,7 +215,12 @@ class Bot:
                     except ToobitError as e:
                         log_event("ERROR", trade_id=tid, where="tp1_stop", error=str(e))
 
-            ref_eq = self.st.get("day_start_equity") or 0
+            # Dust is half a minimum trade on the equity the book is trading now.
+            # Day-start equity stays the loss-halt baseline. On Nov 11 it was still 317
+            # while the account was near 160, so half of 5% of 317 was 7.9u and every
+            # full-size entry (risk about 7.4-7.9u) was flattened within a minute.
+            # Eighteen of those closes cost 12.15u, mostly fees.
+            ref_eq = getattr(self, "_mark_equity", None) or self.st.get("day_start_equity") or 0
             # A fresh signal that only partly filled is not dust. ALGO long at 19:07
             # Taipei on Nov 8 was a qualified review; the maker kept 32,791 of 353,265
             # contracts and this cleanup flattened it at +0.06R. Price later reached +1R.
@@ -1005,6 +1010,10 @@ class Bot:
             positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
 
         if not self.dry and not self.paper:
+            try:
+                self._mark_equity, _ = self.equity()
+            except Exception:
+                self._mark_equity = self.st.get("day_start_equity") or 0
             self.manage(positions, sigmap)
             positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
             self.reconcile(positions)
