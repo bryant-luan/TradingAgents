@@ -282,8 +282,11 @@ class Bot:
         htf_entry = tr.get("htf_at_entry")
         opened_against = htf_entry is not None and htf_entry * sgn < S.HTF_MIN_DEFAULT
         worked = tr.get("mfe_r", 0.0) >= GIVEBACK_ARM_R and time.time() - tr["opened_ts"] >= 900
-        htf_flat = (htf is not None and htf * sgn < S.HTF_MIN_DEFAULT
+        # Bounce longs open only when 1h/4h is already below this line, so the check would close them at once
+        # (BR on Nov 10 was closed one second after entry).
+        htf_flat = (htf is not None and htf * sgn < S.HTF_MIN_DEFAULT and tr.get("path") != S.BOUNCE_PATH
                     and not tr.get("after_red") and not tr.get("recipe_spike")
+                    and tr.get("path") != S.BOUNCE_PATH
                     and (opened_against or worked or cur_r <= HTF_FLAT_AFTER_R))
         if htf_flat:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
@@ -446,7 +449,7 @@ class Bot:
         if held >= S.BOUNCE_MAX_OPEN:
             return f"反彈多單同時最多 {S.BOUNCE_MAX_OPEN} 筆，已有 {held} 筆"
         last = [c for c in self.st["closed"] if c.get("path") == S.BOUNCE_PATH][-S.BOUNCE_STOP_AFTER_LOSSES:]
-        if len(last) == S.BOUNCE_STOP_AFTER_LOSSES and all((c.get("pnl") or 0) < 0 for c in last):
+        if len(last) == S.BOUNCE_STOP_AFTER_LOSSES and all((c.get("r_result") or 0) <= S.BOUNCE_LOSS_R for c in last):
             return f"反彈多單實盤已連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，停用"
         return None
 
