@@ -295,7 +295,7 @@ class Bot:
         if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧")):
             log_event("ADVERSE_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, cur_r=round(cur_r, 3),
                       reason=tr["exit_reason"])
-            self.maker_close(tr)
+            self.maker_close(tr, urgent=not tr["exit_reason"].startswith("大週期"))
             return
         lk = S.lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
         if lk is None or lk <= tr.get("lock_r", -1):
@@ -749,9 +749,13 @@ class Bot:
         px = (bid + tick if wide else bid) if buy else (ask - tick if wide else ask)
         return self.tb.fmt_price(sym, px)
 
-    def maker_close(self, tr: dict):
+    def maker_close(self, tr: dict, urgent: bool = False):
         """Exit a whole position with post-only orders at the touch; market only for whatever is left after the retries.
-        The exchange-side stop stays in place the whole time."""
+        The exchange-side stop stays in place the whole time.
+
+        urgent skips the post-only retries: a quote resting at the touch while price runs
+        against it does not fill. Toobit -0.85R exits waited 34-336 s that way and closed at
+        -1.0R to -1.21R (ENA, BNT, IREN, IRYS, USELESS, REZ), worse than the stop itself."""
         if tr.get("paper"):
             try:
                 tr["paper_exit_px"] = self.tb.price(tr["tsym"])
@@ -767,7 +771,7 @@ class Bot:
                 tp["cancelled"] = True
         close_side = "SELL_CLOSE" if side == "LONG" else "BUY_CLOSE"
         maker = taker = 0
-        for _ in range(MAKER_CLOSE_TRIES):
+        for _ in range(0 if urgent else MAKER_CLOSE_TRIES):
             pos = next((p for p in self.tb.positions(sym) if p.get("side") == side), None)
             if not pos:
                 break
