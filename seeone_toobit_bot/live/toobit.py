@@ -37,8 +37,17 @@ class Toobit:
         self._lock = threading.Lock()
 
     def _request(self, method: str, path: str, params: dict | None = None):
-        with self._lock:
-            return self._request_locked(method, path, params)
+        # A timed-out GET used to abort the whole cycle, dropping signals the scan had just found.
+        # Only reads are retried; a resent order could fill twice.
+        tries = 3 if method == "GET" else 1
+        for attempt in range(tries):
+            try:
+                with self._lock:
+                    return self._request_locked(method, path, params)
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == tries - 1:
+                    raise
+                time.sleep(1 + attempt)
 
     def _request_locked(self, method: str, path: str, params: dict | None = None):
         params = {k: v for k, v in (params or {}).items() if v is not None}

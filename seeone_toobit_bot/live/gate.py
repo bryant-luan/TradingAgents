@@ -219,8 +219,16 @@ class Gate:
         self._lock = threading.Lock()
 
     def _request(self, method: str, path: str, params: dict | None = None, body: dict | None = None):
-        with self._lock:
-            return self._request_locked(method, path, params, body)
+        # Only reads are retried; a resent order could fill twice.
+        tries = 3 if method == "GET" else 1
+        for attempt in range(tries):
+            try:
+                with self._lock:
+                    return self._request_locked(method, path, params, body)
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == tries - 1:
+                    raise
+                time.sleep(1 + attempt)
 
     def _request_locked(self, method: str, path: str, params: dict | None, body: dict | None):
         import json
