@@ -187,6 +187,10 @@ SELF_BTC1H_MIN = -0.3
 # fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
 # Breakout entries take it too: 6 live breakouts past it won once, -1.88R (EVAA, HOT, ENA among them).
 BTC1H_CHASE_MAX = 0.3
+# A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
+# price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
+# showed no such gap, so they keep the learned window.
+SELF_ENTRY_CHASE_MAX_R = 0.1
 # Self-scan bounce longs: the market's 1h/4h direction below -0.5 and a stop of at least 1.5%.
 # On the 5m exit replay these averaged +0.41R (139) / +0.39R (139), TP1 first 59% / 62%, while trend longs
 # (1h/4h >= +0.5) averaged -0.35R / -0.51R. 205 of the 278 samples are from Nov 6, so one open at a time,
@@ -196,6 +200,9 @@ BOUNCE_HTF_MAX = -0.5
 BOUNCE_MIN_SL_PCT = 0.015
 BOUNCE_MAX_OPEN = 1
 BOUNCE_STOP_AFTER_LOSSES = 2
+# A scratch exit is not a wrong call: BR on Nov 10 was closed at -0.10R one second after entry by the
+# 1h/4h trend-gone exit, which bounce longs no longer take.
+BOUNCE_LOSS_R = -0.3
 
 
 def bounce_ok(htf: float | None, sl_pct: float) -> bool:
@@ -397,6 +404,7 @@ class SeeOne:
         self.fails, self.open_until, self.down_since, self.last_error = 0, 0.0, None, None
         self.review_not_before, self._review_streak = self._load_review_pause()
         self.last_review_post = 0.0
+        self._review_lock = threading.Lock()
         self._cache: dict = {}
         self.http = None
         self._new_session()
@@ -460,6 +468,14 @@ class SeeOne:
         return REVIEW_PENALTY_S
 
     def request(self, method: str, path: str, deadline: float = HTTP_DEADLINE_S, tries: int = 2, **kw):
+        if not path.endswith("analysis-review"):
+            return self._request(method, path, deadline, tries, **kw)
+        # The self-scan thread and the main loop's open-trade re-checks both post reviews;
+        # the gap below only holds if they take turns.
+        with self._review_lock:
+            return self._request(method, path, deadline, tries, **kw)
+
+    def _request(self, method: str, path: str, deadline: float, tries: int, **kw):
         if time.time() < self.open_until:
             raise SeeOneDown(f"See One 連線異常 ({self.last_error})，暫停呼叫 {self.open_until - time.time():.0f}s")
         is_review = path.endswith("analysis-review")

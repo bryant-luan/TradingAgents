@@ -64,6 +64,7 @@ RECONCILE_S = 60
 ADOPT_TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
 ADOPT_MAX_STOP_PCT = 0.06
 LOOP_SECONDS = 30
+SCAN_RESULT_TTL_S = 120
 # While the main loop is inside a See One scan, this thread still ratchets exchange stops.
 FAST_GUARD_S = 1               # with a position open, watch price every second
 SPIKE_DROP_R = 0.45             # one-second adverse jump treated as a wick
@@ -138,6 +139,9 @@ class Bot:
         self.learner = Learner(LEARN_FILE, INSIGHT_LOG, log_event)
         self.shadow = Shadow(SHADOW_FILE, self.learner, log_event)
         self.selfscan = SelfScanner(self.so, self.tb, self.learner, CALIB_FILE, log_event)
+        self._scan_th: threading.Thread | None = None
+        self._scan_lock = threading.Lock()
+        self._scan_out: list = []
         self.last_history = 0.0
         self.pre_moves: dict[str, float | None] = {}
         self._protect_lock = threading.Lock()
@@ -1125,24 +1129,18 @@ class Bot:
                 continue
             scored.append((ev["score"], sig, src, ev))
 
-        try:
-            for f in self.selfscan.scan(reg, rhits, held_syms, specs, dirs.get("15m"), S.htf_score(dirs)):
-                if f["sig"]["id"] not in self.st["traded_ids"]:
-                    scored.append((f["ev"]["score"], f["sig"], f.get("source", SELF_SOURCE), f["ev"]))
-        except Exception as e:
-            log_event("ERROR", where="self_scan", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
-        try:
-            for f in self.selfscan.orderbook_spikes(held_syms, specs):
-                if f["sig"]["id"] not in self.st["traded_ids"]:
-                    scored.append((f["ev"]["score"], f["sig"], f.get("source", "訂單簿爆漲"), f["ev"]))
-        except Exception as e:
-            log_event("ERROR", where="orderbook_spike", error=repr(e)[:300])
-        try:
-            for f in self.selfscan.fresh_breaks(held_syms, specs, S.htf_score(dirs)):
-                if f["sig"]["id"] not in self.st["traded_ids"]:
-                    scored.append((f["ev"]["score"], f["sig"], f.get("source", "突破"), f["ev"]))
-        except Exception as e:
-            log_event("ERROR", where="breakout", error=repr(e)[:300])
+        if self._scan_th is None or not self._scan_th.is_alive():
+            self._scan_th = threading.Thread(target=self._scan_worker, name="self-scan", daemon=True,
+                                             args=(reg, rhits, set(held_syms), specs, dirs.get("15m"), S.htf_score(dirs)))
+            self._scan_th.start()
+        with self._scan_lock:
+            found, self._scan_out = self._scan_out, []
+        for at, f, src in found:
+            if time.time() - at > SCAN_RESULT_TTL_S:
+                continue
+            if f["sig"]["id"] in self.st["traded_ids"] or S.to_toobit(f["sig"]["symbol"]) in held_syms:
+                continue
+            scored.append((f["ev"]["score"], f["sig"], f.get("source", src), f["ev"]))
 
         if self.dry or os.environ.get("BOT_VERBOSE"):
             print(json.dumps({"ts": now_iso(), "regime": reg, "directions": dirs, "equity": round(equity, 2),
@@ -1330,6 +1328,24 @@ class Bot:
             except ToobitError as e:
                 self.st["traded_ids"].append(sig["id"])
                 log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
+
+    def _scan_worker(self, reg, rhits, held, specs, m15, htf):
+        """Self-scan, order-book spikes and 15m breakouts. The self-scan spaces its See One reviews
+        15 s apart and took 4-8 minutes, during which the main loop read no signals and booked no closes."""
+        steps = (("self_scan", SELF_SOURCE, lambda: self.selfscan.scan(reg, rhits, held, specs, m15, htf)),
+                 ("orderbook_spike", "訂單簿爆漲", lambda: self.selfscan.orderbook_spikes(held, specs)),
+                 ("breakout", "突破", lambda: self.selfscan.fresh_breaks(held, specs, htf)))
+        for where, src, run in steps:
+            if self.stopping:
+                return
+            try:
+                out = run()
+            except Exception as e:
+                log_event("ERROR", where=where, error=repr(e)[:300], tb=traceback.format_exc()[-600:])
+                continue
+            if out:
+                with self._scan_lock:
+                    self._scan_out.extend((time.time(), f, src) for f in out)
 
     def fast_guard(self):
         """Move exchange stops within a few seconds of a new high, without waiting for the See One scan to finish."""
