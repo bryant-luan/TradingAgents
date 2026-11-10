@@ -260,6 +260,15 @@ class Bot:
                 tr["exit_reason"] = "超過 48 小時且已不在 See One 訊號列表，時間止損"
                 self.maker_close(tr)
 
+    def _spike_through_lock(self, tr: dict, cur_r: float) -> bool:
+        """A one-second drop still above a profit-lock stop is left to that stop.
+
+        Market-closing it filled through the stop on XMR (Nov 10 10:57 Taipei): the print
+        was +3.06R, the lock was about +3R, and the fill realized +2.43R.
+        """
+        lk = S.lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
+        return not (lk is not None and lk > 0 and cur_r > lk)
+
     def protect(self, tr: dict):
         """Ratchet the exchange stop from the best price reached: break-even first, then lock part of the open profit."""
         with self._protect_lock:
@@ -294,7 +303,7 @@ class Bot:
                     and (opened_against or worked or cur_r <= HTF_FLAT_AFTER_R))
         if htf_flat:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
-        elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R:
+        elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and self._spike_through_lock(tr, cur_r):
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
         elif cur_r <= (AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R):
             line = AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R

@@ -232,10 +232,13 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 # (MFE in R reached, R locked by the stop); 0.0 = break-even plus round-trip fees.
 # Replaying gated reviews on 5m bars, tightening before +2R cut the average result roughly in half
 # (+0.10R vs +0.20R): early break-even stops were wicked out ahead of the bigger moves.
-# Once MFE is +3R the stop used to sit 1.2R behind the high, so a +3.02R push (XRP, 11-07)
-# only locked +1.75R and the runner gave the rest back. After +3R the stop now stays 0.5R
-# behind the high, stepped by 0.25R: +3.02R locks +2.50R, +3.66R locks +3.00R.
-LOCK_LADDER = ((2.0, 0.0), (3.0, 2.5))
+# Once MFE is +3R the stop used to sit 0.5R behind the high and also jumped to +2.5R.
+# On the current rules (60 reviews that pass the live short gates, 195 longs in the same
+# 1h/4h band, 5m replay, stop-first, fees in), that cut the runner: +1.451R vs +1.489R on
+# the shorts and +0.188R vs +0.201R on the longs, ahead in both halves. Locking +1R already
+# at +2R was worse (+1.241R on the shorts). After +3R the stop now stays 1R behind the high,
+# stepped by 0.25R, and the floor at +3R is +2R: +3.02R locks +2.00R, +4.00R locks +3.00R.
+LOCK_LADDER = ((2.0, 0.0), (3.0, 2.0))
 
 
 def reversal_view(side: str, entry: float, break_level, mfe_r, o: float, h: float, l: float, c: float,
@@ -336,7 +339,7 @@ def reversal_plan(side: str, entry: float, break_level, mfe_r, bars, now_ms: flo
 
 HIGH_BE_TRIGGER_R = 2.0
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
-TRAIL_GAP_R = 0.5               # beyond +3R, trail the stop this far behind the best price
+TRAIL_GAP_R = 1.0               # beyond +3R, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
 # Today's profit target, in USDT of realized closed trades. Entries use the same rules at every
 # hour and after +50. +50 only starts the giveback watch. At +100 new entries stop.
