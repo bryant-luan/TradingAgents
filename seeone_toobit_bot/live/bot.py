@@ -1186,6 +1186,10 @@ class Bot:
                         self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
                                             f"(順方向 {aligned:+.2f}% < {S.BTC1H_MIN_DEFAULT:+.2f}%)，等大盤同向再進")
                         continue
+                    if aligned is not None and aligned >= S.BTC1H_CHASE_MAX:
+                        self.note_skip(sig, f"BTC 近 1 小時已順{'做多' if sgn > 0 else '做空'}方向走 {aligned:+.2f}% "
+                                            f"(≥ {S.BTC1H_CHASE_MAX:+.1f}%)，突破追在大盤急走之後：實單 6 筆只贏 1 筆，-1.88R")
+                        continue
                 # 1h/4h can still sit inside the entry band while 15m has already pushed the blend
                 # into a bear regime. Both BEAR breakout shorts (ENA, IREN) were stopped out.
                 if sig["side"] == "SHORT" and reg[0] <= S.REGIME_BEAR:
@@ -1250,9 +1254,9 @@ class Bot:
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
                                     f"(順方向 {aligned:+.2f}% < {btc_min:+.2f}%)，等大盤同向再進")
                 continue
-            if src == SELF_SOURCE and aligned is not None and aligned >= S.SELF_BTC1H_MAX and not bounce:
+            if src == SELF_SOURCE and aligned is not None and aligned >= S.BTC1H_CHASE_MAX and not bounce:
                 self.note_skip(sig, f"BTC 近 1 小時已順{'做多' if sgn > 0 else '做空'}方向走 {aligned:+.2f}% "
-                                    f"(≥ {S.SELF_BTC1H_MAX:+.1f}%)，自選單追在大盤急走之後，驗算只有 48% 先到 TP1")
+                                    f"(≥ {S.BTC1H_CHASE_MAX:+.1f}%)，自選單追在大盤急走之後，驗算只有 48% 先到 TP1")
                 continue
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in moves:

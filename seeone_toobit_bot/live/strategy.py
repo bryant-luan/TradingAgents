@@ -185,7 +185,8 @@ SELF_MAX_SL_PCT = 0.01
 SELF_BTC1H_MIN = -0.3
 # Upper bound on the same aligned BTC 1h move. Short reviews (1h/4h -0.5..1.5) made after BTC had already
 # fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
-SELF_BTC1H_MAX = 0.3
+# Breakout entries take it too: 6 live breakouts past it won once, -1.88R (EVAA, HOT, ENA among them).
+BTC1H_CHASE_MAX = 0.3
 # Self-scan bounce longs: the market's 1h/4h direction below -0.5 and a stop of at least 1.5%.
 # On the 5m exit replay these averaged +0.41R (139) / +0.39R (139), TP1 first 59% / 62%, while trend longs
 # (1h/4h >= +0.5) averaged -0.35R / -0.51R. 205 of the 278 samples are from Nov 6, so one open at a time,
