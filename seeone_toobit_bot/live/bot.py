@@ -532,7 +532,7 @@ class Bot:
         }
         save_state(self.st)
         # An exception below leaves pending_entry in place; the next cycle's recover_pending_entry() adopts it.
-        fill = self.maker_entry(sym, side, sz["contracts"], stop, sig, spec)
+        fill = self.maker_entry(sym, side, sz["contracts"], stop, sig, spec, price)
         pos = next((p for p in self.tb.positions(sym) if p.get("side") == side), None)
         if not pos:
             log_event("SKIP" if not fill["filled"] else "ERROR", signal_id=sig["id"], symbol=sym, side=side,
@@ -674,14 +674,29 @@ class Bot:
         away = px > stop * 1.001 if side == "LONG" else px < stop * 0.999
         if sig.get("broken") is not None and S.break_half_retrace(side, float(sig["broken"]), entry, px):
             return False
-        return away and cur_r <= self.learner.p["entry_r_window"][1]
+        hi = self.learner.p["entry_r_window"][1]
+        if str(sig.get("id", "")).startswith("self:"):
+            hi = min(hi, S.SELF_ENTRY_CHASE_MAX_R)
+        return away and cur_r <= hi
 
-    def maker_entry(self, sym: str, side: str, contracts: int, stop: float, sig: dict, spec: dict) -> dict:
+    def maker_entry(self, sym: str, side: str, contracts: int, stop: float, sig: dict, spec: dict,
+                    ref_px: float | None = None) -> dict:
         """Work the entry as post-only (maker) at the touch; fall back to market only while still in the entry band."""
         open_side = "BUY_OPEN" if side == "LONG" else "SELL_OPEN"
         res = {"filled": 0, "maker": 0, "taker": 0, "order_ids": [], "note": None}
         stop_px = self.tb.fmt_price(sym, stop)
         stop_set = False
+        # Size was set from ref_px. A maker order that follows the touch away from the stop
+        # must buy fewer contracts, or the loss at the fixed stop grows past the planned risk
+        # (HAEDAL: sized at 0.02729, filled at 0.02763, 1.59× the planned loss).
+        budget = contracts * abs(ref_px - stop) if ref_px else None
+        spent = 0.0
+
+        def cap(left: int, px: float) -> int:
+            if budget is None or abs(px - stop) <= 0:
+                return left
+            return min(left, int((budget - spent) / abs(px - stop)))
+
         for _ in range(MAKER_TRIES):
             left = contracts - res["filled"]
             if left < spec["min_contracts"]:
@@ -694,6 +709,10 @@ class Bot:
                 px = bid if side == "LONG" else ask
             if not self._entry_ok(px, sig, stop):
                 res["note"] = f"掛單期間價格 {px} 已離開進場區間，不追價"
+                break
+            left = cap(left, px)
+            if left < spec["min_contracts"]:
+                res["note"] = f"價格 {px} 離止損較遠，規劃風險已用完，不再加倉"
                 break
             try:
                 o = self.tb.post_only(sym, open_side, left, self.tb.fmt_price(sym, px), "mo")
@@ -716,6 +735,7 @@ class Bot:
             if ex:
                 res["filled"] += ex
                 res["maker"] += ex
+                spent += ex * abs((float(q.get("avgPrice") or 0) or px) - stop)
                 if not stop_set:
                     self.tb.set_position_stop(sym, side, stop_px)
                     stop_set = True
@@ -727,7 +747,8 @@ class Bot:
                            + ("，保留已成交部位" if res["filled"] else "，放棄此訊號"))
         elif left >= spec["min_contracts"] and res["note"] is None:
             px = self.tb.price(sym)
-            if self._entry_ok(px, sig, stop):
+            left = cap(left, px)
+            if self._entry_ok(px, sig, stop) and left >= spec["min_contracts"]:
                 if stop_set:
                     o = self.tb.market(sym, open_side, left)
                 else:
@@ -997,12 +1018,17 @@ class Bot:
                 today = sum(c["pnl"] or 0 for c in self.st["closed"] if c["closed_at"].startswith(day))
             self.st["day_start_balance"] = bal - today
             self.st["day_peak_balance"] = bal
-            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity", "day_lock_ts", "day_target_done"):
+            for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity", "day_lock_ts", "day_target_done",
+                      "day_target_hit", "day_peak_gain"):
                 self.st.pop(k, None)
         self.st.setdefault("principal", equity)
-        # Profit lock tracks realized balance only, so a floating profit that is later given back can't trip it.
+        # The profit target and lock count today's closed-trade PnL, not the balance change: a 151u Gate deposit
+        # on Nov 10 read as 151u profit and stopped new entries for the day.
+        self.st.pop("day_target_done", None)
         start = self.st["day_start_balance"]
-        peak = self.st["day_peak_balance"] = max(self.st["day_peak_balance"], bal)
+        gained = sum(c.get("pnl") or 0 for c in self.st["closed"] if (c.get("closed_at") or "").startswith(day))
+        peak_gain = self.st["day_peak_gain"] = max(self.st.get("day_peak_gain", 0.0), gained)
+        peak = start + peak_gain
         override = LOCK_OFF_FILE.exists() and LOCK_OFF_FILE.read_text().strip() == day
         if override and self.st.get("day_lock_off_logged") != day:
             for k in ("day_lock_armed", "day_lock_hit", "day_lock_ts"):
@@ -1010,13 +1036,12 @@ class Bot:
             self.st["day_lock_off_logged"] = day
             log_event("DAY_LOCK_OVERRIDE", day=day,
                       reason="使用者指示今日照常開一般倉：解除當日鎖利與回吐停止 (UTC 日界前有效)；當日虧損上限仍有效")
-        gained = bal - start
-        if not override and gained >= S.DAY_TARGET_CAP_USDT and not self.st.get("day_target_done"):
-            self.st["day_target_done"] = True
+        if not override and gained >= S.DAY_TARGET_CAP_USDT and not self.st.get("day_target_hit"):
+            self.st["day_target_hit"] = True
             log_event("DAY_TARGET_DONE", day_start_balance=round(start, 2), balance=round(bal, 2),
                       gained=round(gained, 2),
                       reason=f"當日已實現獲利 {gained:.0f}u 達到目標上限 {S.DAY_TARGET_CAP_USDT:.0f}u，今日停止開新倉")
-        if self.st.get("day_target_done"):
+        if self.st.get("day_target_hit"):
             if signals is not None:
                 self.record_signal_snapshots(signals)
             return
@@ -1029,11 +1054,11 @@ class Bot:
                              f"到 {S.DAY_TARGET_CAP_USDT:.0f}u 停止開新倉；"
                              f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則提前停止")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
-        if self.st.get("day_lock_armed") and bal < floor:
+        if self.st.get("day_lock_armed") and start + gained < floor:
             if not self.st.get("day_lock_hit"):
                 self.st["day_lock_hit"] = True
                 log_event("DAY_LOCK_HIT", day_start_balance=round(start, 2), day_peak_balance=round(peak, 2),
-                          balance=round(bal, 2), floor=round(floor, 2),
+                          balance=round(start + gained, 2), floor=round(floor, 2),
                           reason="當日已實現獲利回吐過半，今日停止開新倉，持倉浮盈 +0.3R 即移至保本")
             if signals is not None:
                 self.record_signal_snapshots(signals)
