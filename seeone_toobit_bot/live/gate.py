@@ -480,7 +480,8 @@ class Gate:
             trigger = (row.get("trigger") or {}).get("price")
             out.append({
                 "orderId": _oid(row),
-                "clientOrderId": text or f"STOP_{direction}_LOSS",
+                # In hedge mode Gate stores the full-position stop's text as "api", so the label is derived.
+                "clientOrderId": f"STOP_{direction}_LOSS" if full_stop else (text or f"STOP_{direction}_LOSS"),
                 "orderType": f"STOP_{direction}_LOSS" if full_stop else order_type,
                 "stopPrice": trigger,
                 "side": close_side,
