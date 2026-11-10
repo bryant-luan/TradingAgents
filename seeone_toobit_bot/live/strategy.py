@@ -338,19 +338,13 @@ HIGH_BE_TRIGGER_R = 2.0
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
 TRAIL_GAP_R = 0.5               # beyond +3R, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
-# Today's profit target, in USDT of realized balance above the day start.
-# At +50 only the best-measured 1h/4h band may still open. At +100 new entries stop.
+# Today's profit target, in USDT of realized closed trades. Entries use the same rules at every
+# hour and after +50. +50 only starts the giveback watch. At +100 new entries stop.
 DAY_TARGET_ARM_USDT = 50.0
 DAY_TARGET_CAP_USDT = 100.0
 DAY_LOCK_TRIGGER_PCT = 0.10     # kept for logs; the live trigger is the USDT band above
 DAILY_STOP_PCT = 0.12           # day loss (realized + floating, incl. open risk to stops) that ends the day
 DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
-# After +50 USDT the higher-timeframe band still applies. How many positions fit is
-# equity * 70% divided by each trade's margin, and margin falls as leverage rises.
-# After the lock arms, only the 1h/4h band with the best measured TP1-first rate may open (neutral, not already
-# strongly aligned: aligned entries arrive late). High-probability reviews are not required: they measured no better.
-POST_LOCK_HTF_MIN = -0.5
-POST_LOCK_HTF_MAX = 0.5
 PROFIT_RESERVE = 0.5            # share of gains above principal kept out of position sizing
 
 

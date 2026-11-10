@@ -471,8 +471,7 @@ class Bot:
         risk_pct = max(S.MIN_RISK_PCT, self.learner.p["risk_pct"])
         margin_cap = S.NORMAL_MARGIN_CAP_PCT
         high_open = sum(1 for t in self.st["trades"].values() if t.get("tier") == "HIGH")
-        tier = ("HIGH" if ev.get("tier") == "HIGH" and high_open < S.MAX_HIGH_POSITIONS
-                and not self.st.get("day_lock_armed") else "NORMAL")
+        tier = "HIGH" if ev.get("tier") == "HIGH" and high_open < S.MAX_HIGH_POSITIONS else "NORMAL"
         if tier == "HIGH" and not self.learner.p.get("high_size_ok"):
             ev["reasons"] = ev["reasons"] + ["高機率評估的實測先到 TP1 比例未優於一般評估，高信心單以一般風險開倉"]
         elif tier == "HIGH":
@@ -909,16 +908,6 @@ class Bot:
         out["SL"] = round(-sum(tp["qty"] for tp in plan) * mult * abs(price - float(sig["stop_price"])), 2)
         return out
 
-    def lock_pass(self, sig: dict, ev: dict, src: str, htf: float | None, sgn: int) -> tuple[bool, str]:
-        """After the daily profit lock arms, only signals in the best-measured 1h/4h band get through.
-        How many can be open is decided later from margin and leverage."""
-        if sig.get("quiet_strong_short") or sig.get("quiet_strong_long"):
-            return True, "安靜期單沿用自己的條件，不受當日鎖利的窄區間限制"
-        if htf is None or not S.POST_LOCK_HTF_MIN <= htf * sgn < S.POST_LOCK_HTF_MAX:
-            return False, (f"1h/4h 順方向 {0 if htf is None else htf * sgn:+.1f} 不在實測最佳區間 "
-                           f"{S.POST_LOCK_HTF_MIN:+.1f}~{S.POST_LOCK_HTF_MAX:+.1f}")
-        return True, f"1h/4h 順方向 {htf * sgn:+.1f} 在實測最佳區間，以一般 {S.RISK_PCT:.0%} 風險進場"
-
     def _margin_full(self, equity: float) -> bool:
         used = sum(t.get("margin") or 0 for t in self.st["trades"].values())
         return used >= equity * S.MAX_TOTAL_MARGIN_PCT - 1
@@ -1053,8 +1042,7 @@ class Bot:
             self.st["day_lock_armed"] = True
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
-                      reason=f"當日已實現獲利達 {S.DAY_TARGET_ARM_USDT:.0f}u，鎖利：只放行 1h/4h 大方向在實測最佳區間的單 "
-                             f"({S.RISK_PCT:.0%} 風險，筆數看剩餘保證金和該筆槓桿，總保證金不超過 {S.MAX_TOTAL_MARGIN_PCT:.0%})；"
+                      reason=f"當日已實現獲利達 {S.DAY_TARGET_ARM_USDT:.0f}u。進場仍用同一套規則，不看時段；"
                              f"到 {S.DAY_TARGET_CAP_USDT:.0f}u 停止開新倉；"
                              f"若回吐 {S.DAY_LOCK_GIVEBACK:.0%} 當日最高已實現獲利則提前停止")
         floor = start + (peak - start) * (1 - S.DAY_LOCK_GIVEBACK)
@@ -1317,12 +1305,6 @@ class Bot:
             if len(same) >= same_cap:
                 self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
                 continue
-            if self.st.get("day_lock_armed"):
-                ok, why = self.lock_pass(sig, ev, src, htf, sgn)
-                if not ok:
-                    self.note_skip(sig, f"當日已鎖利 {S.DAY_TARGET_ARM_USDT:.0f}u，限制放行: {why}")
-                    continue
-                ev["reasons"] = ev["reasons"] + [f"鎖利後放行: {why}"]
             try:
                 self.open_trade(sig, ev, src, reg, size_eq)
             except ToobitError as e:
