@@ -183,6 +183,9 @@ SELF_MAX_SL_PCT = 0.01
 # (Nov 4-6 / Nov 7-10) on the exit replay, against +0.55R / +0.35R with BTC already falling.
 # Other sources keep BTC1H_MIN_DEFAULT; the replay only covers self-scan reviews.
 SELF_BTC1H_MIN = -0.3
+# Upper bound on the same aligned BTC 1h move. Short reviews (1h/4h -0.5..1.5) made after BTC had already
+# fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
+SELF_BTC1H_MAX = 0.3
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0

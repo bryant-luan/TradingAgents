@@ -71,6 +71,11 @@ LONG_GATE_MIN_N = 20
 LONG_GATE_HIT = 0.60
 # The user chose to open longs on the market trend alone; the recent long record is logged, not enforced.
 LONG_GATE_REQUIRE_RECORD = False
+# Trend longs are off. Long reviews with 1h/4h >= +0.5 hit TP1 40% (449) / 36% (247) on Nov 4-7 / Nov 7-10,
+# and the 48h record gate did not rescue them (30% of 44 passed). The 7 self-scan longs of Nov 9 all lost.
+# The only long cell above break-even in both halves is the opposite trade: 1h/4h < -0.5 with a stop >= 1.5%
+# (59% of 66 / 62% of 212), which the 1% self-scan stop cap and the -0.5 1h/4h floor exclude.
+SELF_TREND_LONGS = False
 RECHECK_OPEN_S = 900
 EXIT_PROB_BELOW = 40.0
 EXIT_PROB_DROP = 25.0        # close when the next-target probability falls this many points from entry
@@ -710,6 +715,8 @@ class SelfScanner:
         self.log("LOCAL_SIM", **rec, note="自建驗算模擬，不下單；有 See One 機率的才計入對齊")
 
     def long_gate(self, htf: float | None, btc1h: float | None) -> tuple[bool, str]:
+        if not SELF_TREND_LONGS:
+            return False, "大盤偏多時做多的驗算只有 36-40% 先到 TP1（前後兩段），11/9 自選多單 7 筆全虧，暫停"
         if htf is None or htf < LONG_TREND_HTF:
             return False, f"大盤 1h/4h 方向 {htf if htf is not None else '未知'} 未達多頭 +{LONG_TREND_HTF}"
         if btc1h is not None and btc1h < S.SELF_BTC1H_MIN:
