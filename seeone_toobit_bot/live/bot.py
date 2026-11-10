@@ -1024,6 +1024,19 @@ class Bot:
                       "day_target_hit", "day_peak_gain"):
                 self.st.pop(k, None)
         self.st.setdefault("principal", equity)
+        # A deposit is not trading profit. Gate's 151u deposit on Nov 10 stayed out of principal,
+        # so half of it was kept out of position size and each new trade risked about 4.4u
+        # instead of 5% of the account. Principal only moves up.
+        cutoff = os.environ.get("GATE_SIM_UNTIL") or "" if getattr(self.tb, "name", "") == "gate" else ""
+        booked = sum((c.get("pnl") or 0) for c in self.st["closed"]
+                     if not cutoff or (c.get("closed_at") or "") >= cutoff)
+        capital = self.realized - booked
+        if capital > self.st["principal"] + 1:
+            added = capital - self.st["principal"]
+            self.st["principal"] = round(capital, 2)
+            log_event("PRINCIPAL_DEPOSIT", added=round(added, 2), principal=self.st["principal"],
+                      balance=round(self.realized, 2),
+                      reason="餘額高於本金加已平倉損益，差額視為入金並計入本金；之後開倉用全部權益")
         # The profit target and lock count today's closed-trade PnL, not the balance change: a 151u Gate deposit
         # on Nov 10 read as 151u profit and stopped new entries for the day.
         self.st.pop("day_target_done", None)
