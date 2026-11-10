@@ -17,6 +17,7 @@ from pathlib import Path
 
 import requests
 
+from . import flowlog
 from . import strategy as S
 from .market import klines, listing, quote_volumes
 from .localreview import LocalReview
@@ -686,6 +687,20 @@ class SelfScanner:
                  aligned=rep["aligned"], live_pairs=rep["live_pairs"], live_mae=rep["live_mae"],
                  live_agree=rep["live_agree"], ready=rep["ready"])
 
+    def _flow_shadow(self, sym: str, side: str, px: float, pl: dict, prob: float, htf: float | None, tradable: bool):
+        """Store order-book and large-order readings with the review. Never gates a trade."""
+        out = {}
+        try:
+            out["gate"] = flowlog.book(sym)
+        except Exception as e:
+            out["gate"] = {"error": repr(e)[:120]}
+        try:
+            out["seeone"] = flowlog.seeone(self.so.recipes(), sym)
+        except Exception as e:
+            out["seeone"] = {"error": repr(e)[:120]}
+        self.log("FLOW_SHADOW", symbol=sym, side=side, entry=px, stop=pl["stop"], tp1=pl["tps"][0], prob=prob,
+                 htf=htf, btc1h=(self.btc or {}).get("ret1h"), tradable=tradable, **out)
+
     def _emit_shadow(self, sym: str, pl_long: dict, htf: float | None, seeone_prob: float | None, seeone_side: str | None):
         """Log what our own TP1-before-stop table would say. Never opens a trade."""
         btc = (self.btc or {}).get("ret1h")
@@ -1159,6 +1174,7 @@ class SelfScanner:
                     continue
                 self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf,
                             pl_long.get("rpos"), pl_long.get("rsi"), self.btc.get("ret1h"), px15, oi15)
+            self._flow_shadow(sym, side, px, pl, prob, htf, side in tradable)
             r = rv[side]
             quality = float(r.get("tradeQuality") or 0)
             ev = self.expected_r(r, split, d / px, bias)
