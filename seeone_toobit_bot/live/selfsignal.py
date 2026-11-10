@@ -69,6 +69,8 @@ LONG_TREND_HTF = 0.5
 LONG_GATE_HOURS = 48
 LONG_GATE_MIN_N = 20
 LONG_GATE_HIT = 0.60
+# The user chose to open longs on the market trend alone; the recent long record is logged, not enforced.
+LONG_GATE_REQUIRE_RECORD = False
 RECHECK_OPEN_S = 900
 EXIT_PROB_BELOW = 40.0
 EXIT_PROB_DROP = 25.0        # close when the next-target probability falls this many points from entry
@@ -715,12 +717,11 @@ class SelfScanner:
         cutoff = time.time() - LONG_GATE_HOURS * 3600
         rows = [r for r in self.d["resolved"] if r["side"] == "LONG" and r["ts"] >= cutoff
                 and r.get("htf") is not None and r["htf"] >= LONG_TREND_HTF and r.get("prob", 0) >= 50]
-        if len(rows) < LONG_GATE_MIN_N:
-            return False, f"近 {LONG_GATE_HOURS} 小時大盤偏多時的多單驗算只有 {len(rows)} 筆（需 {LONG_GATE_MIN_N}）"
-        hit = sum(r["hit"] for r in rows) / len(rows)
-        note = f"近 {LONG_GATE_HOURS} 小時大盤偏多時的多單驗算先到 TP1 {hit:.0%}（{len(rows)} 筆）"
-        if hit < LONG_GATE_HIT:
-            return False, f"{note} < {LONG_GATE_HIT:.0%}"
+        hit = sum(r["hit"] for r in rows) / len(rows) if rows else None
+        note = (f"大盤 1h/4h {htf:+.2f}，近 {LONG_GATE_HOURS} 小時同條件多單驗算先到 TP1 "
+                f"{'-' if hit is None else f'{hit:.0%}'}（{len(rows)} 筆）")
+        if LONG_GATE_REQUIRE_RECORD and (len(rows) < LONG_GATE_MIN_N or hit < LONG_GATE_HIT):
+            return False, f"{note}，未達 {LONG_GATE_MIN_N} 筆且 {LONG_GATE_HIT:.0%}"
         return True, note
 
     def sides(self, htf: float | None, btc1h: float | None) -> tuple:
