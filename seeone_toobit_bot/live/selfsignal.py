@@ -712,8 +712,8 @@ class SelfScanner:
     def long_gate(self, htf: float | None, btc1h: float | None) -> tuple[bool, str]:
         if htf is None or htf < LONG_TREND_HTF:
             return False, f"大盤 1h/4h 方向 {htf if htf is not None else '未知'} 未達多頭 +{LONG_TREND_HTF}"
-        if btc1h is not None and btc1h < 0:
-            return False, f"BTC 近 1 小時 {btc1h:+.2f}%，大盤沒有同步向上"
+        if btc1h is not None and btc1h < S.SELF_BTC1H_MIN:
+            return False, f"BTC 近 1 小時 {btc1h:+.2f}%，跌幅超過 {S.SELF_BTC1H_MIN:+.1f}%"
         cutoff = time.time() - LONG_GATE_HOURS * 3600
         rows = [r for r in self.d["resolved"] if r["side"] == "LONG" and r["ts"] >= cutoff
                 and r.get("htf") is not None and r["htf"] >= LONG_TREND_HTF and r.get("prob", 0) >= 50]
