@@ -751,6 +751,8 @@ class SelfScanner:
         for side in ("LONG", "SHORT"):
             direc = htf if side == "LONG" else -htf
             band = S.direc_window(direc, side)
+            if not band and side == "LONG" and htf < S.BOUNCE_HTF_MAX:
+                band = "bounce"
             if band:
                 sides.append((side, band))
         if not sides:
@@ -784,7 +786,8 @@ class SelfScanner:
                 prob = est.get("prob") if est else None
                 if best is None or (prob or -1) > best:
                     best = prob or -1
-                tradable = tradable or (narrow and side in open_sides)
+                tradable = (tradable or (narrow and side in open_sides)
+                            or (side == "LONG" and S.bounce_ok(htf, pl["dist"] / pl["price"])))
             if best is None:
                 continue
             ranked.append((tradable, best, c))
@@ -1091,7 +1094,13 @@ class SelfScanner:
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.direc_window(direc, sd) is not None and m15_ok(sd)]
+                bounce = S.bounce_ok(htf, d / px) and m15_ok("LONG")
+                if bounce and "LONG" not in eligible:
+                    eligible.insert(0, "LONG")
                 tradable = [sd for sd in eligible if sd in open_sides] if d / px < S.SELF_MAX_SL_PCT else []
+                if bounce:
+                    tradable = ["LONG"] + [sd for sd in tradable if sd != "LONG"]
+                can_open = set(open_sides) | ({"LONG"} if bounce else set())
                 pick = tradable or eligible
                 hint = c.get("side") if c.get("side") in pick else pick[0]
                 # Both sides are only needed to measure the model's long/short bias. Once that bias is known,
@@ -1127,7 +1136,7 @@ class SelfScanner:
                 bias = (raw["LONG"] + raw["SHORT"] - 100) / 2
                 samples.append(round(bias, 2))
                 del samples[:-40]
-                side = max((sd for sd in raw if sd in open_sides), key=raw.get, default=max(raw, key=raw.get))
+                side = max((sd for sd in raw if sd in can_open), key=raw.get, default=max(raw, key=raw.get))
             else:
                 bias = sum(samples[-20:]) / len(samples[-20:]) if len(samples) >= 4 else 13.0
                 side = next(iter(raw))
@@ -1170,7 +1179,7 @@ class SelfScanner:
                          reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {CONFIRM_MIN_PROB}%，週期不一致")
                 continue
             band = S.direc_window(htf if side == "LONG" else None if htf is None else -htf, side)
-            found.append(self.to_signal({**c, "side": side,
+            found.append(self.to_signal({**c, "side": side, "bounce_long": side == "LONG" and bounce,
                                         "strong_liquid_short": band == "strong_short",
                                         "fade_entry": band in ("fade_long", "fade_short")},
                                         r, pl, prob, round(p1h, 1), quality, ev, regime, raw, bias, edge))
@@ -1335,7 +1344,7 @@ class SelfScanner:
                    "price": pl["tps"][i], "hit": False} for i in range(len(TP_R))]
         sig = {"id": f"self:{sym}:{side}:{int(time.time() // 900)}", "symbol": sym, "side": side, "status": "ACTIVE",
                "timeframe": "15m", "entry_price": pl["price"], "stop_price": pl["stop"], "current_price": pl["price"],
-               "entry_at": now, "levels": levels, "signal_path": "SELF ANALYSIS", "path_subtype": None,
+               "entry_at": now, "levels": levels, "signal_path": S.BOUNCE_PATH if c.get("bounce_long") else "SELF ANALYSIS", "path_subtype": None,
                "strong_liquid_short": bool(c.get("strong_liquid_short")),
                "fade_entry": bool(c.get("fade_entry"))}
         factors = {"source:自選驗算": 0.0, f"side:{side}": 0.0, f"regime:{regime[1].lower()}": 0.0,

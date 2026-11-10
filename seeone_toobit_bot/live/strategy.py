@@ -186,6 +186,19 @@ SELF_BTC1H_MIN = -0.3
 # Upper bound on the same aligned BTC 1h move. Short reviews (1h/4h -0.5..1.5) made after BTC had already
 # fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
 SELF_BTC1H_MAX = 0.3
+# Self-scan bounce longs: the market's 1h/4h direction below -0.5 and a stop of at least 1.5%.
+# On the 5m exit replay these averaged +0.41R (139) / +0.39R (139), TP1 first 59% / 62%, while trend longs
+# (1h/4h >= +0.5) averaged -0.35R / -0.51R. 205 of the 278 samples are from Nov 6, so one open at a time,
+# and the path stops after two live losses in a row.
+BOUNCE_PATH = "SELF BOUNCE"
+BOUNCE_HTF_MAX = -0.5
+BOUNCE_MIN_SL_PCT = 0.015
+BOUNCE_MAX_OPEN = 1
+BOUNCE_STOP_AFTER_LOSSES = 2
+
+
+def bounce_ok(htf: float | None, sl_pct: float) -> bool:
+    return htf is not None and htf < BOUNCE_HTF_MAX and sl_pct >= BOUNCE_MIN_SL_PCT
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0

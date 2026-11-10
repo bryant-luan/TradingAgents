@@ -437,6 +437,19 @@ class Bot:
             self.learner.on_close(tr, r_result, pnl, reason, filled, round((time.time() - tr["opened_ts"]) / 60, 1))
 
     # ------------------------------------------------------------------ entries
+    def bounce_blocked(self, sig: dict, htf: float | None) -> str | None:
+        sl_pct = abs(float(sig["entry_price"]) - float(sig["stop_price"])) / float(sig["entry_price"])
+        if not S.bounce_ok(htf, sl_pct):
+            return (f"反彈多單條件已不成立：大盤 1h/4h {htf if htf is not None else '未知'}（須 < {S.BOUNCE_HTF_MAX}），"
+                    f"止損 {sl_pct:.2%}（須 ≥ {S.BOUNCE_MIN_SL_PCT:.1%}）")
+        held = sum(1 for t in self.st["trades"].values() if t.get("path") == S.BOUNCE_PATH)
+        if held >= S.BOUNCE_MAX_OPEN:
+            return f"反彈多單同時最多 {S.BOUNCE_MAX_OPEN} 筆，已有 {held} 筆"
+        last = [c for c in self.st["closed"] if c.get("path") == S.BOUNCE_PATH][-S.BOUNCE_STOP_AFTER_LOSSES:]
+        if len(last) == S.BOUNCE_STOP_AFTER_LOSSES and all((c.get("pnl") or 0) < 0 for c in last):
+            return f"反彈多單實盤已連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，停用"
+        return None
+
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
         if S.SKIP_GATE_ONLY and getattr(self.tb, "name", "") == "gate" and listing(sym) == "only":
@@ -1193,10 +1206,16 @@ class Bot:
             # Self-scan shorts once the blend is already BEAR: 7 closes, net about -81 USDT.
             # The two winners (AKE, XRP on Nov 4) do not cover JCT, UAI, Q, HUMA and BNT.
             # Softer-bear shorts such as XMR stay eligible. Quiet shorts and the crash recipe do too.
-            if src == SELF_SOURCE and sig["side"] not in self.selfscan.sides(htf, btc1h):
+            bounce = src == SELF_SOURCE and sig.get("signal_path") == S.BOUNCE_PATH
+            if bounce:
+                why = self.bounce_blocked(sig, htf)
+                if why:
+                    self.note_skip(sig, why)
+                    continue
+            elif src == SELF_SOURCE and sig["side"] not in self.selfscan.sides(htf, btc1h):
                 self.note_skip(sig, "自選驗算做多未開放：" + self.selfscan.long_gate(htf, btc1h)[1])
                 continue
-            if src == SELF_SOURCE:
+            if src == SELF_SOURCE and not bounce:
                 sl_pct = abs(float(sig["entry_price"]) - float(sig["stop_price"])) / float(sig["entry_price"])
                 if sl_pct >= S.SELF_MAX_SL_PCT:
                     self.note_skip(sig, f"自選驗算止損 {sl_pct:.2%} ≥ {S.SELF_MAX_SL_PCT:.0%}：止損 1-1.8% 的評估只有 40-56% "
@@ -1216,7 +1235,7 @@ class Bot:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                     f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
-            if htf is not None and htf * sgn < htf_min:
+            if htf is not None and htf * sgn < htf_min and not bounce:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                     f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
                 continue
@@ -1226,11 +1245,12 @@ class Bot:
                 continue
             aligned = None if btc1h is None else btc1h * sgn
             btc_min = S.SELF_BTC1H_MIN if src == SELF_SOURCE else S.BTC1H_MIN_DEFAULT
-            if aligned is not None and aligned < btc_min:
+            # Bounce longs held 56-76% TP1-first in every BTC 1h bucket, so neither BTC bound applies to them.
+            if aligned is not None and aligned < btc_min and not bounce:
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
                                     f"(順方向 {aligned:+.2f}% < {btc_min:+.2f}%)，等大盤同向再進")
                 continue
-            if src == SELF_SOURCE and aligned is not None and aligned >= S.SELF_BTC1H_MAX:
+            if src == SELF_SOURCE and aligned is not None and aligned >= S.SELF_BTC1H_MAX and not bounce:
                 self.note_skip(sig, f"BTC 近 1 小時已順{'做多' if sgn > 0 else '做空'}方向走 {aligned:+.2f}% "
                                     f"(≥ {S.SELF_BTC1H_MAX:+.1f}%)，自選單追在大盤急走之後，驗算只有 48% 先到 TP1")
                 continue
