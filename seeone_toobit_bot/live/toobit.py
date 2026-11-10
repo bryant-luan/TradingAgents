@@ -123,10 +123,22 @@ class Toobit:
         return self._request("GET", "/api/v1/futures/historyPositions", {"symbol": symbol, "limit": limit})
 
     def set_isolated(self, symbol: str):
-        try:
-            self._request("POST", "/api/v1/futures/marginType", {"symbol": symbol, "marginType": "ISOLATED"})
-        except ToobitError:
-            pass  # already isolated, or a position exists
+        # Setting the margin type is idempotent, so a timeout is retried. If it still times out the entry
+        # is refused as a ToobitError (skips this signal only): opening on cross margin is not acceptable.
+        done = self.__dict__.setdefault("_isolated", set())
+        if symbol in done:
+            return
+        for attempt in range(3):
+            try:
+                self._request("POST", "/api/v1/futures/marginType", {"symbol": symbol, "marginType": "ISOLATED"})
+                break
+            except ToobitError:
+                break  # already isolated, or a position exists
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if attempt == 2:
+                    raise ToobitError(f"設定逐倉逾時 3 次，不開這筆：{e!r}"[:300])
+                time.sleep(2 + attempt)
+        done.add(symbol)
 
     def set_leverage(self, symbol: str, leverage: int):
         return self._request("POST", "/api/v1/futures/leverage", {"symbol": symbol, "leverage": leverage})
