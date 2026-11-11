@@ -315,7 +315,13 @@ class Bot:
                     and (opened_against or worked or cur_r <= HTF_FLAT_AFTER_R))
         if htf_flat:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
-        elif prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and self._spike_through_lock(tr, cur_r):
+        # A one-second wick that is still on the profitable side of the entry is not a stop-out.
+        # MOCA short (Gate, Nov 11 12:35 Taipei) fell from +0.75R to +0.15R and was market-closed
+        # at +0.05R. Price then reached about +3.3R. MELANIA (Toobit, Nov 10 06:06) was the same
+        # kind of wick and was still about +1.5R an hour later. A wick that crosses to a loss
+        # still flattens, so a spike through the stop is not left on.
+        elif (prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and cur_r <= 0
+              and self._spike_through_lock(tr, cur_r)):
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
         elif cur_r <= (AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R):
             line = AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R
