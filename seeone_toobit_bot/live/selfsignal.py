@@ -1052,6 +1052,15 @@ class SelfScanner:
             # Local plans are free. Spend the See One calls on names already sitting
             # near the 3h extreme on a side the window allows, including the liquid-short band.
             ordered = self._near_extreme(ordered, htf, specs, held, open_sides)
+        # One name written to OPEN_NEXT is reviewed before the extreme queue, then the file is removed.
+        # INUSDT was gated at +0.54R on Nov 11 18:25 Taipei, which clears the +0.50R floor.
+        pin_file = self.path.parent / "OPEN_NEXT"
+        pin_sym = pin_file.read_text().strip().upper() if pin_file.exists() else ""
+        if pin_sym:
+            pin = by_symbol.get(pin_sym)
+            if pin is not None:
+                ordered = [pin] + [c for c in ordered if c.get("symbol") != pin_sym]
+                pin_file.unlink(missing_ok=True)
         limit = 40 if not seeone_open else REVIEWS_PER_SCAN
         pl_long = None
         for c in ordered[:limit]:
