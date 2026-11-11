@@ -52,9 +52,9 @@ BTC_COUNTER_ATR = 2.0            # BTC off its 2h extreme against the trade by t
 EXT_TAG_R = 2.0
 MIN_QUALITY = 60.0
 # Live self-scan shorts at or above +0.55R expected value: Toobit 13 closes,
-# +0.30R in both halves of Nov 4-11 (+0.21R then +0.44R); Gate 5 closes, +0.25R.
-# Below that line the live books lost money. The old 0.20 floor let those in.
-MIN_EV_R = 0.55
+# +0.30R in both halves of Nov 4-11; Gate 5 closes, +0.25R. The floor is +0.50R
+# so a review at +0.50R to +0.55R can still open. Below +0.50R the live books lost money.
+MIN_EV_R = 0.50
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 # See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst; six per scan per bot
