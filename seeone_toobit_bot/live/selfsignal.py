@@ -51,7 +51,10 @@ RANGE_BARS = 12                  # 3h of closed 15m bars for the entry range pos
 BTC_COUNTER_ATR = 2.0            # BTC off its 2h extreme against the trade by this many ATRs = market turning
 EXT_TAG_R = 2.0
 MIN_QUALITY = 60.0
-MIN_EV_R = 0.20
+# Live self-scan shorts at or above +0.55R expected value: Toobit 13 closes,
+# +0.30R in both halves of Nov 4-11 (+0.21R then +0.44R); Gate 5 closes, +0.25R.
+# Below that line the live books lost money. The old 0.20 floor let those in.
+MIN_EV_R = 0.55
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 # See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst; six per scan per bot
@@ -884,11 +887,15 @@ class SelfScanner:
         return best, matched
 
     def fresh_breaks(self, held: set, specs: dict, htf: float | None = None) -> list:
-        """One backup signal: the largest fresh 15m close through the prior 3h range.
+        """15m breakouts are off while BREAKOUT_ENTRIES is false.
 
-        The breaking bar has to be the first close outside that range, and its
-        high-low at least 1%. A later bar in the same move is already gone.
+        Shorts were 27 live closes on Toobit, average -0.02R. The +8.5 USDT came from
+        a few Nov 8 winners (ACT +37, KOMA +30) against later losses (ENA -32, IREN -25).
+        Gate's 6 closes averaged -0.14R. Longs were already off. The path swings hard
+        and does not grow either account.
         """
+        if not S.BREAKOUT_ENTRIES:
+            return []
         if time.time() - self.last_break < SCAN_EVERY_S:
             return []
         self.last_break = time.time()

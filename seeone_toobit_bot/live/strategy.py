@@ -229,6 +229,8 @@ QUIET_MAX_SAME_SIDE = 3
 # band are +0.38R on 33 rows. Quiet longs in that band are -0.99R on 14 rows.
 # New entries stay on the higher-expectancy ELSA path.
 QUIET_ENTRIES = False
+# 15m breakout entries. Live shorts averaged about 0R with swings from +37 USDT to -32.
+BREAKOUT_ENTRIES = False
 # Same-side entries are no longer spaced 30 minutes apart. Closed pairs opened
 # within 30 minutes were 5 both green, 6 both red, and 4 split, and the wait did
 # not separate ICNT from PONS or BMT from ERA. One side is still capped at MAX_SAME_SIDE.
