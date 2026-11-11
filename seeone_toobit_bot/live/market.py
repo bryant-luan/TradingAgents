@@ -8,6 +8,7 @@ import time
 import requests
 
 from .exchange import exchange_name
+from .toobit import PUB
 
 _LISTED: dict[str, tuple[float, set[str]]] = {}
 
@@ -46,7 +47,7 @@ def klines(symbol: str, interval: str, limit: int = 100, end_ms: int | None = No
     if end_ms:
         params["endTime"] = int(end_ms)
     try:
-        rows = requests.get(f"{TOOBIT}/quote/v1/klines", params=params, timeout=15).json()
+        rows = PUB.get(f"{TOOBIT}/quote/v1/klines", params=params, timeout=15).json()
     except (requests.RequestException, ValueError):
         return []
     return rows if isinstance(rows, list) else []
@@ -58,7 +59,7 @@ def quote_volumes() -> dict[str, float]:
         from .gate import public_quote_volumes
         return public_quote_volumes()
     try:
-        rows = requests.get(f"{TOOBIT}/quote/v1/contract/ticker/24hr", timeout=15).json()
+        rows = PUB.get(f"{TOOBIT}/quote/v1/contract/ticker/24hr", timeout=15).json()
     except (requests.RequestException, ValueError):
         return {}
     out = {}

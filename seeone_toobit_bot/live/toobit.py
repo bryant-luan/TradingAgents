@@ -10,6 +10,11 @@ import requests
 
 BASE = "https://api.toobit.com"
 
+# Unsigned market data shared by the scan, fast-guard and reversal threads. Keeping the
+# connection open saves the TLS handshake on every call (Gate klines 634 ms -> 153 ms).
+PUB = requests.Session()
+PUB.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=16))
+
 
 class ToobitError(Exception):
     pass
@@ -18,7 +23,7 @@ class ToobitError(Exception):
 def public_names() -> set[str]:
     """Tradable USDT-M symbols, for comparing the Gate list without signing in."""
     try:
-        info = requests.get(f"{BASE}/api/v1/exchangeInfo", timeout=20).json()
+        info = PUB.get(f"{BASE}/api/v1/exchangeInfo", timeout=20).json()
     except (requests.RequestException, ValueError):
         return set()
     return {c["symbol"] for c in info.get("contracts", []) if c.get("status") == "TRADING"}
@@ -67,7 +72,7 @@ class Toobit:
     # ---- market data ----
     def specs(self) -> dict:
         if self._specs is None:
-            info = requests.get(f"{BASE}/api/v1/exchangeInfo", timeout=20).json()
+            info = PUB.get(f"{BASE}/api/v1/exchangeInfo", timeout=20).json()
             out = {}
             for c in info.get("contracts", []):
                 if c.get("status") != "TRADING":
@@ -93,11 +98,11 @@ class Toobit:
         return self._specs
 
     def price(self, symbol: str) -> float:
-        r = requests.get(f"{BASE}/quote/v1/ticker/price", params={"symbol": symbol}, timeout=10).json()
+        r = PUB.get(f"{BASE}/quote/v1/ticker/price", params={"symbol": symbol}, timeout=10).json()
         return float(r[0]["p"])
 
     def book(self, symbol: str) -> tuple[float, float]:
-        r = requests.get(f"{BASE}/quote/v1/ticker/bookTicker", params={"symbol": symbol}, timeout=10).json()
+        r = PUB.get(f"{BASE}/quote/v1/ticker/bookTicker", params={"symbol": symbol}, timeout=10).json()
         return float(r[0]["b"]), float(r[0]["a"])
 
     def user_trades(self, symbol: str, limit: int = 100) -> list:

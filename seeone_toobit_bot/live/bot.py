@@ -14,6 +14,7 @@ import threading
 import time
 import traceback
 from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -310,7 +311,6 @@ class Bot:
         # (BR on Nov 10 was closed one second after entry).
         htf_flat = (htf is not None and htf * sgn < S.HTF_MIN_DEFAULT and tr.get("path") != S.BOUNCE_PATH
                     and not tr.get("after_red") and not tr.get("recipe_spike")
-                    and tr.get("path") != S.BOUNCE_PATH
                     and (opened_against or worked or cur_r <= HTF_FLAT_AFTER_R))
         if htf_flat:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
@@ -758,7 +758,7 @@ class Bot:
                 res["note"] = f"價格 {px} 離止損較遠，規劃風險已用完，不再加倉"
                 break
             try:
-                o = self.tb.post_only(sym, open_side, left, self.tb.fmt_price(sym, px), "mo")
+                o = self.tb.post_only(sym, open_side, left, self._touch_px(sym, px), "mo")
             except ToobitError as e:
                 log_event("ERROR", where="post_only_entry", symbol=sym, error=str(e))
                 continue
@@ -812,12 +812,19 @@ class Bot:
                   maker_ratio=round(res["maker"] / res["filled"], 3) if res["filled"] else None)
         return res
 
+    def _touch_px(self, sym: str, px: float) -> str:
+        # Book prices are already on the tick grid. fmt_price rounds down, which turns
+        # ask - tick = 6.72399999 into 6.723 = bid, and post-only is rejected as crossing
+        # (Gate ORDER_POC_IMMEDIATE, the same price on every retry).
+        tick = Decimal(str(self.tb.specs()[sym]["tick"]))
+        return str((Decimal(str(px)) / tick).quantize(Decimal(1), rounding=ROUND_HALF_UP) * tick)
+
     def _maker_px(self, sym: str, buy: bool) -> str:
         bid, ask = self.tb.book(sym)
         tick = float(self.tb.specs()[sym]["tick"])
         wide = ask - bid > tick * 1.5
         px = (bid + tick if wide else bid) if buy else (ask - tick if wide else ask)
-        return self.tb.fmt_price(sym, px)
+        return self._touch_px(sym, px)
 
     def maker_close(self, tr: dict, urgent: bool = False):
         """Exit a whole position with post-only orders at the touch; market only for whatever is left after the retries.
@@ -1065,7 +1072,7 @@ class Bot:
         # A deposit is not trading profit. Gate's 151u deposit on Nov 10 stayed out of principal,
         # so half of it was kept out of position size and each new trade risked about 4.4u
         # instead of 5% of the account. Principal only moves up.
-        cutoff = os.environ.get("GATE_SIM_UNTIL") or "" if getattr(self.tb, "name", "") == "gate" else ""
+        cutoff = (os.environ.get("GATE_SIM_UNTIL") or "") if getattr(self.tb, "name", "") == "gate" else ""
         booked = sum((c.get("pnl") or 0) for c in self.st["closed"]
                      if not cutoff or (c.get("closed_at") or "") >= cutoff)
         capital = self.realized - booked

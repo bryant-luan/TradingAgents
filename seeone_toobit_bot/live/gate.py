@@ -14,7 +14,7 @@ from decimal import Decimal, ROUND_DOWN
 
 import requests
 
-from .toobit import ToobitError
+from .toobit import PUB, ToobitError
 
 HOST = "https://api.gateio.ws"
 PREFIX = "/api/v4"
@@ -145,7 +145,7 @@ _MULT: dict[str, Decimal] = {}
 
 def _multiplier(contract: str) -> Decimal:
     if contract not in _MULT:
-        row = requests.get(f"{HOST}{PREFIX}/futures/usdt/contracts/{contract}", timeout=15).json()
+        row = PUB.get(f"{HOST}{PREFIX}/futures/usdt/contracts/{contract}", timeout=15).json()
         _MULT[contract] = Decimal(str(row.get("quanto_multiplier") or "1"))
     return _MULT[contract]
 
@@ -156,7 +156,7 @@ def public_klines(symbol: str, interval: str, limit: int = 100, end_ms: int | No
     if end_ms:
         params["to"] = int(end_ms) // 1000
     try:
-        rows = requests.get(f"{HOST}{PREFIX}/futures/usdt/candlesticks", params=params, timeout=15).json()
+        rows = PUB.get(f"{HOST}{PREFIX}/futures/usdt/candlesticks", params=params, timeout=15).json()
     except (requests.RequestException, ValueError):
         return []
     if not isinstance(rows, list):
@@ -171,7 +171,7 @@ def public_klines(symbol: str, interval: str, limit: int = 100, end_ms: int | No
 def public_names() -> set[str]:
     """Tradable USDT-M symbols in the bot's BTC-SWAP-USDT form."""
     try:
-        rows = requests.get(f"{HOST}{PREFIX}/futures/usdt/contracts", timeout=20).json()
+        rows = PUB.get(f"{HOST}{PREFIX}/futures/usdt/contracts", timeout=20).json()
     except (requests.RequestException, ValueError):
         return set()
     out = set()
@@ -188,7 +188,7 @@ def public_names() -> set[str]:
 
 def public_quote_volumes() -> dict[str, float]:
     try:
-        rows = requests.get(f"{HOST}{PREFIX}/futures/usdt/tickers", timeout=20).json()
+        rows = PUB.get(f"{HOST}{PREFIX}/futures/usdt/tickers", timeout=20).json()
     except (requests.RequestException, ValueError):
         return {}
     out = {}
@@ -276,7 +276,7 @@ class Gate:
     # ---- market data ----
     def specs(self) -> dict:
         if self._specs is None:
-            rows = requests.get(f"{HOST}{PREFIX}/futures/usdt/contracts", timeout=20).json()
+            rows = PUB.get(f"{HOST}{PREFIX}/futures/usdt/contracts", timeout=20).json()
             out = {}
             for contract in rows:
                 name = contract.get("name") or ""
@@ -303,12 +303,12 @@ class Gate:
         return self._specs
 
     def price(self, symbol: str) -> float:
-        rows = requests.get(f"{HOST}{PREFIX}/futures/usdt/tickers",
+        rows = PUB.get(f"{HOST}{PREFIX}/futures/usdt/tickers",
                             params={"contract": to_gate(symbol)}, timeout=10).json()
         return float(rows[0]["last"])
 
     def book(self, symbol: str) -> tuple[float, float]:
-        row = requests.get(f"{HOST}{PREFIX}/futures/usdt/order_book",
+        row = PUB.get(f"{HOST}{PREFIX}/futures/usdt/order_book",
                            params={"contract": to_gate(symbol), "limit": 1}, timeout=10).json()
         return float(row["bids"][0]["p"]), float(row["asks"][0]["p"])
 
