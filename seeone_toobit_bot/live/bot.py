@@ -87,12 +87,11 @@ HTF_FLAT_AFTER_R = -0.50
 WATCHDOG_S = 1200
 SLIPPAGE_BUFFER = 0.0003
 # A maker fill inside this fraction of the reviewed stop distance is a different trade.
-# The touch walked into the stop: ZK short on Nov 11 05:42 Taipei was reviewed at 0.80%
-# and filled at 0.57% (72% of the plan). It stopped out in 14 minutes for -1.10R and
-# price then ran to about -2.7R. The other two live fills under 75% (CLANKER, BR) also
-# lost, and no winner sat in that bucket. HAEDAL's worse fill (away from the stop) is
-# handled by the size cap below, not by this floor.
-STOP_KEEP_FRAC = 0.75
+# The touch walked into the stop. Live fills under 85% of the plan: CLANKER -0.42R,
+# ZK -1.10R (reviewed 0.80%, filled 0.57%), BR -0.10R, STRK +0.20R, and SAND -1.02R
+# (reviewed 0.80%, filled 0.66%). SOPH (+2.80R) filled at 86% and ELSA (+1.98R) at 87%,
+# so they stay. A fill that moves away from the stop is handled by the size cap below.
+STOP_KEEP_FRAC = 0.85
 MAKER_TRIES = 6
 MAKER_WAIT_S = 30
 MARKET_ENTRY_FALLBACK = False

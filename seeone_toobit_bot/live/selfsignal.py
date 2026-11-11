@@ -1183,6 +1183,12 @@ class SelfScanner:
                          quality=quality, ev=ev, min_prob=min_prob, min_edge=MIN_EDGE,
                          min_quality=MIN_QUALITY, min_ev=MIN_EV_R)
                 continue
+            if (side == "SHORT" and getattr(self.tb, "name", "") == "gate"
+                    and edge < S.GATE_SHORT_MIN_EDGE):
+                self.log("SELF_GATE", symbol=sym, side=side, prob=prob, edge=edge,
+                         reason=(f"Gate 空單優勢 {edge:.1f} 點 < {S.GATE_SHORT_MIN_EDGE:.0f}。"
+                                 "ZK -1.10R、MUBARAK -1.07R 在這一段"))
+                continue
             try:
                 p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H", share=True).get("probability") or 0) - bias
             except Exception:

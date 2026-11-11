@@ -183,6 +183,10 @@ SKIP_GATE_ONLY = True
 # and were 1 win in 9 live closes, -101 USDT.
 SELF_SIDES = ("SHORT",)
 SELF_MAX_SL_PCT = 0.01
+# Gate live shorts with a de-biased edge under 15: ZK -1.10R, MUBARAK -1.07R,
+# WLFI +0.14R, BCH +0.19R. Four closes, -12.1 USDT. Toobit's same slice was not
+# the same, so the floor is Gate only.
+GATE_SHORT_MIN_EDGE = 15.0
 # Self-scan shorts (stop < 0.9%) with BTC up 0-0.3% in the last hour averaged +0.53R / +0.75R
 # (Nov 4-6 / Nov 7-10) on the exit replay, against +0.55R / +0.35R with BTC already falling.
 # Other sources keep BTC1H_MIN_DEFAULT; the replay only covers self-scan reviews.
