@@ -164,6 +164,15 @@ def btc_ret1h() -> float | None:
     return round((float(rows[-1][4]) - ref) / ref * 100, 3)
 
 
+def btc_ret24h() -> float | None:
+    """BTC's move over the last 24 hours on 1h closes, percent, long perspective."""
+    rows = klines("BTC-SWAP-USDT", "1h", 25)
+    if not isinstance(rows, list) or len(rows) < 25:
+        return None
+    ref = float(rows[-25][4])
+    return round((float(rows[-1][4]) - ref) / ref * 100, 3)
+
+
 def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, float | None, float | None]:
     """(range ratio, 1h return %, volume ratio, 24h quote volume, 15m return %) on closed 5m bars.
 

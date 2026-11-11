@@ -24,7 +24,7 @@ from .exchange import connect, exchange_name
 from .learner import Learner
 from .market import klines, listing
 from .shadow import Shadow
-from .selfsignal import MAJORS, SelfScanner, btc_ret1h, in_side, move_2h, move_before, rsi_side
+from .selfsignal import MAJORS, SelfScanner, btc_ret1h, btc_ret24h, in_side, move_2h, move_before, rsi_side
 from .toobit import ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1204,6 +1204,10 @@ class Bot:
             btc1h = btc_ret1h()
         except Exception:
             btc1h = None
+        try:
+            btc24h = btc_ret24h()
+        except Exception:
+            btc24h = None
         moves = {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if self._margin_full(size_eq):
@@ -1331,6 +1335,11 @@ class Bot:
             if src == SELF_SOURCE and aligned is not None and aligned >= S.BTC1H_CHASE_MAX and not bounce:
                 self.note_skip(sig, f"BTC 近 1 小時已順{'做多' if sgn > 0 else '做空'}方向走 {aligned:+.2f}% "
                                     f"(≥ {S.BTC1H_CHASE_MAX:+.1f}%)，自選單追在大盤急走之後，驗算只有 48% 先到 TP1")
+                continue
+            if (src == SELF_SOURCE and not bounce and sig["side"] == "SHORT"
+                    and btc24h is not None and btc24h < S.SELF_SHORT_BTC24H_MIN):
+                self.note_skip(sig, f"BTC 近 24 小時 {btc24h:+.2f}% 已在跌，自選空單偏晚：驗算 +0.03~+0.26R、"
+                                    f"11/10-11 轉負，BTC 24h 不跌時 +0.88R")
                 continue
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in moves:

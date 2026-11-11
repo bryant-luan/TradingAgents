@@ -195,6 +195,11 @@ SELF_BTC1H_MIN = -0.3
 # fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
 # Breakout entries take it too: 6 live breakouts past it won once, -1.88R (EVAA, HOT, ENA among them).
 BTC1H_CHASE_MAX = 0.3
+# Self-scan shorts need BTC flat or up over the last 24h. Inside the current gates, the 5m exit replay
+# averaged +0.88R (128; +0.97R / +0.79R by half) with BTC 24h >= 0, against +0.26R (148) below -1% and
+# +0.03R (142) at -1..0%, both negative on Nov 10-11 (Nov 10 alone: +0.41R vs -0.27R / -0.09R).
+# Live self-scan shorts agreed: Gate -0.35R (14) vs -0.02R (3), Toobit -0.17R (21) vs +0.06R (9).
+SELF_SHORT_BTC24H_MIN = 0.0
 # A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
 # price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
 # showed no such gap, so they keep the learned window.
