@@ -86,6 +86,13 @@ HTF_FLAT_AFTER_R = -0.50
 # A normal cycle with several maker entries/exits stays well under this.
 WATCHDOG_S = 1200
 SLIPPAGE_BUFFER = 0.0003
+# A maker fill inside this fraction of the reviewed stop distance is a different trade.
+# The touch walked into the stop: ZK short on Nov 11 05:42 Taipei was reviewed at 0.80%
+# and filled at 0.57% (72% of the plan). It stopped out in 14 minutes for -1.10R and
+# price then ran to about -2.7R. The other two live fills under 75% (CLANKER, BR) also
+# lost, and no winner sat in that bucket. HAEDAL's worse fill (away from the stop) is
+# handled by the size cap below, not by this floor.
+STOP_KEEP_FRAC = 0.75
 MAKER_TRIES = 6
 MAKER_WAIT_S = 30
 MARKET_ENTRY_FALLBACK = False
@@ -466,7 +473,12 @@ class Bot:
         held = sum(1 for t in self.st["trades"].values() if t.get("path") == S.BOUNCE_PATH)
         if held >= S.BOUNCE_MAX_OPEN:
             return f"反彈多單同時最多 {S.BOUNCE_MAX_OPEN} 筆，已有 {held} 筆"
-        last = [c for c in self.st["closed"] if c.get("path") == S.BOUNCE_PATH][-S.BOUNCE_STOP_AFTER_LOSSES:]
+        # Dust flats are not a read on the setup. On Nov 11 00:16-07:05 Taipei the
+        # day-start equity line closed full-size bounces within a minute. Those scratches
+        # sat in this window and erased PIEVERSE (-0.90R), so the path kept firing.
+        decisive = [c for c in self.st["closed"] if c.get("path") == S.BOUNCE_PATH
+                    and "小倉" not in (c.get("reason") or "")]
+        last = decisive[-S.BOUNCE_STOP_AFTER_LOSSES:]
         if len(last) == S.BOUNCE_STOP_AFTER_LOSSES and all((c.get("r_result") or 0) <= S.BOUNCE_LOSS_R for c in last):
             return f"反彈多單實盤已連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，停用"
         return None
@@ -708,11 +720,16 @@ class Bot:
         # (HAEDAL: sized at 0.02729, filled at 0.02763, 1.59× the planned loss).
         budget = contracts * abs(ref_px - stop) if ref_px else None
         spent = 0.0
+        plan_px = float(sig.get("entry_price") or ref_px or 0)
+        planned = abs(plan_px - stop)
 
         def cap(left: int, px: float) -> int:
             if budget is None or abs(px - stop) <= 0:
                 return left
             return min(left, int((budget - spent) / abs(px - stop)))
+
+        def into_stop(px: float) -> bool:
+            return planned > 0 and abs(px - stop) < planned * STOP_KEEP_FRAC
 
         for _ in range(MAKER_TRIES):
             left = contracts - res["filled"]
@@ -724,6 +741,10 @@ class Bot:
                 px = bid + tick if side == "LONG" else ask - tick
             else:
                 px = bid if side == "LONG" else ask
+            if into_stop(px):
+                res["note"] = (f"掛單價 {px} 距止損只剩規劃的 {abs(px - stop) / planned:.0%}，"
+                               f"低於 {STOP_KEEP_FRAC:.0%}，不再往止損裡追")
+                break
             if not self._entry_ok(px, sig, stop):
                 res["note"] = f"掛單期間價格 {px} 已離開進場區間，不追價"
                 break
@@ -765,7 +786,10 @@ class Bot:
         elif left >= spec["min_contracts"] and res["note"] is None:
             px = self.tb.price(sym)
             left = cap(left, px)
-            if self._entry_ok(px, sig, stop) and left >= spec["min_contracts"]:
+            if into_stop(px):
+                res["note"] = (f"市價 {px} 距止損只剩規劃的 {abs(px - stop) / planned:.0%}，"
+                               f"低於 {STOP_KEEP_FRAC:.0%}，不補單")
+            elif self._entry_ok(px, sig, stop) and left >= spec["min_contracts"]:
                 if stop_set:
                     o = self.tb.market(sym, open_side, left)
                 else:
