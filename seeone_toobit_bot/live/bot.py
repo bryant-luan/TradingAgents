@@ -471,6 +471,8 @@ class Bot:
 
     # ------------------------------------------------------------------ entries
     def bounce_blocked(self, sig: dict, htf: float | None) -> str | None:
+        if not S.BOUNCE_ENABLED:
+            return "反彈多單停用：實盤 23 筆 -0.10R、-21u，BTC 24h 下跌時 -0.21R"
         sl_pct = abs(float(sig["entry_price"]) - float(sig["stop_price"])) / float(sig["entry_price"])
         if not S.bounce_ok(htf, sl_pct):
             return (f"反彈多單條件已不成立：大盤 1h/4h {htf if htf is not None else '未知'}（須 < {S.BOUNCE_HTF_MAX}），"
@@ -508,6 +510,13 @@ class Bot:
         elif tier == "HIGH":
             risk_pct = S.HIGH_RISK_PCT
             margin_cap = S.HIGH_MARGIN_CAP_PCT
+        b24 = getattr(self, "btc24h", None)
+        if (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
+                and b24 is not None and b24 >= S.SELF_SHORT_BTC24H_MIN
+                and abs(price - stop) / price < S.SELF_MAX_SL_PCT):
+            risk_pct = max(risk_pct, S.SELF_SHORT_RISK_PCT)
+            margin_cap = max(margin_cap, S.SELF_SHORT_MARGIN_CAP_PCT)
+            ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌) 風險 {risk_pct:.0%}：驗算 +1.23R、實盤 +1.11R"]
         room_pct = getattr(self, "day_room", equity * risk_pct) / equity
         if room_pct < S.MIN_RISK_PCT:
             self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
@@ -1208,6 +1217,7 @@ class Bot:
             btc24h = btc_ret24h()
         except Exception:
             btc24h = None
+        self.btc24h = btc24h
         moves = {}
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
             if self._margin_full(size_eq):
@@ -1226,6 +1236,9 @@ class Bot:
                 self.note_skip(sig, "主流幣不靠自選單進場。今天 SOL、XRP 都在驗算轉弱時虧損出場，WLD、XMR 這種榜上的空單有打到 TP1")
                 continue
             if sig.get("recipe_spike"):
+                if sig["side"] == "LONG" and not S.ORDERBOOK_LONGS:
+                    self.note_skip(sig, "訂單簿爆漲多單停用：實盤 8 筆 -0.35R、-20u")
+                    continue
                 same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
                 if len(same) >= S.MAX_SAME_SIDE:
                     self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")

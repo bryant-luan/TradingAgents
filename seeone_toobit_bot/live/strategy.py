@@ -200,6 +200,13 @@ BTC1H_CHASE_MAX = 0.3
 # +0.03R (142) at -1..0%, both negative on Nov 10-11 (Nov 10 alone: +0.41R vs -0.27R / -0.09R).
 # Live self-scan shorts agreed: Gate -0.35R (14) vs -0.02R (3), Toobit -0.17R (21) vs +0.06R (9).
 SELF_SHORT_BTC24H_MIN = 0.0
+# Self-scan shorts that clear every gate above (stop < 1%, BTC 24h >= 0) are the one setup with a
+# measured edge: 5m exit replay +1.23R (335; +0.97R / +1.50R by half, positive on every day), live
+# +1.11R (5, +53.6 USDT). Every other live slice sits near or below 0R. With winners halved, Kelly is
+# still ~0.4, so 8% is about a fifth of it; sequential max drawdown on that haircut replay was 27%.
+# 8% at a 1% stop and 25x needs a 32% margin slot.
+SELF_SHORT_RISK_PCT = 0.08
+SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
 # price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
 # showed no such gap, so they keep the learned window.
@@ -209,6 +216,10 @@ SELF_ENTRY_CHASE_MAX_R = 0.1
 # (1h/4h >= +0.5) averaged -0.35R / -0.51R. 205 of the 278 samples are from Nov 6, so one open at a time,
 # and the path stops after two live losses in a row.
 BOUNCE_PATH = "SELF BOUNCE"
+# Live bounce longs: 23 closes, -0.10R, -21 USDT; -0.21R with BTC 24h down. Off.
+BOUNCE_ENABLED = False
+# Order-book spike longs: 8 live closes, -0.35R, -20 USDT (HOLO twice, MINA twice at -1R or worse). Off.
+ORDERBOOK_LONGS = False
 BOUNCE_HTF_MAX = -0.5
 BOUNCE_MIN_SL_PCT = 0.015
 BOUNCE_MAX_OPEN = 1
