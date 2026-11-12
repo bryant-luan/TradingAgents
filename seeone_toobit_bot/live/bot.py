@@ -328,15 +328,17 @@ class Bot:
         tr["_prev_r"] = round(cur_r, 3)
         htf = getattr(self, "htf", None)
         htf_entry = tr.get("htf_at_entry")
-        opened_against = htf_entry is not None and htf_entry * sgn < S.HTF_MIN_DEFAULT
+        htf_floor = (S.SELF_SHORT_HTF_MIN if tr.get("source") == SELF_SOURCE and side == "SHORT"
+                     else S.HTF_MIN_DEFAULT)
+        opened_against = htf_entry is not None and htf_entry * sgn < htf_floor
         worked = tr.get("mfe_r", 0.0) >= GIVEBACK_ARM_R and time.time() - tr["opened_ts"] >= 900
         # Bounce longs open only when 1h/4h is already below this line, so the check would close them at once
         # (BR on Nov 10 was closed one second after entry).
-        htf_flat = (htf is not None and htf * sgn < S.HTF_MIN_DEFAULT and tr.get("path") != S.BOUNCE_PATH
+        htf_flat = (htf is not None and htf * sgn < htf_floor and tr.get("path") != S.BOUNCE_PATH
                     and not tr.get("after_red") and not tr.get("recipe_spike")
                     and (opened_against or worked or cur_r <= HTF_FLAT_AFTER_R))
         if htf_flat:
-            tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {S.HTF_MIN_DEFAULT}，趨勢消失，平倉")
+            tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {htf_floor}，趨勢消失，平倉")
         # A one-second wick that is still on the profitable side of the entry is not a stop-out.
         # MOCA short (Gate, Nov 11 12:35 Taipei) fell from +0.75R to +0.15R and was market-closed
         # at +0.05R. Price then reached about +3.3R. MELANIA (Toobit, Nov 10 06:06) was the same
@@ -1379,9 +1381,10 @@ class Bot:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                     f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
-            if htf is not None and htf * sgn < htf_min and not bounce:
+            floor = min(htf_min, S.SELF_SHORT_HTF_MIN) if src == SELF_SOURCE and sig["side"] == "SHORT" else htf_min
+            if htf is not None and htf * sgn < floor and not bounce:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
-                                    f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
+                                    f"(順方向 {htf * sgn:+.1f} < 下限 {floor:+.1f})，不做逆大勢的單")
                 continue
             if htf is not None and htf * sgn >= htf_max:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "

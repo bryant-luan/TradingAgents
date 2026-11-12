@@ -212,6 +212,11 @@ SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # ATR %, stop/ATR, hour and Bollinger width split well in the first half and flipped in the second.
 SELF_SHORT_WEAK_RET24H = 3.0
 SELF_SHORT_WEAK_EMA_GAP = 0.14
+# Self-scan shorts may open with the market's 1h/4h up to 1.5 against them instead of 0.5. Inside the
+# stop < 1%, BTC 24h >= 0 and 52.5% gates, -1.5..-0.5 replayed 68% win, +1.02R (98; +1.28R / +0.92R by
+# half), each 0.25-0.5 sub-band positive in both halves; below -1.5 was 44%, +0.38R (9). The 1h/4h
+# trend-gone exit uses the same floor for them, or it would close these at once.
+SELF_SHORT_HTF_MIN = -1.5
 # A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
 # price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
 # showed no such gap, so they keep the learned window.
@@ -225,8 +230,8 @@ SELF_ENTRY_CHASE_MAX_R = 0.1
 # stop of 1% or more. Over 2,494 replayed long reviews (all longs -0.16R) that slice averaged 59% win,
 # +0.84R (86; +0.93R / +0.64R by half), positive on 7 of 8 days, and neighbouring cuts held +0.45R to
 # +1.13R. Longs after a dump that already turned up on EMA (EMA9 over EMA26) were -0.16R (317), -0.39R
-# in the second half. Under a 1% stop the slice lost (7, -0.58R). It opens at the minimum risk, one at a
-# time, and stops after two losses in a row. New name, so the old path's losses do not count.
+# in the second half. Under a 1% stop the slice lost (7, -0.58R). It opens at the minimum risk and stops
+# after two losses in a row. New name, so the old path's losses do not count.
 BOUNCE_PATH = "SELF FLUSH LONG"
 BOUNCE_ENABLED = True
 # Order-book spike longs: 8 live closes, -0.35R, -20 USDT (HOLO twice, MINA twice at -1R or worse). Off.
@@ -241,7 +246,10 @@ FLUSH_VOL_RATIO_MIN = 1.56
 # flush that had already bounced further did better, not worse.
 FLUSH_RET2H_MIN = 0.0
 FLUSH_BOUNCE_MIN_R = 1.5
-BOUNCE_MAX_OPEN = 1
+# Two may be open at once. Replayed with a 2-4h hold, a cap of 2 took 26-31 flushes for +31.6R to +40.2R
+# (both halves positive) against 16-19 and +19.7R to +28.0R at 1, max drawdown 2.1-3.2R against 2.1R.
+# Flushes that came while another was open still averaged +0.98R (48). Gate skipped 7 on Nov 12 at 1.
+BOUNCE_MAX_OPEN = 2
 BOUNCE_STOP_AFTER_LOSSES = 2
 # A scratch exit is not a wrong call: BR on Nov 10 was closed at -0.10R one second after entry by the
 # 1h/4h trend-gone exit, which bounce longs no longer take.

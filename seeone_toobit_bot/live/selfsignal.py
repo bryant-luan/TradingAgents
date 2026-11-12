@@ -822,7 +822,7 @@ class SelfScanner:
         sides = []
         for side in ("LONG", "SHORT"):
             direc = htf if side == "LONG" else -htf
-            band = S.direc_window(direc, side)
+            band = S.direc_window(direc, side, S.SELF_SHORT_HTF_MIN if side == "SHORT" else None)
             if not band and side == "LONG" and S.BOUNCE_ENABLED:
                 band = "bounce"
             if band:
@@ -1174,7 +1174,8 @@ class SelfScanner:
                     return m15 * sgn < S.M15_MAX_DEFAULT
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
-                            if S.direc_window(direc, sd) is not None and m15_ok(sd)]
+                            if S.direc_window(direc, sd, S.SELF_SHORT_HTF_MIN if sd == "SHORT" else None) is not None
+                            and m15_ok(sd)]
                 fl = flush(tsym) if S.BOUNCE_ENABLED and d / px >= S.BOUNCE_MIN_SL_PCT else None
                 bounce = S.bounce_ok(fl, d / px, px) and m15_ok("LONG")
                 if bounce and "LONG" not in eligible:
