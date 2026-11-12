@@ -55,6 +55,11 @@ MIN_QUALITY = 60.0
 # +0.30R in both halves of Nov 4-11; Gate 5 closes, +0.25R. The floor is +0.50R
 # so a review at +0.50R to +0.55R can still open. Below +0.50R the live books lost money.
 MIN_EV_R = 0.50
+# Shorts that clear the stop < 1% and BTC 24h >= 0 gates averaged the same on the 5m exit replay across
+# de-biased probability: 55-57% +1.02R (82), 57-59% +1.31R (86), 59-61% +1.22R (74), 61%+ +1.23-1.50R.
+# +0.50R EV sits near 61% and kept 93 of those 335 setups. Below 55% is not covered by the replay.
+SHORT_MIN_EV_R = 0.25
+SHORT_MIN_PROB = 55.0
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 # See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst; six per scan per bot
@@ -1203,10 +1208,12 @@ class SelfScanner:
             max_prob = self.learner.p.get("self_max_prob")
             if max_prob is not None and prob >= max_prob:
                 continue
-            if prob < min_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < MIN_EV_R:
+            floor_prob, floor_ev = ((max(min_prob, SHORT_MIN_PROB), SHORT_MIN_EV_R) if side == "SHORT"
+                                    else (min_prob, MIN_EV_R))
+            if prob < floor_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < floor_ev:
                 self.log("SELF_GATE", symbol=sym, side=side, prob=prob, edge=edge,
-                         quality=quality, ev=ev, min_prob=min_prob, min_edge=MIN_EDGE,
-                         min_quality=MIN_QUALITY, min_ev=MIN_EV_R)
+                         quality=quality, ev=ev, min_prob=floor_prob, min_edge=MIN_EDGE,
+                         min_quality=MIN_QUALITY, min_ev=floor_ev)
                 continue
             if (side == "SHORT" and getattr(self.tb, "name", "") == "gate"
                     and edge < S.GATE_SHORT_MIN_EDGE):

@@ -536,7 +536,8 @@ class Bot:
         b24 = getattr(self, "btc24h", None)
         if (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
                 and b24 is not None and b24 >= S.SELF_SHORT_BTC24H_MIN
-                and abs(price - stop) / price < S.SELF_MAX_SL_PCT):
+                and abs(price - stop) / price < S.SELF_MAX_SL_PCT
+                and ((ev.get("analysis") or {}).get("ev_r") or 0) >= S.SELF_SHORT_FULL_RISK_EV):
             risk_pct = max(risk_pct, S.SELF_SHORT_RISK_PCT)
             margin_cap = max(margin_cap, S.SELF_SHORT_MARGIN_CAP_PCT)
             ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌) 風險 {risk_pct:.0%}：驗算 +1.23R、實盤 +1.11R"]

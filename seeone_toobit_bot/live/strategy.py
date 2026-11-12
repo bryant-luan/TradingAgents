@@ -206,6 +206,8 @@ SELF_SHORT_BTC24H_MIN = 0.0
 # still ~0.4, so 8% is about a fifth of it; sequential max drawdown on that haircut replay was 27%.
 # 8% at a 1% stop and 25x needs a 32% margin slot.
 SELF_SHORT_RISK_PCT = 0.08
+# The live +1.11R came from reviews at +0.50R EV or more; below that the setup opens at the normal risk.
+SELF_SHORT_FULL_RISK_EV = 0.50
 SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
 # price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
