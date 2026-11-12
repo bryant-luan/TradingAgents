@@ -199,8 +199,9 @@ def short_strength(symbol: str) -> tuple[float | None, float | None]:
     return r24, gap
 
 
-def flush(symbol: str) -> tuple[float, float] | None:
-    """(15m EMA20 over EMA50 gap %, last 4 closed 15m bars' volume over the 48 before) for flush longs."""
+def flush(symbol: str) -> tuple[float, float, float, float] | None:
+    """For flush longs, on closed 15m bars: (EMA20 over EMA50 gap %, last 4 bars' volume over the 48
+    before, 2h close-to-close return %, 6h low)."""
     rows = klines(symbol, "15m", 121)
     if not isinstance(rows, list) or len(rows) < 81:
         return None
@@ -212,7 +213,9 @@ def flush(symbol: str) -> tuple[float, float] | None:
         e50 += (c - e50) * 2 / 51
     vol = [float(r[5]) for r in rows]
     base = sum(vol[-52:-4]) / 48
-    return (e20 - e50) / e50 * 100, (sum(vol[-4:]) / 4 / base if base > 0 else 0.0)
+    ret2h = (float(rows[-1][4]) / float(rows[-9][4]) - 1) * 100
+    low6h = min(float(r[3]) for r in rows[-24:])
+    return (e20 - e50) / e50 * 100, (sum(vol[-4:]) / 4 / base if base > 0 else 0.0), ret2h, low6h
 
 
 def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, float | None, float | None]:
@@ -857,7 +860,7 @@ class SelfScanner:
                 if best is None or (prob or -1) > best:
                     best = prob or -1
                 tradable = (tradable or (narrow and side in open_sides)
-                            or (side == "LONG" and S.bounce_ok(fl, pl["dist"] / pl["price"])))
+                            or (side == "LONG" and S.bounce_ok(fl, pl["dist"] / pl["price"], pl["price"])))
             if best is None:
                 continue
             ranked.append((tradable, best, c))
@@ -1173,7 +1176,7 @@ class SelfScanner:
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.direc_window(direc, sd) is not None and m15_ok(sd)]
                 fl = flush(tsym) if S.BOUNCE_ENABLED and d / px >= S.BOUNCE_MIN_SL_PCT else None
-                bounce = S.bounce_ok(fl, d / px) and m15_ok("LONG")
+                bounce = S.bounce_ok(fl, d / px, px) and m15_ok("LONG")
                 if bounce and "LONG" not in eligible:
                     eligible.insert(0, "LONG")
                 tradable = [sd for sd in eligible if sd in open_sides] if d / px < S.SELF_MAX_SL_PCT else []

@@ -496,12 +496,15 @@ class Bot:
     def bounce_blocked(self, sig: dict, htf: float | None) -> str | None:
         if not S.BOUNCE_ENABLED:
             return "爆量洗盤多單停用"
-        sl_pct = abs(float(sig["entry_price"]) - float(sig["stop_price"])) / float(sig["entry_price"])
+        price = float(sig["entry_price"])
+        sl_pct = abs(price - float(sig["stop_price"])) / price
         fl = flush(S.to_toobit(sig["symbol"]))
-        if not S.bounce_ok(fl, sl_pct):
-            shown = "未知" if fl is None else f"EMA20/50 {fl[0]:+.2f}%、量比 {fl[1]:.2f}"
-            return (f"爆量洗盤多單條件已不成立：{shown}（須 ≤ {S.FLUSH_EMA_GAP_MAX}%、≥ {S.FLUSH_VOL_RATIO_MIN}），"
-                    f"止損 {sl_pct:.2%}（須 ≥ {S.BOUNCE_MIN_SL_PCT:.0%}）")
+        if not S.bounce_ok(fl, sl_pct, price):
+            shown = ("未知" if fl is None else
+                     f"EMA20/50 {fl[0]:+.2f}%、量比 {fl[1]:.2f}、2h {fl[2]:+.2f}%、"
+                     f"離 6h 低 {(price - fl[3]) / (price * sl_pct):.1f}R")
+            return (f"爆量洗盤多單條件已不成立：{shown}（須 EMA ≤ {S.FLUSH_EMA_GAP_MAX}%、量比 ≥ {S.FLUSH_VOL_RATIO_MIN}、"
+                    f"2h ≥ {S.FLUSH_RET2H_MIN:.0f}% 或離低 ≥ {S.FLUSH_BOUNCE_MIN_R}R），止損 {sl_pct:.2%}（須 ≥ {S.BOUNCE_MIN_SL_PCT:.0%}）")
         held = sum(1 for t in self.st["trades"].values() if t.get("path") == S.BOUNCE_PATH)
         if held >= S.BOUNCE_MAX_OPEN:
             return f"爆量洗盤多單同時最多 {S.BOUNCE_MAX_OPEN} 筆，已有 {held} 筆"

@@ -235,6 +235,12 @@ BOUNCE_HTF_MAX = -0.5
 BOUNCE_MIN_SL_PCT = 0.01
 FLUSH_EMA_GAP_MAX = -0.53
 FLUSH_VOL_RATIO_MIN = 1.56
+# The flush has to have turned: 2h return at or above zero, or price 1.5R+ off the 6h low. The 8 replayed
+# flushes with neither were still falling into the entry: 38% win, +0.19R, against 66%, +1.06R for the
+# other 71 (+0.94R / +1.55R by half). Which way the volume bars closed did not separate them, and a
+# flush that had already bounced further did better, not worse.
+FLUSH_RET2H_MIN = 0.0
+FLUSH_BOUNCE_MIN_R = 1.5
 BOUNCE_MAX_OPEN = 1
 BOUNCE_STOP_AFTER_LOSSES = 2
 # A scratch exit is not a wrong call: BR on Nov 10 was closed at -0.10R one second after entry by the
@@ -242,9 +248,11 @@ BOUNCE_STOP_AFTER_LOSSES = 2
 BOUNCE_LOSS_R = -0.3
 
 
-def bounce_ok(flush: tuple[float, float] | None, sl_pct: float) -> bool:
-    return (BOUNCE_ENABLED and flush is not None and sl_pct >= BOUNCE_MIN_SL_PCT
-            and flush[0] <= FLUSH_EMA_GAP_MAX and flush[1] >= FLUSH_VOL_RATIO_MIN)
+def bounce_ok(flush: tuple[float, float, float, float] | None, sl_pct: float, price: float) -> bool:
+    if not (BOUNCE_ENABLED and flush is not None and sl_pct >= BOUNCE_MIN_SL_PCT
+            and flush[0] <= FLUSH_EMA_GAP_MAX and flush[1] >= FLUSH_VOL_RATIO_MIN):
+        return False
+    return flush[2] >= FLUSH_RET2H_MIN or (price - flush[3]) / (price * sl_pct) >= FLUSH_BOUNCE_MIN_R
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
