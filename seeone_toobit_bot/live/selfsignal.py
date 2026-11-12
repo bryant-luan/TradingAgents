@@ -57,9 +57,12 @@ MIN_QUALITY = 60.0
 MIN_EV_R = 0.50
 # Shorts that clear the stop < 1% and BTC 24h >= 0 gates averaged the same on the 5m exit replay across
 # de-biased probability: 55-57% +1.02R (82), 57-59% +1.31R (86), 59-61% +1.22R (74), 61%+ +1.23-1.50R.
-# +0.50R EV sits near 61% and kept 93 of those 335 setups. Below 55% is not covered by the replay.
-SHORT_MIN_EV_R = 0.25
-SHORT_MIN_PROB = 55.0
+# +0.50R EV sits near 61% and kept 93 of those 335 setups. 52.5-55% replayed 69% win, +1.29R (123;
+# +1.37R / +1.15R by half), against 62%, +1.03R at 50-52.5%. Live reviews there carry +0.10R to +0.25R EV.
+# Blocked pools had no indicator slice that held in both halves: BTC 24h down was 36% win, +0.04R (486),
+# stops of 1% or more 41%, +0.22R (311).
+SHORT_MIN_EV_R = 0.10
+SHORT_MIN_PROB = 52.5
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 # See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst; six per scan per bot
