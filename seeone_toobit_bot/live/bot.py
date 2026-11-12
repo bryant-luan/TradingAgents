@@ -40,6 +40,29 @@ LEARN_FILE = ROOT / "logs" / "learned_params.json"
 INSIGHT_LOG = LOG_DIR / "insights.jsonl"
 SHADOW_FILE = ROOT / "logs" / "shadow_archive.json"
 CALIB_FILE = ROOT / "logs" / "self_calib.json"
+# "YYYY-MM-DD lo hi" (UTC date): a profit band for Toobit and Gate together. Not per venue, so use_venue leaves it.
+# Once both books' closed PnL that day reaches lo, falling back under lo ends new entries; reaching hi ends them too.
+COMBO_TARGET_FILE = ROOT / "logs" / "DAY_TARGET"
+BOOK_STATES = (ROOT / "logs" / "live_state.json", ROOT / "logs" / "gate" / "live_state.json")
+
+
+def combo_target(day: str) -> tuple[float, float] | None:
+    try:
+        d, lo, hi = COMBO_TARGET_FILE.read_text().split()
+    except (OSError, ValueError):
+        return None
+    return (float(lo), float(hi)) if d == day else None
+
+
+def combo_gain(day: str) -> float:
+    total = 0.0
+    for p in BOOK_STATES:
+        try:
+            closed = json.loads(p.read_text()).get("closed") or []
+        except (OSError, ValueError):
+            continue
+        total += sum(c.get("pnl") or 0 for c in closed if (c.get("closed_at") or "").startswith(day))
+    return total
 
 
 def use_venue(venue: str):
@@ -1110,7 +1133,18 @@ class Bot:
             log_event("DAY_TARGET_DONE", day_start_balance=round(start, 2), balance=round(bal, 2),
                       gained=round(gained, 2),
                       reason=f"當日已實現獲利 {gained:.0f}u 達到目標上限 {S.DAY_TARGET_CAP_USDT:.0f}u，今日停止開新倉")
-        if self.st.get("day_target_hit"):
+        band = combo_target(day)
+        if band and self.st.get("combo_done") != day:
+            total = combo_gain(day)
+            if total >= band[0]:
+                self.st["combo_armed"] = day
+            why = (f"Toobit+Gate 今日已實現 {total:.1f}u 達到目標上限 {band[1]:.0f}u" if total >= band[1] else
+                   f"Toobit+Gate 今日已實現曾達 {band[0]:.0f}u，回落到 {total:.1f}u" if self.st.get("combo_armed") == day
+                   and total < band[0] else None)
+            if why:
+                self.st["combo_done"] = day
+                log_event("DAY_TARGET_DONE", combined=round(total, 2), band=list(band), reason=why + "，今日停止開新倉")
+        if self.st.get("day_target_hit") or (band and self.st.get("combo_done") == day):
             if signals is not None:
                 self.record_signal_snapshots(signals)
             return
