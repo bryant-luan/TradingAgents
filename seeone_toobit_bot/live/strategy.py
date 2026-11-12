@@ -209,6 +209,13 @@ SELF_SHORT_RISK_PCT = 0.08
 # The live +1.11R came from reviews at +0.50R EV or more; below that the setup opens at the normal risk.
 SELF_SHORT_FULL_RISK_EV = 0.50
 SELF_SHORT_MARGIN_CAP_PCT = 0.33
+# Of 21 indicators replayed on those 335 shorts, only two split them the same way in both halves:
+# the coin already up 3%+ over 24h, or 15m EMA20 more than 0.14% above EMA50. Either one: 52% win,
+# +0.71R (93; +0.81R / +0.30R by half) against 74%, +1.44R (242). Still positive, so they keep the
+# normal risk instead of the 8% upgrade: total +389R vs +414R, max drawdown 10.7R vs 12.7R.
+# ATR %, stop/ATR, hour and Bollinger width split well in the first half and flipped in the second.
+SELF_SHORT_WEAK_RET24H = 3.0
+SELF_SHORT_WEAK_EMA_GAP = 0.14
 # A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
 # price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
 # showed no such gap, so they keep the learned window.

@@ -178,6 +178,24 @@ def btc_ret24h() -> float | None:
     return round((float(rows[-1][4]) - ref) / ref * 100, 3)
 
 
+def short_strength(symbol: str) -> tuple[float | None, float | None]:
+    """(coin 24h return % on 1h closes, 15m EMA20 over EMA50 gap %) for sizing self-scan shorts."""
+    r24 = gap = None
+    rows = klines(symbol, "1h", 25)
+    if isinstance(rows, list) and len(rows) >= 25:
+        ref = float(rows[-25][4])
+        r24 = (float(rows[-1][4]) - ref) / ref * 100
+    rows = klines(symbol, "15m", 120)
+    if isinstance(rows, list) and len(rows) >= 80:
+        e20 = e50 = float(rows[0][4])
+        for r in rows:
+            c = float(r[4])
+            e20 += (c - e20) * 2 / 21
+            e50 += (c - e50) * 2 / 51
+        gap = (e20 - e50) / e50 * 100
+    return r24, gap
+
+
 def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, float | None, float | None]:
     """(range ratio, 1h return %, volume ratio, 24h quote volume, 15m return %) on closed 5m bars.
 

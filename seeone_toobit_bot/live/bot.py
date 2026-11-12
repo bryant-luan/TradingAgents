@@ -24,7 +24,7 @@ from .exchange import connect, exchange_name
 from .learner import Learner
 from .market import klines, listing
 from .shadow import Shadow
-from .selfsignal import MAJORS, SelfScanner, btc_ret1h, btc_ret24h, in_side, move_2h, move_before, rsi_side
+from .selfsignal import MAJORS, SelfScanner, btc_ret1h, btc_ret24h, in_side, move_2h, move_before, rsi_side, short_strength
 from .toobit import ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -538,9 +538,18 @@ class Bot:
                 and b24 is not None and b24 >= S.SELF_SHORT_BTC24H_MIN
                 and abs(price - stop) / price < S.SELF_MAX_SL_PCT
                 and ((ev.get("analysis") or {}).get("ev_r") or 0) >= S.SELF_SHORT_FULL_RISK_EV):
-            risk_pct = max(risk_pct, S.SELF_SHORT_RISK_PCT)
-            margin_cap = max(margin_cap, S.SELF_SHORT_MARGIN_CAP_PCT)
-            ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌) 風險 {risk_pct:.0%}：驗算 +1.23R、實盤 +1.11R"]
+            r24, gap = short_strength(sym)
+            weak = [w for w in (r24 is not None and r24 > S.SELF_SHORT_WEAK_RET24H and f"幣 24h 已漲 {r24:+.1f}%",
+                                gap is not None and gap > S.SELF_SHORT_WEAK_EMA_GAP and f"15m EMA20 高於 EMA50 {gap:.2f}%")
+                    if w]
+            if weak:
+                ev["reasons"] = ev["reasons"] + [f"自選空單逆強勢 ({'、'.join(weak)})，維持一般風險 {risk_pct:.0%}："
+                                                 "驗算 52% 勝、+0.71R，對比其餘 74%、+1.44R"]
+            else:
+                risk_pct = max(risk_pct, S.SELF_SHORT_RISK_PCT)
+                margin_cap = max(margin_cap, S.SELF_SHORT_MARGIN_CAP_PCT)
+                ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌、非逆強勢) 風險 {risk_pct:.0%}："
+                                                 "驗算 74% 勝、+1.44R"]
         room_pct = getattr(self, "day_room", equity * risk_pct) / equity
         if room_pct < S.MIN_RISK_PCT:
             self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
