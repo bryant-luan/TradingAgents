@@ -220,13 +220,21 @@ SELF_ENTRY_CHASE_MAX_R = 0.1
 # On the 5m exit replay these averaged +0.41R (139) / +0.39R (139), TP1 first 59% / 62%, while trend longs
 # (1h/4h >= +0.5) averaged -0.35R / -0.51R. 205 of the 278 samples are from Nov 6, so one open at a time,
 # and the path stops after two live losses in a row.
-BOUNCE_PATH = "SELF BOUNCE"
-# Live bounce longs: 23 closes, -0.10R, -21 USDT; -0.21R with BTC 24h down. Off.
-BOUNCE_ENABLED = False
+# Those bounce longs went 23 live closes, -0.10R, -21 USDT, so the path now takes a volume flush instead:
+# 15m EMA20 at least 0.53% under EMA50, the last closed hour's 15m volume 1.56x+ the 12 hours before, and a
+# stop of 1% or more. Over 2,494 replayed long reviews (all longs -0.16R) that slice averaged 59% win,
+# +0.84R (86; +0.93R / +0.64R by half), positive on 7 of 8 days, and neighbouring cuts held +0.45R to
+# +1.13R. Longs after a dump that already turned up on EMA (EMA9 over EMA26) were -0.16R (317), -0.39R
+# in the second half. Under a 1% stop the slice lost (7, -0.58R). It opens at the minimum risk, one at a
+# time, and stops after two losses in a row. New name, so the old path's losses do not count.
+BOUNCE_PATH = "SELF FLUSH LONG"
+BOUNCE_ENABLED = True
 # Order-book spike longs: 8 live closes, -0.35R, -20 USDT (HOLO twice, MINA twice at -1R or worse). Off.
 ORDERBOOK_LONGS = False
 BOUNCE_HTF_MAX = -0.5
-BOUNCE_MIN_SL_PCT = 0.015
+BOUNCE_MIN_SL_PCT = 0.01
+FLUSH_EMA_GAP_MAX = -0.53
+FLUSH_VOL_RATIO_MIN = 1.56
 BOUNCE_MAX_OPEN = 1
 BOUNCE_STOP_AFTER_LOSSES = 2
 # A scratch exit is not a wrong call: BR on Nov 10 was closed at -0.10R one second after entry by the
@@ -234,8 +242,9 @@ BOUNCE_STOP_AFTER_LOSSES = 2
 BOUNCE_LOSS_R = -0.3
 
 
-def bounce_ok(htf: float | None, sl_pct: float) -> bool:
-    return htf is not None and htf < BOUNCE_HTF_MAX and sl_pct >= BOUNCE_MIN_SL_PCT
+def bounce_ok(flush: tuple[float, float] | None, sl_pct: float) -> bool:
+    return (BOUNCE_ENABLED and flush is not None and sl_pct >= BOUNCE_MIN_SL_PCT
+            and flush[0] <= FLUSH_EMA_GAP_MAX and flush[1] >= FLUSH_VOL_RATIO_MIN)
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0

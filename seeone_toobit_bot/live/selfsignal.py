@@ -199,6 +199,22 @@ def short_strength(symbol: str) -> tuple[float | None, float | None]:
     return r24, gap
 
 
+def flush(symbol: str) -> tuple[float, float] | None:
+    """(15m EMA20 over EMA50 gap %, last 4 closed 15m bars' volume over the 48 before) for flush longs."""
+    rows = klines(symbol, "15m", 121)
+    if not isinstance(rows, list) or len(rows) < 81:
+        return None
+    rows = rows[:-1]
+    e20 = e50 = float(rows[0][4])
+    for r in rows:
+        c = float(r[4])
+        e20 += (c - e20) * 2 / 21
+        e50 += (c - e50) * 2 / 51
+    vol = [float(r[5]) for r in rows]
+    base = sum(vol[-52:-4]) / 48
+    return (e20 - e50) / e50 * 100, (sum(vol[-4:]) / 4 / base if base > 0 else 0.0)
+
+
 def micro_1h(symbol: str) -> tuple[float | None, float | None, float | None, float | None, float | None]:
     """(range ratio, 1h return %, volume ratio, 24h quote volume, 15m return %) on closed 5m bars.
 
@@ -804,7 +820,7 @@ class SelfScanner:
         for side in ("LONG", "SHORT"):
             direc = htf if side == "LONG" else -htf
             band = S.direc_window(direc, side)
-            if not band and side == "LONG" and htf < S.BOUNCE_HTF_MAX:
+            if not band and side == "LONG" and S.BOUNCE_ENABLED:
                 band = "bounce"
             if band:
                 sides.append((side, band))
@@ -827,6 +843,7 @@ class SelfScanner:
             if not pl or pl.get("rpos") is None:
                 continue
             narrow = pl["dist"] / pl["price"] < S.SELF_MAX_SL_PCT
+            fl = flush(tsym) if S.BOUNCE_ENABLED and not narrow else None
             best, tradable = None, False
             for side, _band in sides:
                 sgn = 1 if side == "LONG" else -1
@@ -840,7 +857,7 @@ class SelfScanner:
                 if best is None or (prob or -1) > best:
                     best = prob or -1
                 tradable = (tradable or (narrow and side in open_sides)
-                            or (side == "LONG" and S.bounce_ok(htf, pl["dist"] / pl["price"])))
+                            or (side == "LONG" and S.bounce_ok(fl, pl["dist"] / pl["price"])))
             if best is None:
                 continue
             ranked.append((tradable, best, c))
@@ -1155,7 +1172,8 @@ class SelfScanner:
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.direc_window(direc, sd) is not None and m15_ok(sd)]
-                bounce = S.bounce_ok(htf, d / px) and m15_ok("LONG")
+                fl = flush(tsym) if S.BOUNCE_ENABLED and d / px >= S.BOUNCE_MIN_SL_PCT else None
+                bounce = S.bounce_ok(fl, d / px) and m15_ok("LONG")
                 if bounce and "LONG" not in eligible:
                     eligible.insert(0, "LONG")
                 tradable = [sd for sd in eligible if sd in open_sides] if d / px < S.SELF_MAX_SL_PCT else []
@@ -1229,18 +1247,24 @@ class SelfScanner:
             max_prob = self.learner.p.get("self_max_prob")
             if max_prob is not None and prob >= max_prob:
                 continue
+            flush_long = side == "LONG" and bounce
             floor_prob, floor_ev = ((max(min_prob, SHORT_MIN_PROB), SHORT_MIN_EV_R) if side == "SHORT"
                                     else (min_prob, MIN_EV_R))
-            if prob < floor_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < floor_ev:
+            # The flush-long replay covered every review from 45% up, whatever its EV, quality or 1H read.
+            gated = (prob < min_prob if flush_long else
+                     prob < floor_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < floor_ev)
+            if gated:
                 self.log("SELF_GATE", symbol=sym, side=side, prob=prob, edge=edge,
                          quality=quality, ev=ev, min_prob=floor_prob, min_edge=MIN_EDGE,
                          min_quality=MIN_QUALITY, min_ev=floor_ev)
                 continue
-            try:
-                p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H", share=True).get("probability") or 0) - bias
-            except Exception:
-                p1h = 0.0
-            if p1h < CONFIRM_MIN_PROB:
+            p1h = 0.0
+            if not flush_long:
+                try:
+                    p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H", share=True).get("probability") or 0) - bias
+                except Exception:
+                    p1h = 0.0
+            if not flush_long and p1h < CONFIRM_MIN_PROB:
                 self.log("SELF_REJECT", symbol=sym, side=side, prob_15m=prob, prob_1h=round(p1h, 1),
                          reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {CONFIRM_MIN_PROB}%，週期不一致")
                 continue

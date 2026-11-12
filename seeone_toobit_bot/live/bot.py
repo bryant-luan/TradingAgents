@@ -24,7 +24,7 @@ from .exchange import connect, exchange_name
 from .learner import Learner
 from .market import klines, listing
 from .shadow import Shadow
-from .selfsignal import MAJORS, SelfScanner, btc_ret1h, btc_ret24h, in_side, move_2h, move_before, rsi_side, short_strength
+from .selfsignal import MAJORS, SelfScanner, btc_ret1h, btc_ret24h, in_side, flush, move_2h, move_before, rsi_side, short_strength
 from .toobit import ToobitError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -495,14 +495,16 @@ class Bot:
     # ------------------------------------------------------------------ entries
     def bounce_blocked(self, sig: dict, htf: float | None) -> str | None:
         if not S.BOUNCE_ENABLED:
-            return "反彈多單停用：實盤 23 筆 -0.10R、-21u，BTC 24h 下跌時 -0.21R"
+            return "爆量洗盤多單停用"
         sl_pct = abs(float(sig["entry_price"]) - float(sig["stop_price"])) / float(sig["entry_price"])
-        if not S.bounce_ok(htf, sl_pct):
-            return (f"反彈多單條件已不成立：大盤 1h/4h {htf if htf is not None else '未知'}（須 < {S.BOUNCE_HTF_MAX}），"
-                    f"止損 {sl_pct:.2%}（須 ≥ {S.BOUNCE_MIN_SL_PCT:.1%}）")
+        fl = flush(S.to_toobit(sig["symbol"]))
+        if not S.bounce_ok(fl, sl_pct):
+            shown = "未知" if fl is None else f"EMA20/50 {fl[0]:+.2f}%、量比 {fl[1]:.2f}"
+            return (f"爆量洗盤多單條件已不成立：{shown}（須 ≤ {S.FLUSH_EMA_GAP_MAX}%、≥ {S.FLUSH_VOL_RATIO_MIN}），"
+                    f"止損 {sl_pct:.2%}（須 ≥ {S.BOUNCE_MIN_SL_PCT:.0%}）")
         held = sum(1 for t in self.st["trades"].values() if t.get("path") == S.BOUNCE_PATH)
         if held >= S.BOUNCE_MAX_OPEN:
-            return f"反彈多單同時最多 {S.BOUNCE_MAX_OPEN} 筆，已有 {held} 筆"
+            return f"爆量洗盤多單同時最多 {S.BOUNCE_MAX_OPEN} 筆，已有 {held} 筆"
         # Dust flats are not a read on the setup. On Nov 11 00:16-07:05 Taipei the
         # day-start equity line closed full-size bounces within a minute. Those scratches
         # sat in this window and erased PIEVERSE (-0.90R), so the path kept firing.
@@ -510,7 +512,7 @@ class Bot:
                     and "小倉" not in (c.get("reason") or "")]
         last = decisive[-S.BOUNCE_STOP_AFTER_LOSSES:]
         if len(last) == S.BOUNCE_STOP_AFTER_LOSSES and all((c.get("r_result") or 0) <= S.BOUNCE_LOSS_R for c in last):
-            return f"反彈多單實盤已連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，停用"
+            return f"爆量洗盤多單實盤已連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，停用"
         return None
 
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
