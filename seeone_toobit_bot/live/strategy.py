@@ -232,6 +232,10 @@ SELF_ENTRY_CHASE_MAX_R = 0.1
 # +1.13R. Longs after a dump that already turned up on EMA (EMA9 over EMA26) were -0.16R (317), -0.39R
 # in the second half. Under a 1% stop the slice lost (7, -0.58R). It opens at the minimum risk and stops
 # after two losses in a row. New name, so the old path's losses do not count.
+# Taipei hour is not a gate. The 84 turned flushes through Nov 13 were +0.40R at 00:00-06:00
+# (+0.73 / +0.06 by half) and positive in the other three sessions. Before TP1 the -0.85R
+# early flatten does not apply, and the probability recheck never does: see bot.py. A recheck
+# close is not a loss for the two-loss halt.
 BOUNCE_PATH = "SELF FLUSH LONG"
 BOUNCE_ENABLED = True
 # Order-book spike longs: 8 live closes, -0.35R, -20 USDT (HOLO twice, MINA twice at -1R or worse). Off.

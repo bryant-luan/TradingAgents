@@ -272,15 +272,21 @@ class Bot:
                 if tr.get("exit_reason"):
                     continue
 
+            # Flush longs do not use the review probability to enter, and closing them when it
+            # falls below 40% gives the exit a signal the entry replay rejected. CVC (Toobit,
+            # Nov 13 00:51 Taipei) was cut at -0.63R; the 5m path later reached +1.28R without
+            # touching the stop. Gate CRWV the same night was cut at -0.48R and would have
+            # finished about flat. Reviews under 50% were still +0.69R in both halves.
             if tr.get("source") in (SELF_SOURCE, ADOPT_SOURCE) and not tr.get("exit_reason"):
-                close, why = self.selfscan.recheck(tr)
-                if close:
-                    with self._protect_lock:
-                        if not tr.get("exit_reason"):
-                            tr["exit_reason"] = why
-                            log_event("SELF_EXIT_DECISION", trade_id=tid, symbol=sym, side=side, reason=why,
-                                      rechecks=tr.get("rechecks", [])[-3:])
-                            self.maker_close(tr)
+                if tr.get("path") != S.BOUNCE_PATH:
+                    close, why = self.selfscan.recheck(tr)
+                    if close:
+                        with self._protect_lock:
+                            if not tr.get("exit_reason"):
+                                tr["exit_reason"] = why
+                                log_event("SELF_EXIT_DECISION", trade_id=tid, symbol=sym, side=side, reason=why,
+                                          rechecks=tr.get("rechecks", [])[-3:])
+                                self.maker_close(tr)
                 continue
 
             if sigmap is None:
@@ -337,6 +343,13 @@ class Bot:
         htf_flat = (htf is not None and htf * sgn < htf_floor and tr.get("path") != S.BOUNCE_PATH
                     and not tr.get("after_red") and not tr.get("recipe_spike")
                     and (opened_against or worked or cur_r <= HTF_FLAT_AFTER_R))
+        tp_filled = any(tp.get("filled") for tp in tr.get("tps") or [])
+        # Flush longs stay with the exchange stop until TP1. Cutting them at -0.85R on the
+        # 84 turned reviews (5m bars, live ladder, fees, Nov 4-13) took +0.79R
+        # (+0.92 / +0.66 by half) down to +0.63R (+0.71 / +0.56). Seven wicks recovered
+        # past that, and that outweighed the ~0.15R saved on 21 full stops. Taipei 00:00-06:00
+        # was a wash, so this is not a session rule. Other paths keep the early exit.
+        flush_hold = tr.get("path") == S.BOUNCE_PATH and not tp_filled
         if htf_flat:
             tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {htf_floor}，趨勢消失，平倉")
         # A one-second wick that is still on the profitable side of the entry is not a stop-out.
@@ -347,8 +360,8 @@ class Bot:
         elif (prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and cur_r <= 0
               and self._spike_through_lock(tr, cur_r)):
             tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
-        elif cur_r <= (AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R):
-            line = AFTER_TP_DEEP_R if any(tp.get("filled") for tp in tr.get("tps") or []) else DEEP_ADVERSE_R
+        elif not flush_hold and cur_r <= (AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R):
+            line = AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R
             tr["exit_reason"] = (f"浮虧 {cur_r:+.2f}R 已深於 {line}R，先平倉，避免插針滑過止損")
         if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧")):
             log_event("ADVERSE_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, cur_r=round(cur_r, 3),
@@ -513,8 +526,12 @@ class Bot:
         # Dust flats are not a read on the setup. On Nov 11 00:16-07:05 Taipei the
         # day-start equity line closed full-size bounces within a minute. Those scratches
         # sat in this window and erased PIEVERSE (-0.90R), so the path kept firing.
+        # A probability recheck is not a read on the flush. CVC and CRWV were closed that way
+        # and the stop was never the thing that failed. Dust flats stay out for the same reason.
         decisive = [c for c in self.st["closed"] if c.get("path") == S.BOUNCE_PATH
-                    and "小倉" not in (c.get("reason") or "")]
+                    and "小倉" not in (c.get("reason") or "")
+                    and "重評" not in (c.get("reason") or "")
+                    and "變弱" not in (c.get("reason") or "")]
         last = decisive[-S.BOUNCE_STOP_AFTER_LOSSES:]
         if len(last) == S.BOUNCE_STOP_AFTER_LOSSES and all((c.get("r_result") or 0) <= S.BOUNCE_LOSS_R for c in last):
             return f"爆量洗盤多單實盤已連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，停用"
