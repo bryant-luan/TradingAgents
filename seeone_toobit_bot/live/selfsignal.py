@@ -781,7 +781,7 @@ class SelfScanner:
         htf_dir, rpos = est[side]["htf_dir"], est[side]["rpos"]
         would = (prob is not None and prob >= DEFAULT_MIN_PROB and edge is not None and edge >= MIN_EDGE
                  and rpos is not None and rpos <= S.MAX_RANGE_POS
-                 and S.direc_window(htf_dir, side) is not None)
+                 and S.self_direc_window(htf_dir, side) is not None)
         rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "symbol": sym, "side": side,
                "prob": prob, "other_prob": other_prob, "edge": edge, "n": est[side]["n"],
                "level": est[side]["level"], "rpos": rpos, "htf_dir": None if htf_dir is None else round(htf_dir, 2),
@@ -828,7 +828,7 @@ class SelfScanner:
         sides = []
         for side in ("LONG", "SHORT"):
             direc = htf if side == "LONG" else -htf
-            band = S.direc_window(direc, side, S.SELF_SHORT_HTF_MIN if side == "SHORT" else None)
+            band = S.self_direc_window(direc, side)
             if not band and side == "LONG" and S.BOUNCE_ENABLED:
                 band = "bounce"
             if band:
@@ -1193,8 +1193,7 @@ class SelfScanner:
                     return m15 * sgn < S.M15_MAX_DEFAULT
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
-                            if S.direc_window(direc, sd, S.SELF_SHORT_HTF_MIN if sd == "SHORT" else None) is not None
-                            and m15_ok(sd)]
+                            if S.self_direc_window(direc, sd) is not None and m15_ok(sd)]
                 fl = flush(tsym) if S.BOUNCE_ENABLED and d / px >= S.BOUNCE_MIN_SL_PCT else None
                 bounce = S.bounce_ok(fl, d / px, px) and m15_ok("LONG")
                 if bounce and "LONG" not in eligible:
@@ -1291,7 +1290,7 @@ class SelfScanner:
                 self.log("SELF_REJECT", symbol=sym, side=side, prob_15m=prob, prob_1h=round(p1h, 1),
                          reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {CONFIRM_MIN_PROB}%，週期不一致")
                 continue
-            band = S.direc_window(htf if side == "LONG" else None if htf is None else -htf, side)
+            band = S.self_direc_window(htf if side == "LONG" else None if htf is None else -htf, side)
             found.append(self.to_signal({**c, "side": side, "bounce_long": side == "LONG" and bounce,
                                         "strong_liquid_short": band == "strong_short",
                                         "fade_entry": band in ("fade_long", "fade_short")},

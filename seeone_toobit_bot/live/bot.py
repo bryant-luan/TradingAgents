@@ -1403,9 +1403,11 @@ class Bot:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                     f"(順方向 {htf * sgn:+.1f} < 下限 {floor:+.1f})，不做逆大勢的單")
                 continue
-            if htf is not None and htf * sgn >= htf_max:
+            cap = (S.SELF_SHORT_HTF_MAX if src == SELF_SOURCE and sig["side"] == "SHORT" and not bounce
+                   else htf_max)
+            if htf is not None and htf * sgn >= cap:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
-                                    f"(順方向 {htf * sgn:+.1f} ≥ 上限 {htf_max:+.1f})，大週期走勢已走一段，進場偏晚")
+                                    f"(順方向 {htf * sgn:+.1f} ≥ 上限 {cap:+.1f})，大週期走勢已走一段，進場偏晚")
                 continue
             aligned = None if btc1h is None else btc1h * sgn
             btc_min = S.SELF_BTC1H_MIN if src == SELF_SOURCE else S.BTC1H_MIN_DEFAULT

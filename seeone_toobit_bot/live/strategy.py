@@ -212,11 +212,15 @@ SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # ATR %, stop/ATR, hour and Bollinger width split well in the first half and flipped in the second.
 SELF_SHORT_WEAK_RET24H = 3.0
 SELF_SHORT_WEAK_EMA_GAP = 0.14
-# Self-scan shorts may open with the market's 1h/4h up to 1.5 against them instead of 0.5. Inside the
-# stop < 1%, BTC 24h >= 0 and 52.5% gates, -1.5..-0.5 replayed 68% win, +1.02R (98; +1.28R / +0.92R by
-# half), each 0.25-0.5 sub-band positive in both halves; below -1.5 was 44%, +0.38R (9). The 1h/4h
-# trend-gone exit uses the same floor for them, or it would close these at once.
-SELF_SHORT_HTF_MIN = -1.5
+# Self-scan shorts use a wider 1h/4h window than the -0.5..1.5 core. On the 5m exit replay
+# (stop < 1%, probability >= 52.5%, 30-minute dedupe): -2.5..-1.5 was 89% win, +1.33R
+# (116; +1.21R / +1.44R by half) and 1.5..2.5 was 68%, +0.50R (80; +0.48R / +0.52R).
+# Together, -2.5..2.5 was 62%, +0.49R (918; +0.84R / +0.15R) against 57%, +0.36R
+# (722; +0.69R / +0.03R) inside -1.5..1.5. At or above +2.5 the later half was -0.18R (21),
+# so the cap stays at 2.5. Longs and other paths keep HTF_MAX_DEFAULT. The trend-gone exit
+# uses this same floor, or a short opened in the new lower band would be closed at once.
+SELF_SHORT_HTF_MIN = -2.5
+SELF_SHORT_HTF_MAX = 2.5
 # A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
 # price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
 # showed no such gap, so they keep the learned window.
@@ -429,6 +433,13 @@ def direc_window(direc: float | None, side: str, htf_min: float | None = None,
     if lo <= direc < hi:
         return "core"
     return None
+
+
+def self_direc_window(direc: float | None, side: str) -> str | None:
+    """Entry window. Self-scan shorts use their own wider 1h/4h band."""
+    if side == "SHORT":
+        return direc_window(direc, side, SELF_SHORT_HTF_MIN, SELF_SHORT_HTF_MAX)
+    return direc_window(direc, side)
 
 
 def btc_dir_ok(aligned_pct: float | None, side: str) -> bool:
