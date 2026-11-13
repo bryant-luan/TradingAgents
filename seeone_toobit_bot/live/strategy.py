@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
@@ -25,6 +26,24 @@ BREAKER_COOLDOWN_S = 60
 class SeeOneDown(requests.ConnectionError):
     pass
 
+
+class SeeOneLimited(Exception):
+    """analysis-review is in a local cooldown after HTTP 429. No request was sent."""
+
+    def __init__(self, wait_s: float):
+        self.wait_s = wait_s
+        super().__init__(f"分析驗算限流中，{wait_s:.0f} 秒內不再打")
+
+
+# Minimum space between analysis-review posts, and how long to stay silent after a 429
+# when See One does not send Retry-After. A burst at 11:52 Taipei on Nov 6 started the
+# penalty; probing every 5 or 15 minutes kept it alive. One quiet hour matches the gap
+# that used to let a normal scan through.
+REVIEW_GAP_S = 15
+REVIEW_PENALTY_S = 3600
+REVIEW_PENALTY_LONG_S = 6 * 3600
+REVIEW_PAUSE_FILE = ENV_FILE.parent / "logs" / "seeone_review_pause.json"
+
 # --- tunables -------------------------------------------------------------
 REGIME_WEIGHTS = {"15m": 0.25, "1h": 0.35, "4h": 0.40}
 REGIME_BULL, REGIME_BEAR = 1.5, -1.5
@@ -36,50 +55,235 @@ MAX_SIGNAL_AGE_MIN = 240
 CVD_RATIO_MAX_DEFAULT = 1.5
 ENTRY_R_WINDOW = (-0.30, 0.50)  # current price must sit within this R band of the signal entry
 MIN_SCORE = 50
-RISK_PCT = 0.03                 # equity risked per trade at the stop
-MIN_RISK_PCT = 0.03             # never open below this risk: a trade that can't be sized this big is skipped
-MAX_MIN_SIZE_RISK_PCT = 0.045   # allow exchange-minimum size only up to this risk
+RISK_PCT = 0.05                 # equity risked per trade at the stop
+MIN_RISK_PCT = 0.05             # never open below this risk: a trade that can't be sized this big is skipped
+MAX_MIN_SIZE_RISK_PCT = 0.07    # allow exchange-minimum size only up to this risk
 MAX_LEVERAGE = 25
+LIQ_STOP_MULT = 1.25    # liquidation must sit at least 1.25x the stop distance from entry
 MAX_POSITIONS = 3
 MAX_TOTAL_MARGIN_PCT = 0.70
 MARGIN_PER_TRADE_PCT = 0.07
-NORMAL_MARGIN_CAP_PCT = 0.16       # lets a 0.8% stop at 25x still reach the 3% minimum risk
+# A 0.8% stop (the minimum) at 25x needs 25% of equity in margin to risk 5%.
+# 22% made that stop impossible, so qualified names such as XRP were skipped.
+NORMAL_MARGIN_CAP_PCT = 0.28
 HIGH_RISK_PCT = 0.10            # high-conviction tier (CLANKER-type setups): equity at risk at the stop
 HIGH_MARGIN_CAP_PCT = 0.30
 MAX_HIGH_POSITIONS = 1
-TP_SPLIT = [0.30, 0.25, 0.20, 0.15, 0.10]
+# Replayed on 5m bars over 12h: 552 self-scan short reviews (stop < 0.9%) and 94 live/paper entries.
+# Taking half at TP1 averaged +0.47R / -0.09R. This split with the -0.5R stop after TP1 (bot.py)
+# averaged +0.80R / -0.02R, ahead in both Nov 4-6 and Nov 7-10 and on 6 of 7 days.
+# The shadow optimizer's split is logged as a suggestion only.
+TP_SPLIT = [0.10, 0.10, 0.20, 0.30, 0.30]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
-HTF_MAX_DEFAULT = 1.5           # cap on it too: entries with the 1h/4h already strongly aligned arrive late; recalibrated live
+# ELSA/AIO entries used this cap. Later bands (1.8, fade, liquid 2.0–2.5) are not entry gates.
+HTF_MAX_DEFAULT = 1.5
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
-# 3h range position in the trade's direction: 0 = at the reversal extreme (long at the low,
-# short at the high), 1 = at the other extreme. Replays through 11-06 12:00 Taipei: entries at
-# or above 0.45 averaged about -0.23R in both halves and on both sides; entries below 0.45
-# averaged about +0.06R, and the shorts in that zone (shorting the high) about +0.31R.
-# Locked here. The old 1.05 cap only blocked prices already outside the range.
-MAX_RANGE_POS = 0.45
+# ELSA/AIO: only block a price already outside the 3h range. 0 = reversal extreme, 1 = the other side.
+MAX_RANGE_POS = 1.05
 RSI_MIN_DEFAULT = 0.0           # floor on the 15m RSI in the trade's direction (short: 100 - RSI); off until calibrated
                                 # (its edge disappeared once the BTC direction below was accounted for)
-BTC1H_MIN_DEFAULT = 0.0         # floor on BTC's last-hour move in the trade's direction, %; recalibrated live
-# Last-hour average bar range vs the ~25h average, on 5m bars. Three consecutive robust passes
-# (11-06 07:32–08:33 Taipei, 313–332 skipped, 33–34h, both halves and both sides negative):
-# ratios under 0.8 averaged about -0.28R; the rest stayed positive. Locked, not tightened live.
-ATR_RATIO_MIN_DEFAULT = 0.8
+# ELSA/AIO: BTC's last hour must not be against the trade, both sides.
+BTC1H_MIN_DEFAULT = 0.0
+# Last-hour average bar range vs the ~25h average, on 5m bars.
+# Longs under 0.8 averaged -0.46R, both halves negative. The same low-range shorts averaged +0.26R,
+# both halves positive, so the floor is long-only. Shorts lose when the range is already expanded:
+# a ratio at or above 1.29 averaged -0.37R, both halves negative.
+ATR_RATIO_MIN_DEFAULT = 0.8          # long floor
+ATR_RATIO_MAX_SHORT = 1.29           # short cap
 # Coin's last-hour return minus BTC's, in the trade's direction, percent. The ≥ 0.924 cut
 # (top quartile) was robust on the same three runs: skipped side about -0.09R to -0.16R.
 # Looser cuts of this feature were not stable across the three runs, so only this one is live.
 RS1H_MAX_DEFAULT = 0.924
-# Last-hour quote volume vs the prior ~24h average, on 5m bars. Three consecutive robust passes
-# (11-06 08:33–09:34 Taipei, ~340 skipped, 34–35h): ratios under 0.54 averaged about -0.27R.
-# Still about -0.11R after the range-ratio gate, so it is not the same filter. Locked.
-VOL_RATIO_MIN_DEFAULT = 0.54
-# 24h quote volume (base volume × close, summed over 288 closed 5m bars). The top-quartile cut
-# held on the same three runs (~1.14e8 to 1.18e8 USDT): names below it averaged about -0.08R,
-# names above stayed positive, including after the range-ratio gate. Lock the loosest of the three.
+# Last-hour quote volume vs the prior ~24h average, on 5m bars.
+# Thin volume is a long problem: longs under 0.54 averaged -0.33R. The same thin shorts averaged
+# +0.21R, both halves positive, so that floor is long-only. Shorts lose when volume is already hot:
+# a ratio at or above 1.19 averaged -0.24R, both halves negative.
+VOL_RATIO_MIN_DEFAULT = 0.54          # long floor
+VOL_RATIO_MAX_SHORT = 1.19            # short cap
+# 24h quote volume. Inside the core window this cut removed trades that were still positive,
+# so it is not a core gate. It is required for the 2.0–2.5 short band: without it that
+# band lost money, and at or above this floor it won 79%.
 QUOTE_VOL_MIN_DEFAULT = 1.14e8
+# 15-minute price change on closed 5m bars, in the trade's direction, percent.
+# Three consecutive robust passes (11-06 17:10–18:10 Taipei) all cut at -0.484:
+# a coin that already moved against the trade by more than that averaged about -0.10R
+# over 35 hours and both sides; the rest stayed about +0.20R. Locked.
+PX15_DIR_MIN_DEFAULT = -0.484
 MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
+# Backup only. A 15m bar that closes through the prior 3h high or low, with a
+# range of at least 1%. XMR on 11-08 05:00 and WLD on 11-08 04:45 Taipei were
+# this shape. Every USDT-M contract is checked. One name per scan.
+# Maker only; if the price has left, the order is dropped.
+# A break whose 1h/4h direction is already below HTF_MIN_DEFAULT is not taken.
+# The position guard flattens that side immediately. ICNT short at 12:47 Taipei
+# on Nov 8 was opened and closed two seconds later, -0.31R, with the higher
+# timeframe at +0.95. BMT long the same hour was with the higher timeframe.
+# Its break failed, and the two-bar reversal exit cut it at -0.18R while price
+# went on to about -0.76R. ERA long at 13:16 the same day filled at 0.07732,
+# above the break close, and the same exit cut it at 0.07631, -0.55R. Price
+# then went to about -0.81R. A plain long break stays off.
+# The exception is a red decline and then one green bar. SIGN at 09:00 Taipei
+# on Nov 8 fell for hours, then a 15m bar gained 7.8% with a 10.2% range and
+# closed through the prior 3h high. That long is taken. BMT and ERA were about
+# 4% and are not. The higher-timeframe floor does not block this long: the
+# decline is why the spike is there.
+BREAK_MIN_RANGE_PCT = 0.01
+# Paper trial only (Gate sim). Blocked breakdown shorts at 1.5-2.0 averaged about +1R
+# on Nov 8-9 (Toobit 6, Gate 4); at 3.0+ 15 of 16 were stopped. Live keeps HTF_MAX_DEFAULT.
+BREAK_SHORT_HTF_MAX_PAPER = 2.0
+BREAK_LONG_MIN_RANGE = 0.06
+BREAK_LONG_DROP = 0.02
+
+
+def break_half_retrace(side: str, broken: float, close: float, price: float) -> bool:
+    """True when price has already given back half of the close-to-level break.
+
+    EDGEX short at 19:11 Taipei on Nov 8: the bar closed 0.333 through 0.3362,
+    but the fill was 0.3346, halfway back to that level. It is now about -0.51R.
+    IDOL filled at 0.030787, through the 0.031295 close, so it was still in the break.
+    """
+    gap = (broken - close) if side == "SHORT" else (close - broken)
+    if gap <= 0:
+        return False
+    back = (price - close) if side == "SHORT" else (close - price)
+    return back > 0 and back / gap >= 0.5
+
+
+def long_after_red(range_pct: float, close_4h_ago: float, prev_close: float) -> bool:
+    """A long break only after a 4-hour drop and a green bar of at least 6%.
+
+    Live breakout scans no longer take longs. DJT, FATCOIN and FLORK, the three
+    that passed this test, all stopped out.
+    """
+    if range_pct < BREAK_LONG_MIN_RANGE or close_4h_ago <= 0:
+        return False
+    return (close_4h_ago - prev_close) / close_4h_ago >= BREAK_LONG_DROP
+# Signal reversal, from the 11:00 Taipei bars on Nov 8, and the 11:15 bar that
+# reversed again. AKE closed +6.6% back through the short, then the next bar was
+# already -3.4% and back through the entry. WLD closed +0.54% through the entry,
+# then the next bar was back below it. Flattening on the first bar sells the
+# reversal. The first bar is only recorded. The position is closed when the next
+# bar also finishes on that side of the entry. If the next bar comes back through
+# the entry, with the original trade, the reversal is recorded as failed and the
+# position stays.
+# ONE at 11:32 Taipei on Nov 8 was closed too early. Once the best price passed
+# +1R, the 10:45 close counted as a reversal and 11:00 was still above the entry,
+# so the short was flattened. The 11:15 bar had already closed back through the
+# entry and the short was still on. A later bar back through the entry cancels
+# that exit.
+# Off since 11-09. Of 9 losing reversal exits, 5 later reached +1R before the stop
+# (SIGN, ACT, LYN, Q, UAI) and 4 hit the stop. Still logged as would_exit.
+REVERSAL_EXIT = False
+# Gate-only names: COOL, FATCOIN, FLORK, ZZZ on 11-09, all four lost.
+SKIP_GATE_ONLY = True
+# Self-scan takes shorts with a stop under 1% only. Over 3,153 resolved reviews (prob >= 55),
+# TP1 came first on 75% / 73% of those shorts (Nov 4-6 / Nov 7-10) and beat wider stops every day.
+# Review longs hit 49% / 35%, below the 1R break-even. Self-scan stops at 1-1.8% hit 56% / 40-50%
+# and were 1 win in 9 live closes, -101 USDT.
+SELF_SIDES = ("SHORT",)
+SELF_MAX_SL_PCT = 0.01
+# Self-scan shorts (stop < 0.9%) with BTC up 0-0.3% in the last hour averaged +0.53R / +0.75R
+# (Nov 4-6 / Nov 7-10) on the exit replay, against +0.55R / +0.35R with BTC already falling.
+# Other sources keep BTC1H_MIN_DEFAULT; the replay only covers self-scan reviews.
+SELF_BTC1H_MIN = -0.3
+# Upper bound on the same aligned BTC 1h move. Short reviews (1h/4h -0.5..1.5) made after BTC had already
+# fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
+# Breakout entries take it too: 6 live breakouts past it won once, -1.88R (EVAA, HOT, ENA among them).
+BTC1H_CHASE_MAX = 0.3
+# Self-scan shorts need BTC flat or up over the last 24h. Inside the current gates, the 5m exit replay
+# averaged +0.88R (128; +0.97R / +0.79R by half) with BTC 24h >= 0, against +0.26R (148) below -1% and
+# +0.03R (142) at -1..0%, both negative on Nov 10-11 (Nov 10 alone: +0.41R vs -0.27R / -0.09R).
+# Live self-scan shorts agreed: Gate -0.35R (14) vs -0.02R (3), Toobit -0.17R (21) vs +0.06R (9).
+SELF_SHORT_BTC24H_MIN = 0.0
+# Self-scan shorts that clear every gate above (stop < 1%, BTC 24h >= 0) are the one setup with a
+# measured edge: 5m exit replay +1.23R (335; +0.97R / +1.50R by half, positive on every day), live
+# +1.11R (5, +53.6 USDT). Every other live slice sits near or below 0R. With winners halved, Kelly is
+# still ~0.4, so 8% is about a fifth of it; sequential max drawdown on that haircut replay was 27%.
+# 8% at a 1% stop and 25x needs a 32% margin slot.
+SELF_SHORT_RISK_PCT = 0.08
+# The live +1.11R came from reviews at +0.50R EV or more; below that the setup opens at the normal risk.
+SELF_SHORT_FULL_RISK_EV = 0.50
+SELF_SHORT_MARGIN_CAP_PCT = 0.33
+# Of 21 indicators replayed on those 335 shorts, only two split them the same way in both halves:
+# the coin already up 3%+ over 24h, or 15m EMA20 more than 0.14% above EMA50. Either one: 52% win,
+# +0.71R (93; +0.81R / +0.30R by half) against 74%, +1.44R (242). Still positive, so they keep the
+# normal risk instead of the 8% upgrade: total +389R vs +414R, max drawdown 10.7R vs 12.7R.
+# ATR %, stop/ATR, hour and Bollinger width split well in the first half and flipped in the second.
+SELF_SHORT_WEAK_RET24H = 3.0
+SELF_SHORT_WEAK_EMA_GAP = 0.14
+# Self-scan shorts may open with the market's 1h/4h up to 1.5 against them instead of 0.5. Inside the
+# stop < 1%, BTC 24h >= 0 and 52.5% gates, -1.5..-0.5 replayed 68% win, +1.02R (98; +1.28R / +0.92R by
+# half), each 0.25-0.5 sub-band positive in both halves; below -1.5 was 44%, +0.38R (9). The 1h/4h
+# trend-gone exit uses the same floor for them, or it would close these at once.
+SELF_SHORT_HTF_MIN = -1.5
+# A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
+# price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
+# showed no such gap, so they keep the learned window.
+SELF_ENTRY_CHASE_MAX_R = 0.1
+# Self-scan bounce longs: the market's 1h/4h direction below -0.5 and a stop of at least 1.5%.
+# On the 5m exit replay these averaged +0.41R (139) / +0.39R (139), TP1 first 59% / 62%, while trend longs
+# (1h/4h >= +0.5) averaged -0.35R / -0.51R. 205 of the 278 samples are from Nov 6, so one open at a time,
+# and the path stops after two live losses in a row.
+# Those bounce longs went 23 live closes, -0.10R, -21 USDT, so the path now takes a volume flush instead:
+# 15m EMA20 at least 0.53% under EMA50, the last closed hour's 15m volume 1.56x+ the 12 hours before, and a
+# stop of 1% or more. Over 2,494 replayed long reviews (all longs -0.16R) that slice averaged 59% win,
+# +0.84R (86; +0.93R / +0.64R by half), positive on 7 of 8 days, and neighbouring cuts held +0.45R to
+# +1.13R. Longs after a dump that already turned up on EMA (EMA9 over EMA26) were -0.16R (317), -0.39R
+# in the second half. Under a 1% stop the slice lost (7, -0.58R). It opens at the minimum risk and stops
+# after two losses in a row. New name, so the old path's losses do not count.
+# Taipei hour is not a gate. The 84 turned flushes through Nov 13 were +0.40R at 00:00-06:00
+# (+0.73 / +0.06 by half) and positive in the other three sessions. Before TP1 the -0.85R
+# early flatten does not apply, and the probability recheck never does: see bot.py. A recheck
+# close is not a loss for the two-loss halt.
+BOUNCE_PATH = "SELF FLUSH LONG"
+BOUNCE_ENABLED = True
+# Order-book spike longs: 8 live closes, -0.35R, -20 USDT (HOLO twice, MINA twice at -1R or worse). Off.
+ORDERBOOK_LONGS = False
+BOUNCE_HTF_MAX = -0.5
+BOUNCE_MIN_SL_PCT = 0.01
+FLUSH_EMA_GAP_MAX = -0.53
+FLUSH_VOL_RATIO_MIN = 1.56
+# The flush has to have turned: 2h return at or above zero, or price 1.5R+ off the 6h low. The 8 replayed
+# flushes with neither were still falling into the entry: 38% win, +0.19R, against 66%, +1.06R for the
+# other 71 (+0.94R / +1.55R by half). Which way the volume bars closed did not separate them, and a
+# flush that had already bounced further did better, not worse.
+FLUSH_RET2H_MIN = 0.0
+FLUSH_BOUNCE_MIN_R = 1.5
+# Two may be open at once. Replayed with a 2-4h hold, a cap of 2 took 26-31 flushes for +31.6R to +40.2R
+# (both halves positive) against 16-19 and +19.7R to +28.0R at 1, max drawdown 2.1-3.2R against 2.1R.
+# Flushes that came while another was open still averaged +0.98R (48). Gate skipped 7 on Nov 12 at 1.
+BOUNCE_MAX_OPEN = 2
+BOUNCE_STOP_AFTER_LOSSES = 2
+# A scratch exit is not a wrong call: BR on Nov 10 was closed at -0.10R one second after entry by the
+# 1h/4h trend-gone exit, which bounce longs no longer take.
+BOUNCE_LOSS_R = -0.3
+
+
+def bounce_ok(flush: tuple[float, float, float, float] | None, sl_pct: float, price: float) -> bool:
+    if not (BOUNCE_ENABLED and flush is not None and sl_pct >= BOUNCE_MIN_SL_PCT
+            and flush[0] <= FLUSH_EMA_GAP_MAX and flush[1] >= FLUSH_VOL_RATIO_MIN):
+        return False
+    return flush[2] >= FLUSH_RET2H_MIN or (price - flush[3]) / (price * sl_pct) >= FLUSH_BOUNCE_MIN_R
+REVERSAL_MIN_PCT = 0.01
+REVERSAL_BEYOND_PCT = 0.005
+REVERSAL_ROUNDTRIP_R = 1.0
+REVERSAL_DRIFT_PCT = 0.003
+REVERSAL_BACK_PCT = 0.002
 MAX_SAME_SIDE = 2               # open positions on one side
-SAME_SIDE_GAP_MIN = 30          # minutes between two new entries on the same side
+# Quiet-period shorts may fill the whole book. The live sample was still a handful of
+# trades after XAG and XAU; three concurrent names is the cap the account already allows.
+QUIET_MAX_SAME_SIDE = 3
+# ELSA window (HTF -0.5 to 1.5, BTC 1h aligned, 15m under 2.5, after a See One review)
+# is +0.64R on 211 resolved rows, both halves positive. Quiet shorts in the 1.5–2.5
+# band are +0.38R on 33 rows. Quiet longs in that band are -0.99R on 14 rows.
+# New entries stay on the higher-expectancy ELSA path.
+QUIET_ENTRIES = False
+# 15m breakout entries. Live shorts averaged about 0R with swings from +37 USDT to -32.
+BREAKOUT_ENTRIES = False
+# Same-side entries are no longer spaced 30 minutes apart. Closed pairs opened
+# within 30 minutes were 5 both green, 6 both red, and 4 split, and the wait did
+# not separate ICNT from PONS or BMT from ERA. One side is still capped at MAX_SAME_SIDE.
 MAX_STOP_PCT = 0.15             # skip signals whose stop is further than this from price
 MAKER_FEE, TAKER_FEE = 0.0002, 0.0006
 MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more than this fraction of 1R
@@ -88,26 +292,150 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 # (MFE in R reached, R locked by the stop); 0.0 = break-even plus round-trip fees.
 # Replaying gated reviews on 5m bars, tightening before +2R cut the average result roughly in half
 # (+0.10R vs +0.20R): early break-even stops were wicked out ahead of the bigger moves.
-LOCK_LADDER = ((2.0, 0.0), (3.0, 1.6))
+# Once MFE is +3R the stop used to sit 0.5R behind the high and also jumped to +2.5R.
+# On the current rules (60 reviews that pass the live short gates, 195 longs in the same
+# 1h/4h band, 5m replay, stop-first, fees in), that cut the runner: +1.451R vs +1.489R on
+# the shorts and +0.188R vs +0.201R on the longs, ahead in both halves. Locking +1R already
+# at +2R was worse (+1.241R on the shorts). After +3R the stop now stays 1R behind the high,
+# stepped by 0.25R, and the floor at +3R is +2R: +3.02R locks +2.00R, +4.00R locks +3.00R.
+LOCK_LADDER = ((2.0, 0.0), (3.0, 2.0))
+
+
+def reversal_view(side: str, entry: float, break_level, mfe_r, o: float, h: float, l: float, c: float,
+                  bar_closed: bool):
+    """Describe a 15m bar that reverses an open signal. None when it does not.
+
+    This only records the reversal. Whether to exit is decided by the next bar:
+    still on this side of the entry, the position is closed; back through the
+    entry, the reversal failed and the position stays.
+    """
+    if o <= 0 or entry <= 0:
+        return None
+    sgn = 1 if side == "LONG" else -1
+    if (c - o) * sgn >= 0:
+        return None
+    against = (o - c) * sgn / o
+    beyond = (entry - c) * sgn / entry
+    through_entry = beyond >= 0
+    through_break = break_level is not None and (c - float(break_level)) * sgn <= 0
+    impulse = against >= REVERSAL_MIN_PCT and through_entry
+    wide = (h - l) / o >= REVERSAL_MIN_PCT and beyond >= REVERSAL_BEYOND_PCT
+    failed_break = bool(through_break) and against >= REVERSAL_MIN_PCT
+    roundtrip = (mfe_r or 0) >= REVERSAL_ROUNDTRIP_R and through_entry and against >= REVERSAL_DRIFT_PCT
+    if not (impulse or wide or failed_break or roundtrip):
+        return None
+    return {"range_pct": round((h - l) / o * 100, 2), "against_pct": round(against * 100, 2),
+            "beyond_pct": round(beyond * 100, 2), "through_entry": through_entry,
+            "through_break": bool(through_break), "impulse": impulse, "wide": wide,
+            "failed_break": failed_break, "roundtrip": roundtrip, "close": c,
+            "bar_closed": bar_closed}
+
+
+def reversal_back(side: str, entry: float, o: float, c: float):
+    """The bar after a reversal has come back through the entry, with the original trade."""
+    if o <= 0 or entry <= 0:
+        return None
+    sgn = 1 if side == "LONG" else -1
+    if (c - o) * sgn <= 0:
+        return None
+    with_pct = (c - o) * sgn / o
+    if with_pct < REVERSAL_BACK_PCT:
+        return None
+    beyond = (entry - c) * sgn / entry
+    if beyond >= 0:
+        return None
+    return {"with_pct": round(with_pct * 100, 2), "beyond_pct": round(beyond * 100, 2), "close": c}
+
+
+def reversal_still_against(side: str, entry: float, c: float) -> bool:
+    """True when the close is still on the wrong side of the entry."""
+    if entry <= 0:
+        return False
+    sgn = 1 if side == "LONG" else -1
+    return (entry - c) * sgn / entry >= 0
+
+
+def reversal_plan(side: str, entry: float, break_level, mfe_r, bars, now_ms: float,
+                  opened_ts_ms: float | None = None):
+    """Walk 15m bars oldest first. Return (events, pending_open_ms).
+
+    ``events`` are ``record``, ``back``, and at most one ``exit``. An exit seen on
+    an older bar is dropped when a later bar has come back through the entry.
+    Bars that finished before the position existed are ignored. IDOL short at
+    19:26 Taipei on Nov 8 filled at 0.030787, below the bars that had just closed
+    higher. Those earlier closes were treated as a reversal and the short was
+    out 30 seconds later, -0.13R, while the breakdown bar was still forming.
+    """
+    pending = None
+    events = []
+    exit_at = None
+    for opened, o, h, l, c in bars:
+        if opened_ts_ms is not None and opened + 15 * 60 * 1000 <= opened_ts_ms:
+            continue
+        closed = opened + 15 * 60 * 1000 <= now_ms
+        if pending is not None and opened > pending:
+            back = reversal_back(side, entry, o, c)
+            if back is not None:
+                events.append({"decision": "back", "opened": opened, "closed": closed,
+                               "o": o, "h": h, "l": l, "c": c, **back})
+                pending = None
+                exit_at = None
+                continue
+            if closed and reversal_still_against(side, entry, c):
+                exit_at = {"decision": "exit", "opened": opened, "closed": closed,
+                           "o": o, "h": h, "l": l, "c": c}
+            continue
+        view = reversal_view(side, entry, break_level, mfe_r, o, h, l, c, closed)
+        if view is None:
+            continue
+        pending = opened
+        events.append({"decision": "record", "opened": opened, "closed": closed,
+                       "o": o, "h": h, "l": l, "c": c,
+                       **{k: v for k, v in view.items() if k != "bar_closed"}})
+    if exit_at is not None:
+        events.append(exit_at)
+    return events, pending
+
+
 HIGH_BE_TRIGGER_R = 2.0
-TP_STOP_MOVES = False           # moving the stop to break-even / the previous TP on each TP fill (same finding)
 DAY_LOCK_BE_TRIGGER_R = 0.3     # once the day's profit lock fires, open trades go risk-free at +0.3R
-TRAIL_GAP_R = 1.2               # beyond the ladder, trail the stop this far behind the best price
+TRAIL_GAP_R = 1.0               # beyond +3R, trail the stop this far behind the best price
 TRAIL_STEP_R = 0.25
-DAY_LOCK_TRIGGER_PCT = 0.05     # day realized gain at which only high-conviction signals may open
+# Today's profit target, in USDT of realized closed trades. Entries use the same rules at every
+# hour. New entries stop at +100. A pullback after +50 does not stop the day.
+DAY_TARGET_ARM_USDT = 50.0
+DAY_TARGET_CAP_USDT = 100.0
+DAY_LOCK_TRIGGER_PCT = 0.10     # kept for logs; the live trigger is the USDT band above
 DAILY_STOP_PCT = 0.12           # day loss (realized + floating, incl. open risk to stops) that ends the day
 DAY_LOCK_GIVEBACK = 0.5         # stop opening trades after giving back this share of the day's peak gain
-POST_LOCK_MAX_OPEN = 1          # after the lock arms: positions opened since then that may be open at once
-# After the lock arms, only the 1h/4h band with the best measured TP1-first rate may open (neutral, not already
-# strongly aligned: aligned entries arrive late). High-probability reviews are not required: they measured no better.
-POST_LOCK_HTF_MIN = -0.5
-POST_LOCK_HTF_MAX = 0.5
 PROFIT_RESERVE = 0.5            # share of gains above principal kept out of position sizing
 
 
 def htf_score(dirs: dict) -> float | None:
     vals = [dirs.get(k) for k in ("1h", "4h") if dirs.get(k) is not None]
     return round(sum(vals) / len(vals), 2) if vals else None
+
+
+def direc_window(direc: float | None, side: str, htf_min: float | None = None,
+                 htf_max: float | None = None) -> str | None:
+    """ELSA/AIO window. `direc` is the 1h/4h score in the trade's direction.
+
+    'core' is [-0.5, 1.5). None means this side is not reviewed and not opened.
+    """
+    if direc is None:
+        return None
+    lo = HTF_MIN_DEFAULT if htf_min is None else htf_min
+    hi = HTF_MAX_DEFAULT if htf_max is None else htf_max
+    if lo <= direc < hi:
+        return "core"
+    return None
+
+
+def btc_dir_ok(aligned_pct: float | None, side: str) -> bool:
+    """`aligned_pct` is BTC's last-hour return already signed in the trade's direction."""
+    if aligned_pct is None:
+        return True
+    return aligned_pct >= BTC1H_MIN_DEFAULT
 
 
 def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:
@@ -131,6 +459,10 @@ class SeeOne:
         self.rt_session = rt_session
         self.log = lambda event, **kw: None
         self.fails, self.open_until, self.down_since, self.last_error = 0, 0.0, None, None
+        self.review_not_before, self._review_streak = self._load_review_pause()
+        self.last_review_post = 0.0
+        self._review_lock = threading.Lock()
+        self._cache: dict = {}
         self.http = None
         self._new_session()
 
@@ -164,33 +496,94 @@ class SeeOne:
             raise out["e"]
         return out["r"]
 
+    def _cached(self, key: str, ttl: float, path: str, **params):
+        now = time.time()
+        hit = self._cache.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+        data = self._get(path, **params)
+        self._cache[key] = (now, data)
+        return data
+
+    def _load_review_pause(self) -> tuple[float, int]:
+        try:
+            data = json.loads(REVIEW_PAUSE_FILE.read_text())
+            return float(data.get("until") or 0), int(data.get("streak") or 0)
+        except (OSError, ValueError):
+            return 0.0, 0
+
+    def _save_review_pause(self, until: float, streak: int):
+        REVIEW_PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = REVIEW_PAUSE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"until": until, "streak": streak}))
+        tmp.replace(REVIEW_PAUSE_FILE)
+
+    def _review_penalty(self, response) -> int:
+        raw = response.headers.get("Retry-After") if response is not None else None
+        if raw and str(raw).isdigit() and 30 <= int(raw) <= 1800:
+            return int(raw)
+        return REVIEW_PENALTY_S
+
     def request(self, method: str, path: str, deadline: float = HTTP_DEADLINE_S, tries: int = 2, **kw):
+        if not path.endswith("analysis-review"):
+            return self._request(method, path, deadline, tries, **kw)
+        # The self-scan thread and the main loop's open-trade re-checks both post reviews;
+        # the gap below only holds if they take turns.
+        with self._review_lock:
+            return self._request(method, path, deadline, tries, **kw)
+
+    def _request(self, method: str, path: str, deadline: float, tries: int, **kw):
         if time.time() < self.open_until:
             raise SeeOneDown(f"See One 連線異常 ({self.last_error})，暫停呼叫 {self.open_until - time.time():.0f}s")
+        is_review = path.endswith("analysis-review")
+        if is_review:
+            wait = self.review_not_before - time.time()
+            if wait > 0:
+                raise SeeOneLimited(wait)
+            gap = REVIEW_GAP_S - (time.time() - self.last_review_post)
+            if gap > 0:
+                time.sleep(gap)
         for attempt in range(tries):
             try:
                 r = self._call(method, path, deadline, **kw)
+                if r.status_code == 429 and is_review:
+                    self._review_streak = getattr(self, "_review_streak", 0) + 1
+                    pause = self._review_penalty(r)
+                    if pause == REVIEW_PENALTY_S and self._review_streak >= 2:
+                        pause = REVIEW_PENALTY_LONG_S
+                    self.review_not_before = time.time() + pause
+                    self._save_review_pause(self.review_not_before, self._review_streak)
+                    self.log("SEEONE_RATE_LIMIT", pause_s=pause, streak=self._review_streak, path=path,
+                             note=f"分析驗算 429，{pause // 60} 分鐘內這支完全不打，避免處罰被延續")
+                    raise SeeOneLimited(pause)
+                if r.status_code == 429:
+                    raise requests.HTTPError(f"429 {path}", response=r)
                 if r.status_code >= 500:
                     raise requests.HTTPError(f"{r.status_code} {path}")
                 r.raise_for_status()
                 data = r.json()
             except requests.HTTPError as e:
                 status = e.response.status_code if e.response is not None else 0
-                # 429 is See One asking us to slow down. Retry once, then count it toward the breaker.
-                # Other 4xx are the caller's problem (auth, bad body) and must not open the breaker.
-                if status != 429 and e.response is not None and status < 500:
+                # 429 is a rate limit, not an outage: the caller pauses the scan. Other 4xx are the
+                # caller's problem and must not open the breaker.
+                if e.response is not None and status < 500:
                     raise
                 err = e
             except (requests.ConnectionError, requests.Timeout, requests.JSONDecodeError) as e:
                 self._new_session()
                 err = e
             else:
+                if is_review:
+                    self.last_review_post = time.time()
+                    self._review_streak = 0
+                    if REVIEW_PAUSE_FILE.exists():
+                        REVIEW_PAUSE_FILE.unlink()
                 self._ok()
                 return data
             if attempt == tries - 1:
                 self._fail(path, err)
                 raise err
-            time.sleep(8 if isinstance(err, requests.HTTPError) and getattr(err.response, "status_code", 0) == 429 else 2)
+            time.sleep(2)
 
     def _ok(self):
         if self.down_since is not None:
@@ -223,6 +616,12 @@ class SeeOne:
         except Exception:
             return None
 
+    def _load_shared_env(self):
+        """Reload See One credentials without pointing a Gate process back at Toobit."""
+        keep = {k: os.environ[k] for k in ("EXCHANGE", "GATE_API_KEY", "GATE_API_SECRET") if os.environ.get(k)}
+        load_dotenv(ENV_FILE, override=True)
+        os.environ.update(keep)
+
     def _save_env(self, updates: dict):
         text = ENV_FILE.read_text() if ENV_FILE.exists() else ""
         lines, seen = [], set()
@@ -250,8 +649,7 @@ class SeeOne:
 
     def _refresh_cookie(self) -> bool:
         """A still-valid rt_refresh cookie (about 30 days) mints a new rt_session."""
-        from dotenv import load_dotenv
-        load_dotenv(ENV_FILE, override=True)
+        self._load_shared_env()
         refresh = os.environ.get("SEEONE_RT_REFRESH") or ""
         if not refresh:
             return False
@@ -281,8 +679,7 @@ class SeeOne:
         self._login_next = now + 300
         if self._refresh_cookie():
             return
-        from dotenv import load_dotenv
-        load_dotenv(ENV_FILE, override=True)
+        self._load_shared_env()
         email = os.environ.get("SEEONE_EMAIL") or os.environ.get("SEEONE_USERNAME") or ""
         password = os.environ.get("SEEONE_PASSWORD") or ""
         if not email or not password:
@@ -315,8 +712,11 @@ class SeeOne:
         return out
 
     def directions(self) -> dict:
-        d = self._get("/app/api/market-pulse", part="direction")
+        d = self._cached("directions", 90, "/app/api/market-pulse", part="direction")
         return {x["horizon"]: float(x["score"]) for x in d.get("directions", []) if x.get("score") is not None}
+
+    def boards(self) -> dict:
+        return self._cached("boards", 90, "/api/dashboard/boards")
 
     def signals(self) -> list:
         return self._get("/api/signals")
@@ -325,13 +725,10 @@ class SeeOne:
         return self._get("/api/history/signals", limit=limit)
 
     def strength_board(self) -> list:
-        return self._get("/api/turtle-active")
+        return self._cached("turtle", 90, "/api/turtle-active")
 
     def recipes(self) -> list:
-        return self._get("/app/api/customized-signals").get("recipes", [])
-
-    def core_trend_metrics(self) -> dict:
-        return self._get("/api/metrics", path="CORE TREND")
+        return self._cached("recipes", 180, "/app/api/customized-signals").get("recipes", [])
 
 
 def to_toobit(symbol: str) -> str:
@@ -396,12 +793,6 @@ def recipe_hits(recipes: list) -> dict:
             if hit and str(base).upper() not in seen:
                 out.setdefault(str(base).upper(), []).append((name, side, len(rules), len(rules)))
     return out
-
-
-def recipe_for(hits: dict, base: str, side: str) -> tuple | None:
-    """Best same-direction recipe progress for this asset, or None."""
-    rows = [h for h in hits.get(base, []) if h[1] == side]
-    return max(rows, key=lambda h: h[2] / h[3]) if rows else None
 
 
 def path_expectancy(signals: list, own_trades: list) -> dict:
@@ -471,10 +862,6 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         skip = f"止損僅 {risk / cur:.2%}，手續費約佔 {(MAKER_FEE + TAKER_FEE) / (risk / cur):.2f}R (> {MAX_FEE_R}R)"
     elif risk / cur > MAX_STOP_PCT:
         skip = f"止損距離 {risk / cur:.0%} 過寬 (> {MAX_STOP_PCT:.0%})，TP 難以到達"
-    elif side == "LONG" and regime_score < -REGIME_VETO:
-        skip = f"大盤偏空 {regime_score:+.2f}，否決做多"
-    elif side == "SHORT" and regime_score > REGIME_VETO:
-        skip = f"大盤偏多 {regime_score:+.2f}，否決做空"
     else:
         ratio = cvd_ratio_of(sig)
         cvd_max = learned.get("cvd_ratio_max", CVD_RATIO_MAX_DEFAULT)
@@ -563,7 +950,15 @@ def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct
             return None
         contracts = spec["min_contracts"]
     notional = contracts * mult * price
-    lev_cap = max(1, min(spec["max_leverage"], MAX_LEVERAGE, math.floor(0.4 / sl_pct)))
+    # Liquidation sits about (1/leverage - maintenance rate) from entry, so the maintenance rate
+    # has to come off before the stop fits. AKE short on Nov 9: 10x with a 5% maintenance rate
+    # liquidated at +5.1% while the stop was at +5.74%, losing the whole 40 USDT margin (-1.74R).
+    tiers = spec.get("mmr_tiers") or []
+    tier = next((t for t in tiers if notional <= t[0]), tiers[-1] if tiers else None)
+    mmr = tier[1] if tier else 0.5 / spec["max_leverage"]
+    tier_max = tier[2] if tier else spec["max_leverage"]
+    need = max(sl_pct / 0.60, sl_pct * LIQ_STOP_MULT + mmr)
+    lev_cap = max(1, min(spec["max_leverage"], tier_max, MAX_LEVERAGE, math.floor(1 / need)))
     leverage = max(1, min(lev_cap, math.ceil(notional / (MARGIN_PER_TRADE_PCT * equity))))
     margin = notional / leverage
     if margin > margin_cap_pct * equity:
@@ -588,7 +983,7 @@ def tp_plan(sig: dict, contracts: int, min_contracts: int, split: list | None = 
     """Split contracts over the signal's TP1..TP5; fold undersized slices into the previous one."""
     levels = sorted((l for l in sig.get("levels", []) if str(l.get("label", "")).startswith("TP")),
                     key=lambda l: l.get("sequence", int(l["label"][2:])))
-    split = split or TP_SPLIT
+    split = list(split or TP_SPLIT)
     plan, left = [], contracts
     for i, lvl in enumerate(levels[:5]):
         qty = left if i == len(levels[:5]) - 1 else int(contracts * split[i])

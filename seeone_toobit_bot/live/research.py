@@ -1,7 +1,7 @@
 """Indicator research on the bot's own See One analysis-review records.
 
 Each resolved review (both sides of every symbol the self-scanner reviewed) is replayed on Toobit 5m bars with the
-live exit policy (TP ladder, break-even at 2R, lock 1.6R at 3R, trail), fees included, giving its outcome in R.
+live exit policy (TP ladder, break-even at 2R, lock 2R at 3R, then trail 1R behind), fees included, giving its outcome in R.
 For every candidate entry-time indicator and every quartile cut, the script asks: if trades on one side of the cut
 were skipped, would expectancy rise, and does that hold in both halves of the period, on enough distinct hours,
 and on longs and shorts separately? Results go to logs/research_latest.txt and one line per run to
@@ -19,9 +19,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
-
 from . import strategy as S
+from .market import klines as fetch_klines
 
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / "logs"
@@ -36,24 +35,36 @@ FEE_RT, BE_BUF = 0.0011, 0.0011
 TPS, SPLIT = [1.0, 1.5, 2.0, 3.0, 4.0], [0.375, 0.218, 0.227, 0.09, 0.09]
 # A cut is "robust" only if the skipped side loses in both halves, spans enough hours, and is not one-sided.
 MIN_SKIP_N, MIN_SKIP_HOURS, MIN_SIDE_N = 30, 8, 15
+
+
+def _htf_blocked(f: dict) -> bool:
+    """True when the live higher-timeframe rule would skip this row."""
+    h = f.get("htf")
+    if h is None:
+        return False
+    side = "LONG" if f.get("side_long") else "SHORT"
+    band = S.direc_window(h, side)
+    if band is None:
+        return True
+    if band == "strong_short":
+        return not (f.get("rpos") is not None and f["rpos"] <= S.MAX_RANGE_POS
+                    and (f.get("quote_vol_24h") or 0) >= S.QUOTE_VOL_MIN_DEFAULT)
+    return False
+
+
 LIVE_FILTERS = {  # name -> (went live UTC, predicate on feature row meaning "the live filter would skip it")
-    "大週期方向 ≥ 1.5": ("2026-11-05T07:24:00+00:00", lambda f: f["htf"] is not None and f["htf"] >= 1.5),
-    "BTC 1h 方向 < 0": ("2026-11-05T08:00:00+00:00",
-                        lambda f: f["btc1h_dir_pct"] is not None and f["btc1h_dir_pct"] < 0),
-    "近 1h/24h 波動比 < 0.8": ("2026-11-06T01:10:00+00:00",
-                              lambda f: f["atr_ratio"] is not None and f["atr_ratio"] < S.ATR_RATIO_MIN_DEFAULT),
-    "1h 相對 BTC ≥ 0.924": ("2026-11-06T01:10:00+00:00",
-                            lambda f: f["rs1h_vs_btc"] is not None and f["rs1h_vs_btc"] >= S.RS1H_MAX_DEFAULT),
-    "1h 成交量/均量 < 0.54": ("2026-11-06T02:05:00+00:00",
-                             lambda f: f["vol_ratio_1h"] is not None and f["vol_ratio_1h"] < S.VOL_RATIO_MIN_DEFAULT),
-    "24h 成交額 < 1.14e8": ("2026-11-06T02:05:00+00:00",
-                           lambda f: f["quote_vol_24h"] is not None and f["quote_vol_24h"] < S.QUOTE_VOL_MIN_DEFAULT),
-    "3h 區間位置 ≥ 0.45": ("2026-11-06T05:00:00+00:00",
-                          lambda f: f["rpos"] is not None and f["rpos"] >= S.MAX_RANGE_POS),
+    "大週期不在 -0.5～1.5": ("2026-11-08T00:40:00+00:00", lambda f: _htf_blocked(f)),
+    "BTC 1h 順方向 < 0": ("2026-11-08T00:40:00+00:00",
+                        lambda f: f["btc1h_dir_pct"] is not None and not S.btc_dir_ok(
+                            f["btc1h_dir_pct"], "LONG" if f.get("side_long") else "SHORT")),
+    "3h 區間位置 > 1.05": ("2026-11-08T00:40:00+00:00",
+                         lambda f: f["rpos"] is not None and f["rpos"] > S.MAX_RANGE_POS),
+    "15m 順方向 ≥ 2.5": ("2026-11-05T07:24:00+00:00",
+                      lambda f: f.get("m15") is not None and f["m15"] >= S.M15_MAX_DEFAULT),
 }
 # Features already gated live (BTC 4h measured redundant with BTC 1h inside the live gates).
 LIVE_FEATURES = {"htf", "btc1h_dir_pct", "m15", "rpos", "prob", "rsi15_dir", "atr_ratio", "rs1h_vs_btc",
-                 "vol_ratio_1h", "quote_vol_24h"}
+                 "vol_ratio_1h", "quote_vol_24h", "px15_dir_pct"}
 REDUNDANT = {"btc4h_dir_pct": "與 BTC 1h 重複，現行條件內無額外效果 (11-05 驗證)"}
 NAMES = {
     "prob": "分析驗算機率", "m15": "See One 15m 方向", "htf": "1h/4h 大方向", "rpos": "3h 區間位置",
@@ -70,13 +81,7 @@ NAMES = {
 def klines(sym: str) -> tuple[str, list]:
     out, end = [], None
     for _ in range(2):
-        p = {"symbol": sym, "interval": "5m", "limit": 1000}
-        if end:
-            p["endTime"] = end
-        try:
-            d = requests.get("https://api.toobit.com/quote/v1/klines", params=p, timeout=15).json()
-        except (requests.RequestException, ValueError):
-            break
+        d = fetch_klines(sym, "5m", 1000, end)
         if not d:
             break
         out = [(int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])) for x in d] + out
@@ -90,7 +95,6 @@ def records() -> list:
     htf_min = learned.get("htf_min", S.HTF_MIN_DEFAULT)
     rpos_max = learned.get("range_pos_max", S.MAX_RANGE_POS)
     res = json.loads((LOGS / "self_calib.json").read_text())["resolved"]
-    # Only gates that are not under study here; the htf cap and RSI floor are left open so both sides are measured.
     g = sorted((r for r in res if r["prob"] >= MIN_PROB
                 and (r.get("m15") is None or r["m15"] <= m15_max)
                 and (r.get("htf") is None or r["htf"] >= htf_min)

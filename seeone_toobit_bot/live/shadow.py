@@ -186,11 +186,11 @@ class Shadow:
             changes.append(f"CVD 買賣量比上限 {p.get('cvd_ratio_max', S.CVD_RATIO_MAX_DEFAULT)} → {cvd_cut}")
         p["cvd_ratio_max"] = cvd_cut
 
+        # Suggestion only: its payoff model ignores the stop moves after TP1; orders use S.TP_SPLIT.
         split, split_note = self._tp_split(rows)
-        if split and split != p.get("tp_split"):
-            changes.append(f"TP1-5 倉位分配 {p.get('tp_split') or S.TP_SPLIT} → {split}")
+        p.pop("tp_split", None)
         if split:
-            p["tp_split"] = split
+            split_note = f"建議 {split}（未套用，使用 {S.TP_SPLIT}）；{split_note}"
 
         self.learner.refresh_effective()
         self.d["since_opt"] = 0

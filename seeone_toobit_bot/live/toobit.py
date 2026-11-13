@@ -10,13 +10,29 @@ import requests
 
 BASE = "https://api.toobit.com"
 
+# Unsigned market data shared by the scan, fast-guard and reversal threads. Keeping the
+# connection open saves the TLS handshake on every call (Gate klines 634 ms -> 153 ms).
+PUB = requests.Session()
+PUB.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=16))
+
 
 class ToobitError(Exception):
     pass
 
 
+def public_names() -> set[str]:
+    """Tradable USDT-M symbols, for comparing the Gate list without signing in."""
+    try:
+        info = PUB.get(f"{BASE}/api/v1/exchangeInfo", timeout=20).json()
+    except (requests.RequestException, ValueError):
+        return set()
+    return {c["symbol"] for c in info.get("contracts", []) if c.get("status") == "TRADING"}
+
+
 class Toobit:
     """Toobit USDT-M perpetual client (v1 REST, hedge mode). Quantities are in contracts."""
+
+    name = "toobit"
 
     def __init__(self, key: str, secret: str):
         self.secret = secret.encode()
@@ -26,8 +42,17 @@ class Toobit:
         self._lock = threading.Lock()
 
     def _request(self, method: str, path: str, params: dict | None = None):
-        with self._lock:
-            return self._request_locked(method, path, params)
+        # A timed-out GET used to abort the whole cycle, dropping signals the scan had just found.
+        # Only reads are retried; a resent order could fill twice.
+        tries = 3 if method == "GET" else 1
+        for attempt in range(tries):
+            try:
+                with self._lock:
+                    return self._request_locked(method, path, params)
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == tries - 1:
+                    raise
+                time.sleep(1 + attempt)
 
     def _request_locked(self, method: str, path: str, params: dict | None = None):
         params = {k: v for k, v in (params or {}).items() if v is not None}
@@ -47,33 +72,38 @@ class Toobit:
     # ---- market data ----
     def specs(self) -> dict:
         if self._specs is None:
-            info = requests.get(f"{BASE}/api/v1/exchangeInfo", timeout=20).json()
+            info = PUB.get(f"{BASE}/api/v1/exchangeInfo", timeout=20).json()
             out = {}
             for c in info.get("contracts", []):
                 if c.get("status") != "TRADING":
                     continue
                 f = {x["filterType"]: x for x in c["filters"]}
                 mult = Decimal(c["contractMultiplier"])
-                out[c["symbol"]] = {
+                sym = c["symbol"]
+                seeone = sym[: -len("-SWAP-USDT")] + "USDT" if sym.endswith("-SWAP-USDT") else sym
+                cats = list(c.get("categories") or [])
+                out[sym] = {
                     "multiplier": mult,
                     "min_contracts": int(Decimal(f["LOT_SIZE"]["minQty"]) / mult),
                     "tick": Decimal(f["PRICE_FILTER"]["tickSize"]),
                     "max_leverage": int(float(c["riskLimits"][0]["maxLeverage"])) if c.get("riskLimits") else 20,
+                    "mmr_tiers": [(float(t["value"]), float(t["maintMargin"]), int(float(t["maxLeverage"])))
+                                  for t in c.get("riskLimits") or []],
+                    "seeone": seeone,
+                    "rwa": bool(c.get("isRwa")) or "TradFi" in cats,
+                    "categories": cats,
+                    "quote": c.get("quoteAsset") or "",
                 }
             self._specs = out
         return self._specs
 
     def price(self, symbol: str) -> float:
-        r = requests.get(f"{BASE}/quote/v1/ticker/price", params={"symbol": symbol}, timeout=10).json()
+        r = PUB.get(f"{BASE}/quote/v1/ticker/price", params={"symbol": symbol}, timeout=10).json()
         return float(r[0]["p"])
 
     def book(self, symbol: str) -> tuple[float, float]:
-        r = requests.get(f"{BASE}/quote/v1/ticker/bookTicker", params={"symbol": symbol}, timeout=10).json()
+        r = PUB.get(f"{BASE}/quote/v1/ticker/bookTicker", params={"symbol": symbol}, timeout=10).json()
         return float(r[0]["b"]), float(r[0]["a"])
-
-    def fee_rates(self, symbol: str) -> dict:
-        r = self._request("GET", "/api/v1/futures/commissionRate", {"symbol": symbol})
-        return {"maker": float(r["openMakerFee"]), "taker": float(r["openTakerFee"])}
 
     def user_trades(self, symbol: str, limit: int = 100) -> list:
         return self._request("GET", "/api/v1/futures/userTrades", {"symbol": symbol, "limit": limit})
@@ -91,16 +121,29 @@ class Toobit:
 
     def positions(self, symbol: str | None = None) -> list:
         rows = self._request("GET", "/api/v1/futures/positions", {"symbol": symbol})
-        return [p for p in rows if float(p.get("position") or 0) > 0]
+        # Orders take whole contracts, so a fractional remainder (0.1 BTC contract) can never be closed by the bot.
+        return [p for p in rows if float(p.get("position") or 0) >= 1]
 
     def history_positions(self, symbol: str, limit: int = 5) -> list:
         return self._request("GET", "/api/v1/futures/historyPositions", {"symbol": symbol, "limit": limit})
 
     def set_isolated(self, symbol: str):
-        try:
-            self._request("POST", "/api/v1/futures/marginType", {"symbol": symbol, "marginType": "ISOLATED"})
-        except ToobitError:
-            pass  # already isolated, or a position exists
+        # Setting the margin type is idempotent, so a timeout is retried. If it still times out the entry
+        # is refused as a ToobitError (skips this signal only): opening on cross margin is not acceptable.
+        done = self.__dict__.setdefault("_isolated", set())
+        if symbol in done:
+            return
+        for attempt in range(3):
+            try:
+                self._request("POST", "/api/v1/futures/marginType", {"symbol": symbol, "marginType": "ISOLATED"})
+                break
+            except ToobitError:
+                break  # already isolated, or a position exists
+            except (requests.Timeout, requests.ConnectionError) as e:
+                if attempt == 2:
+                    raise ToobitError(f"設定逐倉逾時 3 次，不開這筆：{e!r}"[:300])
+                time.sleep(2 + attempt)
+        done.add(symbol)
 
     def set_leverage(self, symbol: str, leverage: int):
         return self._request("POST", "/api/v1/futures/leverage", {"symbol": symbol, "leverage": leverage})
