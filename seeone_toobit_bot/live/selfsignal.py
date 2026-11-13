@@ -838,8 +838,17 @@ class SelfScanner:
         btc = (self.btc or {}).get("ret1h")
         ranked = []
         looked = 0
+        n_flush = 0
         for c in ordered:
-            if looked >= 160 or sum(1 for t, _, _ in ranked if t) >= REVIEWS_PER_SCAN:
+            n_tradable = sum(1 for t, _, _, _ in ranked if t)
+            # A flush long sits at the bottom of the 3h range, so its local long
+            # probability loses to shorts and it never takes a review slot.
+            # ENA on Nov 13 passed the flush gates at the 13:45 close (0.13459).
+            # The 14:09 scan filled its 10 calls with other names, and the fill
+            # came at 14:40 at 0.13742, after the 14:15 bar had already run.
+            # Keep walking until a flush is in hand, or 80 names, then put it first.
+            if (looked >= 160 or n_flush >= 2
+                    or (n_tradable >= REVIEWS_PER_SCAN and (n_flush >= 1 or looked >= 80))):
                 break
             tsym = S.to_toobit(c["symbol"])
             if tsym not in specs or tsym in held:
@@ -853,6 +862,7 @@ class SelfScanner:
                 continue
             narrow = pl["dist"] / pl["price"] < S.SELF_MAX_SL_PCT
             fl = flush(tsym) if S.BOUNCE_ENABLED and not narrow else None
+            flush_ready = bool(fl is not None and S.bounce_ok(fl, pl["dist"] / pl["price"], pl["price"]))
             best, tradable = None, False
             for side, _band in sides:
                 sgn = 1 if side == "LONG" else -1
@@ -866,12 +876,15 @@ class SelfScanner:
                 if best is None or (prob or -1) > best:
                     best = prob or -1
                 tradable = (tradable or (narrow and side in open_sides)
-                            or (side == "LONG" and S.bounce_ok(fl, pl["dist"] / pl["price"], pl["price"])))
+                            or (side == "LONG" and flush_ready))
             if best is None:
                 continue
-            ranked.append((tradable, best, c))
-        ranked.sort(key=lambda x: (not x[0], -x[1]))
-        return [c for _, _, c in ranked[:REVIEWS_PER_SCAN]]
+            if flush_ready:
+                n_flush += 1
+                tradable = True
+            ranked.append((tradable, flush_ready, best, c))
+        ranked.sort(key=lambda x: (not x[0], not x[1], -(x[2] if x[2] is not None else -1)))
+        return [c for _, _, _, c in ranked[:REVIEWS_PER_SCAN]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:
         """Order-book longs are off.
