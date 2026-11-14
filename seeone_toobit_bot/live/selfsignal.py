@@ -71,9 +71,10 @@ SHORT_MIN_EV_R = 0.50
 SHORT_MIN_PROB = 52.5
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
-# See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst; six per scan per bot
-# left both books near 48/hour. Ten per scan keeps the 15s gap and stays well under the old pace.
-REVIEWS_PER_SCAN = 10
+# See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst. The 15s gap
+# stays. Twenty per scan on both books is about 160/hour, still under that pace, so a short
+# tape can see twice as many stop-under-1% names without a tighter burst.
+REVIEWS_PER_SCAN = 20
 # One side plus the saved bias replaces a two-sided review; every BIAS_EVERY-th name still reviews both.
 BIAS_EVERY = 6
 # Both bots review the same See One symbols on one account. A fresh review with a similar stop width is reused.
@@ -857,7 +858,7 @@ class SelfScanner:
             # range, not pinned to the first review slot.
             # In a short-only tape, keep walking until the review slate is full of
             # stops under 1%. The probability and expected-value gates are unchanged.
-            look_cap = 400 if short_only else 160
+            look_cap = 800 if short_only else 160
             if (looked >= look_cap or n_flush >= 2
                     or (n_tradable >= REVIEWS_PER_SCAN and (short_only or n_flush >= 1 or looked >= 80))):
                 break
