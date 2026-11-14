@@ -1151,30 +1151,6 @@ class SelfScanner:
                     continue
                 self._emit_shadow(sym, pl_long, htf, None, None)
                 shadowed += 1
-                if not S.QUIET_ENTRIES:
-                    continue
-                short_band = htf is not None and 1.5 <= -htf < 2.5
-                long_band = htf is not None and 1.5 <= htf < 2.5
-                if short_band and sum(1 for x in found if x.get("source") == "安靜期強勢空") < S.QUIET_MAX_SAME_SIDE:
-                    item = self._quiet_short(c, pl_long, regime, htf)
-                    if item:
-                        why = self._quiet_blocked(tsym, btc_5m, qv_map.get(tsym), "SHORT")
-                        if why:
-                            self.log("QUIET_GATE", symbol=sym, side="SHORT", reason=why)
-                        else:
-                            found.append(item)
-                if long_band and sum(1 for x in found if x.get("source") == "安靜期強勢多") < S.QUIET_MAX_SAME_SIDE:
-                    item = self._quiet_long(c, pl_long, regime, htf)
-                    if item:
-                        why = self._quiet_blocked(tsym, btc_5m, qv_map.get(tsym), "LONG")
-                        if why:
-                            self.log("QUIET_GATE", symbol=sym, side="LONG", reason=why)
-                        else:
-                            found.append(item)
-                short_done = short_band and sum(1 for x in found if x.get("source") == "安靜期強勢空") >= S.QUIET_MAX_SAME_SIDE
-                long_done = long_band and sum(1 for x in found if x.get("source") == "安靜期強勢多") >= S.QUIET_MAX_SAME_SIDE
-                if short_done or long_done:
-                    break
                 continue
             try:
                 pl_long = None
@@ -1296,7 +1272,11 @@ class SelfScanner:
                                         "fade_entry": band in ("fade_long", "fade_short")},
                                         r, pl, prob, round(p1h, 1), quality, ev, regime, raw, bias, edge))
             time.sleep(0.3)
-        found.sort(key=lambda f: -f["ev"]["score"])
+        self._add_quiet_shorts(ordered[:40], regime, htf, specs, held, found)
+        quiet = [f for f in found if f["sig"].get("quiet_strong_short")]
+        rest = [f for f in found if not f["sig"].get("quiet_strong_short")]
+        rest.sort(key=lambda f: -f["ev"]["score"])
+        found = quiet + rest[:max(0, MAX_PER_SCAN - len(quiet))]
         self.save()
         self._write_align()
         self.log("SELF_SCAN", reviewed_symbols=reviewed, shadow=shadowed, seeone_open=seeone_open,
@@ -1308,6 +1288,44 @@ class SelfScanner:
                  min_prob=min_prob, min_edge=MIN_EDGE, pending_calibration=len(self.d["pending"]),
                  resolved=len(self.d["resolved"]))
         return found[:MAX_PER_SCAN]
+
+    def _add_quiet_shorts(self, names, regime, htf, specs, held, found):
+        """Add liquid shorts in the measured 1.5–2.5 band. Names already chosen stay on that path."""
+        if not S.QUIET_ENTRIES or htf is None or not (S.QUIET_HTF_MIN <= -htf < S.QUIET_HTF_MAX):
+            return
+        try:
+            btc_5m = micro_1h("BTC-SWAP-USDT")[1]
+        except Exception:
+            btc_5m = None
+        try:
+            qv_map = contract_quote_vol()
+        except Exception:
+            qv_map = {}
+        taken = {f["sig"]["symbol"] for f in found}
+        for c in names:
+            if sum(1 for x in found if x.get("source") == "安靜期強勢空") >= S.QUIET_MAX_SAME_SIDE:
+                break
+            sym = c["symbol"]
+            if sym in taken:
+                continue
+            tsym = S.to_toobit(sym)
+            if tsym not in specs or tsym in held:
+                continue
+            try:
+                pl_long = self.plan(tsym, "LONG")
+            except Exception:
+                continue
+            if not pl_long:
+                continue
+            item = self._quiet_short(c, pl_long, regime, htf)
+            if not item:
+                continue
+            why = self._quiet_blocked(tsym, btc_5m, qv_map.get(tsym), "SHORT")
+            if why:
+                self.log("QUIET_GATE", symbol=sym, side="SHORT", reason=why)
+                continue
+            found.append(item)
+            taken.add(sym)
 
     def _quiet_blocked(self, tsym: str, btc_5m: float | None, quote_known: float | None,
                        side: str = "SHORT") -> str | None:
@@ -1366,7 +1384,7 @@ class SelfScanner:
         if htf is None:
             return None
         htf_dir = -htf
-        if not (1.5 <= htf_dir < 2.5):
+        if not (S.QUIET_HTF_MIN <= htf_dir < S.QUIET_HTF_MAX):
             return None
         rpos_long = pl_long.get("rpos")
         rpos = None if rpos_long is None else round(1 - rpos_long, 3)
@@ -1390,8 +1408,8 @@ class SelfScanner:
         learned = sum(self.learner.p.get("factor_adj", {}).get(t, 0.0) for t in factors)
         score = round(self.learner.p.get("effective_min_score", S.MIN_SCORE) + learned, 1)
         reasons = [
-            "安靜期強勢空：分析驗算暫停，沿用已測過的強勢空單條件",
-            f"大週期順方向 {htf_dir:+.2f}，允許 1.5 到 2.5（2.5 以上歷史為負）",
+            "安靜期強勢空：1h/4h 順向已在測過的區間，和自選空單一起排",
+            f"大週期順方向 {htf_dir:+.2f}，允許 {S.QUIET_HTF_MIN:g} 到 {S.QUIET_HTF_MAX:g}（{S.QUIET_HTF_MAX:g} 以上歷史為負）",
             f"區間位置 {rpos:.2f}，須靠近高點（上限 {S.MAX_RANGE_POS}）",
             f"24h 成交額仍須達 {S.QUOTE_VOL_MIN_DEFAULT/1e6:.0f} 百萬，這一段 +0.76R，流動性不足的是 -0.23R",
             f"止損 {dist / px:.2%} (1.5×ATR15m)，大盤 {regime[1]} {regime[0]:+.2f}",

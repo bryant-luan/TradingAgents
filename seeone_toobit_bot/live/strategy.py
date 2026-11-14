@@ -278,11 +278,14 @@ MAX_SAME_SIDE = 2               # open positions on one side
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
 QUIET_MAX_SAME_SIDE = 3
-# ELSA window (HTF -0.5 to 1.5, BTC 1h aligned, 15m under 2.5, after a See One review)
-# is +0.64R on 211 resolved rows, both halves positive. Quiet shorts in the 1.5–2.5
-# band are +0.38R on 33 rows. Quiet longs in that band are -0.99R on 14 rows.
-# New entries stay on the higher-expectancy ELSA path.
-QUIET_ENTRIES = False
+# Quiet shorts are an entry alongside the self-scan short. Liquid names with the
+# 1h/4h already aligned in [1.5, 2.5) were +0.76R on 37 reviews. The four live
+# closes (XAG, XAU, XRP, SOXL) all won, mean +1.01R. The same band on the long
+# side was -0.99R on 14 rows, both halves negative, so quiet longs stay off.
+QUIET_HTF_MIN = 1.5
+QUIET_HTF_MAX = 2.5
+QUIET_ENTRIES = True
+QUIET_LONGS = False
 # 15m breakout entries. Live shorts averaged about 0R with swings from +37 USDT to -32.
 BREAKOUT_ENTRIES = False
 # Same-side entries are no longer spaced 30 minutes apart. Closed pairs opened

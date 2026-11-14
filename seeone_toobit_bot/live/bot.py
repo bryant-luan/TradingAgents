@@ -1301,7 +1301,7 @@ class Bot:
             if S.to_toobit(sig["symbol"]) == "ONE-SWAP-USDT" and not sig.get("recipe_spike"):
                 self.note_skip(sig, "ONE 這筆提前平倉後不接回，改開其他幣")
                 continue
-            if not sig.get("breakout") and sig["symbol"] in MAJORS:
+            if not sig.get("breakout") and not sig.get("quiet_strong_short") and sig["symbol"] in MAJORS:
                 self.note_skip(sig, "主流幣不靠自選單進場。今天 SOL、XRP 都在驗算轉弱時虧損出場，WLD、XMR 這種榜上的空單有打到 TP1")
                 continue
             if sig.get("recipe_spike"):
@@ -1390,13 +1390,14 @@ class Bot:
             # aligned 1h/4h of +1.5 to +2.5 was 68% and +0.50R, and -2.5 to -1.5 was 89%
             # and +1.33R. The 1h/4h window below is the gate. Stop under 1% and BTC's 24h
             # direction still apply.
-            if src != SELF_SOURCE:
+            quiet_short = bool(sig.get("quiet_strong_short"))
+            if src != SELF_SOURCE and not quiet_short:
                 self.pre = self.pre_move(sig)
                 if self.pre is not None and self.pre >= S.FRESH_MAX_R:
                     self.note_skip(sig, f"See One 訊號發出前 2 小時本幣已順方向走 {self.pre:+.2f}R "
                                         f"(≥ {S.FRESH_MAX_R}R)，不是走勢前端，不追")
                     continue
-            if m15 * sgn >= m15_max:
+            if not quiet_short and m15 * sgn >= m15_max:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
                                     f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
@@ -1405,7 +1406,8 @@ class Bot:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                     f"(順方向 {htf * sgn:+.1f} < 下限 {floor:+.1f})，不做逆大勢的單")
                 continue
-            cap = (S.SELF_SHORT_HTF_MAX if src == SELF_SOURCE and sig["side"] == "SHORT" and not bounce
+            cap = (S.QUIET_HTF_MAX if quiet_short else
+                   S.SELF_SHORT_HTF_MAX if src == SELF_SOURCE and sig["side"] == "SHORT" and not bounce
                    else htf_max)
             if htf is not None and htf * sgn >= cap:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 已強烈偏{'多' if sgn > 0 else '空'} "
@@ -1414,7 +1416,7 @@ class Bot:
             aligned = None if btc1h is None else btc1h * sgn
             btc_min = S.SELF_BTC1H_MIN if src == SELF_SOURCE else S.BTC1H_MIN_DEFAULT
             # Bounce longs held 56-76% TP1-first in every BTC 1h bucket, so neither BTC bound applies to them.
-            if aligned is not None and aligned < btc_min and not bounce:
+            if aligned is not None and aligned < btc_min and not bounce and not quiet_short:
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
                                     f"(順方向 {aligned:+.2f}% < {btc_min:+.2f}%)，等大盤同向再進")
                 continue
