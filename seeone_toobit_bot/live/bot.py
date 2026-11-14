@@ -1675,11 +1675,24 @@ class Bot:
             for sig, ev, src in paper_later:
                 self._open_quiet_long_paper(sig, ev, src, reg, size_eq)
 
+    def _publish_scan(self, src: str, items: list):
+        if not items:
+            return
+        with self._scan_lock:
+            self._scan_out.extend((time.time(), f, src) for f in items)
+
     def _scan_worker(self, reg, rhits, held, specs, m15, htf):
         """Self-scan, order-book spikes and 15m breakouts. The self-scan spaces its See One reviews
         15 s apart and took 4-8 minutes, during which the main loop read no signals and booked no closes."""
-        steps = (("self_scan", SELF_SOURCE, lambda: self.selfscan.scan(reg, rhits, held, specs, m15, htf)),
-                 ("orderbook_spike", "訂單簿爆漲", lambda: self.selfscan.orderbook_spikes(held, specs)),
+        if not self.stopping:
+            try:
+                # A passing short is handed to the main loop as soon as its review
+                # clears, so a long slate does not leave the first name waiting.
+                self.selfscan.scan(reg, rhits, held, specs, m15, htf,
+                                   on_found=lambda item: self._publish_scan(SELF_SOURCE, [item]))
+            except Exception as e:
+                log_event("ERROR", where="self_scan", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
+        steps = (("orderbook_spike", "訂單簿爆漲", lambda: self.selfscan.orderbook_spikes(held, specs)),
                  ("breakout", "突破", lambda: self.selfscan.fresh_breaks(held, specs, htf)))
         for where, src, run in steps:
             if self.stopping:
@@ -1690,8 +1703,7 @@ class Bot:
                 log_event("ERROR", where=where, error=repr(e)[:300], tb=traceback.format_exc()[-600:])
                 continue
             if out:
-                with self._scan_lock:
-                    self._scan_out.extend((time.time(), f, src) for f in out)
+                self._publish_scan(src, out)
 
     def fast_guard(self):
         """Move exchange stops within a few seconds of a new high, without waiting for the See One scan to finish."""

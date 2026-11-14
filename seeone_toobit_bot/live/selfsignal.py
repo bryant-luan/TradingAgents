@@ -34,10 +34,6 @@ DEFAULT_MIN_PROB = 60.0          # de-biased probability of TP1 before SL
 # 64 rows, 84% wins, +0.96R. A floor of 25 keeps the weak tail and blocks that band.
 # The chosen side still has to be ahead (edge >= 0).
 MIN_EDGE = 0.0
-# The review finds several names. Trying only the top three dropped XRP and RUNE on
-# 11-08 06:10 Taipei after the higher-scoring names could not be sized. One same-side
-# gap still allows a single new position.
-MAX_PER_SCAN = 6
 # High-conviction tier = setups like the CLANKER trade: strong two-sided edge, high de-biased probability,
 # high trade quality, 1H agreement, and the coin is on the strength board or potential board top 10.
 HIGH_MIN_EDGE, HIGH_MIN_PROB, HIGH_MIN_QUALITY, HIGH_MIN_1H = 35.0, 68.0, 75.0, 60.0
@@ -72,8 +68,8 @@ SHORT_MIN_PROB = 52.5
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900
 # See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst. The 15s gap
-# stays. Twenty per scan on both books is about 160/hour, still under that pace, so a short
-# tape can see twice as many stop-under-1% names without a tighter burst.
+# stays. A mixed tape still spends this many calls. A short-only tape does not stop at this
+# count: every name with a stop under 1% is reviewed, and a 429 still pauses the scan.
 REVIEWS_PER_SCAN = 20
 # One side plus the saved bias replaces a two-sided review; every BIAS_EVERY-th name still reviews both.
 BIAS_EVERY = 6
@@ -856,11 +852,11 @@ class SelfScanner:
             # probability loses to shorts. Keep walking until one wash is in hand.
             # It is ranked with the market mood and the coin's own place in the
             # range, not pinned to the first review slot.
-            # In a short-only tape, keep walking until the review slate is full of
-            # stops under 1%. The probability and expected-value gates are unchanged.
-            look_cap = 800 if short_only else 160
-            if (looked >= look_cap or n_flush >= 2
-                    or (n_tradable >= REVIEWS_PER_SCAN and (short_only or n_flush >= 1 or looked >= 80))):
+            # A short-only tape walks the whole book. Every stop under 1% is reviewed.
+            # The probability and expected-value gates are unchanged.
+            if not short_only and (
+                    looked >= 160 or n_flush >= 2
+                    or (n_tradable >= REVIEWS_PER_SCAN and (n_flush >= 1 or looked >= 80))):
                 break
             if short_only and c.get("symbol") in MAJORS:
                 continue
@@ -902,8 +898,8 @@ class SelfScanner:
         ranked.sort(key=lambda x: (not x[0], -x[1]))
         if short_only:
             ranked = [row for row in ranked if row[0]]
-            self.log("SHORT_SLATE", looked=looked, tradable=len(ranked),
-                     reviewing=min(REVIEWS_PER_SCAN, len(ranked)))
+            self.log("SHORT_SLATE", looked=looked, tradable=len(ranked), reviewing=len(ranked))
+            return [c for _, _, c in ranked]
         return [c for _, _, c in ranked[:REVIEWS_PER_SCAN]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:
@@ -1169,7 +1165,7 @@ class SelfScanner:
         return {"sig": sig, "ev": ev, "source": path}
 
     def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
-             htf: float | None = None) -> list:
+             htf: float | None = None, on_found=None) -> list:
         """Review every candidate both LONG and SHORT on mirrored geometry. 分析驗算 is direction-biased
         (mirrored 1R probabilities sum to well over 100%), so each side is de-biased by half the excess and
         a trade needs a clear edge over the opposite side, not just a high raw probability."""
@@ -1188,6 +1184,15 @@ class SelfScanner:
         open_sides = self.sides(htf, self.btc.get("ret1h"))
         long_note = self.long_gate(htf, self.btc.get("ret1h"))[1]
         found, watched, reviewed, by_symbol = [], [], 0, {}
+        announced: set[str] = set()
+
+        def announce(item: dict):
+            sid = (item.get("sig") or {}).get("id")
+            if not sid or sid in announced:
+                return
+            announced.add(sid)
+            if on_found:
+                on_found(item)
         for c in self.universe(regime[1], rhits):
             by_symbol.setdefault(c["symbol"], c)
         now = time.time()
@@ -1243,7 +1248,7 @@ class SelfScanner:
             if pin is not None:
                 ordered = [pin] + [c for c in ordered if c.get("symbol") != pin_sym]
                 pin_file.unlink(missing_ok=True)
-        limit = 40 if not seeone_open else REVIEWS_PER_SCAN
+        limit = 40 if not seeone_open else len(ordered)
         pl_long = None
         for c in ordered[:limit]:
             sym = c["symbol"]
@@ -1403,15 +1408,19 @@ class SelfScanner:
                                         "strong_liquid_short": band == "strong_short",
                                         "fade_entry": band in ("fade_long", "fade_short")},
                                         r, pl, prob, round(p1h, 1), quality, ev, regime, raw, bias, edge))
+            announce(found[-1])
             time.sleep(0.3)
         self._add_quiet_shorts(ordered[:40], regime, htf, specs, held, found)
         quiet = [f for f in found if f["sig"].get("quiet_strong_short")]
         rest = [f for f in found if not f["sig"].get("quiet_strong_short")]
         rest.sort(key=lambda f: -f["ev"]["score"])
-        found = quiet + rest[:max(0, MAX_PER_SCAN - len(quiet))]
+        # Every name that cleared the bar is offered. The book cap still stops the opens.
+        found = quiet + rest
         paper_longs: list = []
         self._add_quiet_longs(ordered[:40], regime, htf, specs, held, paper_longs)
         found = found + paper_longs
+        for item in found:
+            announce(item)
         self.save()
         self._write_align()
         self.log("SELF_SCAN", reviewed_symbols=reviewed, shadow=shadowed, seeone_open=seeone_open,
