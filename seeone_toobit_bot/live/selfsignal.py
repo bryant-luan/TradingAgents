@@ -894,11 +894,12 @@ class SelfScanner:
             if mood_side == "LONG":
                 n_flush += 1
                 tradable = True
-            ranked.append((tradable, mood_score, c))
+            ranked.append((tradable, mood_score, {**c, "_plan": pl}))
         ranked.sort(key=lambda x: (not x[0], -x[1]))
         if short_only:
             ranked = [row for row in ranked if row[0]]
-            self.log("SHORT_SLATE", looked=looked, tradable=len(ranked), reviewing=len(ranked))
+            self.log("SHORT_SLATE", looked=looked, tradable=len(ranked), reviewing=len(ranked),
+                     m15=m15, htf=htf)
             return [c for _, _, c in ranked]
         return [c for _, _, c in ranked[:REVIEWS_PER_SCAN]]
 
@@ -1250,10 +1251,12 @@ class SelfScanner:
                 pin_file.unlink(missing_ok=True)
         limit = 40 if not seeone_open else len(ordered)
         pl_long = None
+        skipped = {"specs": 0, "plan": 0, "pick": 0}
         for c in ordered[:limit]:
             sym = c["symbol"]
             tsym = S.to_toobit(sym)
             if tsym not in specs or tsym in held:
+                skipped["specs"] += 1
                 continue
             if not seeone_open:
                 if now - self.d.setdefault("last_shadow", {}).get(sym, 0) < REVIEW_COOLDOWN_S:
@@ -1266,9 +1269,9 @@ class SelfScanner:
                 shadowed += 1
                 continue
             try:
-                pl_long = None
-                pl_long = self.plan(tsym, "LONG")
+                pl_long = c.get("_plan") or self.plan(tsym, "LONG")
                 if not pl_long:
+                    skipped["plan"] += 1
                     continue
                 d, px = pl_long["dist"], pl_long["price"]
                 pl_short = {**pl_long, "stop": px + d, "tps": [px - d * r for r in TP_R]}
@@ -1296,6 +1299,7 @@ class SelfScanner:
                 can_open = set(open_sides) | ({"LONG"} if bounce and not at_front else set())
                 pick = tradable or eligible
                 if not pick:
+                    skipped["pick"] += 1
                     continue
                 short_ok = "SHORT" in tradable or "SHORT" in eligible
                 short_prob = None
@@ -1424,6 +1428,7 @@ class SelfScanner:
         self.save()
         self._write_align()
         self.log("SELF_SCAN", reviewed_symbols=reviewed, shadow=shadowed, seeone_open=seeone_open,
+                 m15=m15, htf=htf, skipped=skipped,
                  shared_reviews=getattr(self, "shared_hits", 0), open_sides=list(open_sides), long_gate=long_note,
                  universe=len(by_symbol), tradable_contracts=len(specs or {}),
                  tradefi=sum(1 for c in by_symbol.values() if "TradFi" in c["tags"]),
