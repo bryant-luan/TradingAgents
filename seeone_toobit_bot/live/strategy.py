@@ -303,6 +303,9 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 # at +2R was worse (+1.241R on the shorts). After +3R the stop now stays 1R behind the high,
 # stepped by 0.25R, and the floor at +3R is +2R: +3.02R locks +2.00R, +4.00R locks +3.00R.
 LOCK_LADDER = ((2.0, 0.0), (3.0, 2.0))
+# Gate live, 2026-11-14 12:06-12:41 Taipei. BANANAS31 flush long filled at 0.004077,
+# initial stop 0.004010. TP1 through TP4 filled. Best open profit +4.80R. The stop
+# moved to break-even at +2.17R, then trailed to +3.5R at 0.004317. Exit +3.4R, +17.65 USDT.
 
 
 def reversal_view(side: str, entry: float, break_level, mfe_r, o: float, h: float, l: float, c: float,
