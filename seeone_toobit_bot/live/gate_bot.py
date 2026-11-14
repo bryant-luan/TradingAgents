@@ -2,7 +2,9 @@
 
 Gate reads seeone_toobit_bot/.env.gate. See One login still comes from .env.
 Its book, pause file, and log live under logs/gate, so it does not manage Toobit positions.
-The learned thresholds and review calibration are copied once from the Toobit bot, then kept separately.
+The learned thresholds and review calibration are copied once from the Toobit bot.
+Later, each book keeps its own cooldowns and score floor, and both recompute factor
+weights from the two books' closed trades together.
 """
 import json
 import os
@@ -45,7 +47,7 @@ load_gate_env()
 
 
 def seed_rules():
-    """Start from the same learned thresholds. Later closes update only the Gate copy."""
+    """Start from the same learned thresholds. Loss timers on the other account stay there."""
     base = ROOT / "logs" / "gate"
     base.mkdir(parents=True, exist_ok=True)
     for name in ("learned_params.json", "self_calib.json"):

@@ -1074,6 +1074,7 @@ class Bot:
 
     # ------------------------------------------------------------------ cycle
     def cycle(self):
+        self.learner.absorb_peers()
         if not self.dry:
             self.recover_pending_entry()
         try:

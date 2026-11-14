@@ -40,9 +40,92 @@ def _aligned(tr: dict, factors: dict) -> bool:
 class Learner:
     def __init__(self, path: Path, insight_log: Path, log_event):
         self.path, self.insight_log, self.log = path, insight_log, log_event
+        self._close_mtime: dict[str, float] = {}
+        self._close_stats: dict[str, dict] | None = None
         self.p = {**json.loads(json.dumps(DEFAULTS))}
         if path.exists():
             self.p.update(json.loads(path.read_text()))
+        self.absorb_peers()
+
+    def book_roots(self) -> list[Path]:
+        parent = self.path.parent
+        root = parent.parent if parent.name == "gate" else parent
+        return [root, root / "gate"]
+
+    def _shared_stats(self) -> dict:
+        """Factor results from each book's own fills. The seeded copy is not added twice."""
+        logs = [base / "trades" / "live_trades.jsonl" for base in self.book_roots()]
+        logs = [p for p in logs if p.exists()]
+        stamp = {}
+        for path in logs:
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            stamp[str(path)] = st.st_mtime
+        if self._close_stats is not None and stamp == self._close_mtime:
+            return self._close_stats
+        entries: dict[str, dict] = {}
+        exits: list[dict] = []
+        for path in logs:
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                if '"event": "ENTRY"' not in line and '"event": "EXIT"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                event, tid = row.get("event"), row.get("trade_id")
+                if not tid:
+                    continue
+                if event == "ENTRY":
+                    entries[tid] = row
+                elif event == "EXIT" and row.get("r_result") is not None:
+                    exits.append(row)
+        merged: dict[str, dict] = {}
+        seen: set[str] = set()
+        for row in exits:
+            tid = row["trade_id"]
+            if tid in seen:
+                continue
+            seen.add(tid)
+            opened = entries.get(tid) or {}
+            if opened.get("source") == "接管持倉":
+                continue
+            r = float(row["r_result"])
+            win = r > FLAT_R
+            for tag in opened.get("factors") or {}:
+                slot = merged.setdefault(tag, {"n": 0, "wins": 0, "sum_r": 0.0})
+                slot["n"] += 1
+                slot["wins"] += int(win)
+                slot["sum_r"] = round(slot["sum_r"] + r, 4)
+        self._close_mtime = stamp
+        self._close_stats = merged
+        return merged
+
+    def absorb_peers(self) -> list[str]:
+        """Set score weights from both books' closes. Cooldowns and the score floor stay local."""
+        changes = []
+        adj = self.p.setdefault("factor_adj", {})
+        for tag, st in self._shared_stats().items():
+            if st["n"] < FACTOR_MIN_N:
+                continue
+            new = round(max(FACTOR_ADJ_MIN, min(FACTOR_ADJ_MAX, st["sum_r"] / st["n"] * FACTOR_GAIN)), 1)
+            old = adj.get(tag, 0.0)
+            if abs(new - old) >= 0.5:
+                adj[tag] = new
+                changes.append(
+                    f"因子 [{tag}] 權重 {old:+.1f} → {new:+.1f} "
+                    f"(兩所合計 n={st['n']}, 勝率 {st['wins'] / st['n']:.0%}, 平均 {st['sum_r'] / st['n']:+.2f}R)"
+                )
+        if changes:
+            self.save()
+            self.log("LEARN_POOL", books=["toobit", "gate"], changes=changes)
+        return changes
 
     def refresh_effective(self):
         cal = self.p.get("calibrated_min_score")
@@ -81,19 +164,12 @@ class Learner:
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
 
     def _update_factors(self, factors: dict, r: float, win: bool) -> list:
-        changes = []
         for tag in factors:
             st = self.p["factor_stats"].setdefault(tag, {"n": 0, "wins": 0, "sum_r": 0.0})
             st["n"] += 1
             st["wins"] += int(win)
             st["sum_r"] = round(st["sum_r"] + r, 4)
-            if st["n"] >= FACTOR_MIN_N:
-                new = round(max(FACTOR_ADJ_MIN, min(FACTOR_ADJ_MAX, st["sum_r"] / st["n"] * FACTOR_GAIN)), 1)
-                old = self.p["factor_adj"].get(tag, 0.0)
-                if abs(new - old) >= 0.5:
-                    self.p["factor_adj"][tag] = new
-                    changes.append(f"因子 [{tag}] 權重 {old:+.1f} → {new:+.1f} (n={st['n']}, 勝率 {st['wins'] / st['n']:.0%}, 平均 {st['sum_r'] / st['n']:+.2f}R)")
-        return changes
+        return []
 
     def on_close(self, tr: dict, r: float | None, pnl: float | None, reason: str, tps_filled: list, held_min: float):
         if r is None:
@@ -106,7 +182,8 @@ class Learner:
         p["trades"] += 1
         p["sum_r"] = round(p["sum_r"] + r, 4)
         p["sum_pnl"] = round(p["sum_pnl"] + (pnl or 0), 4)
-        changes = self._update_factors(factors, r, win)
+        self._update_factors(factors, r, win)
+        changes = self.absorb_peers()
         base = dict(trade_id=tr["id"], symbol=tr["tsym"], side=tr["side"], r_result=r, pnl_usdt=pnl,
                     path=tr.get("path"), source=tr.get("source"), score=tr.get("score"),
                     regime_at_entry=tr.get("regime"), entry_at_r=entry_r, tps_filled=tps_filled,
