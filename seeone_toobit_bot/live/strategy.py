@@ -254,6 +254,10 @@ FLUSH_VOL_RATIO_MIN = 1.56
 # flush that had already bounced further did better, not worse.
 FLUSH_RET2H_MIN = 0.0
 FLUSH_BOUNCE_MIN_R = 1.5
+# A coin already in the front half of its own 3h range is not a wash entry.
+# The flush stays eligible behind a stronger short instead of taking the first slot.
+FLUSH_FRONT_RPOS = 0.55
+FLUSH_MOOD_SCORE = 62.0
 # Two may be open at once. Replayed with a 2-4h hold, a cap of 2 took 26-31 flushes for +31.6R to +40.2R
 # (both halves positive) against 16-19 and +19.7R to +28.0R at 1, max drawdown 2.1-3.2R against 2.1R.
 # Flushes that came while another was open still averaged +0.98R (48). Gate skipped 7 on Nov 12 at 1.
@@ -262,6 +266,50 @@ BOUNCE_STOP_AFTER_LOSSES = 2
 # A scratch exit is not a wrong call: BR on Nov 10 was closed at -0.10R one second after entry by the
 # 1h/4h trend-gone exit, which bounce longs no longer take.
 BOUNCE_LOSS_R = -0.3
+
+
+def mood_rank(htf: float | None, m15: float | None, rpos: float | None,
+             flush_ready: bool, short_prob: float | None,
+             short_ok: bool = False) -> tuple[str | None, float, str]:
+    """Which side the market mood and this coin's mood agree on.
+
+    Market mood is the 1h/4h score, with the 15m score as the short-term turn.
+    Coin mood is its place in the last 3h: near 0 is washed out, near 1 is the front.
+    A flush long is the pick only when the higher timeframe is still heavy, the 15m
+    mood has turned up, and the coin is not already in the front half of its range.
+    A short whose own read is stronger stays ahead of that flush.
+    """
+    at_front = rpos is not None and rpos >= FLUSH_FRONT_RPOS
+    market_heavy = htf is not None and htf < 0
+    turned = m15 is not None and m15 > 0
+    wash = bool(flush_ready and not at_front and market_heavy and turned)
+    short_score = None if short_prob is None else float(short_prob)
+    has_short = short_ok or short_score is not None
+    where = "未知" if rpos is None else f"{rpos:.2f}"
+    m15_txt = "未知" if m15 is None else f"{m15:+.2f}"
+    htf_txt = "未知" if htf is None else f"{htf:+.2f}"
+    if wash and (short_score is None or FLUSH_MOOD_SCORE >= short_score):
+        return ("LONG", FLUSH_MOOD_SCORE,
+                f"大盤 1h/4h {htf_txt} 仍重、15m {m15_txt} 已轉正，幣的區間位置 {where} 不在前段，這一輪選洗盤多單")
+    if has_short and at_front and flush_ready:
+        shown = "" if short_score is None else f"，空單讀數 {short_score:.0f}"
+        return ("SHORT", 0.0 if short_score is None else short_score,
+                f"幣的區間位置 {where} 已在前段，不追洗盤多單{shown}")
+    if has_short:
+        why = "空單" if short_score is None else f"空單讀數 {short_score:.0f}"
+        if flush_ready and not turned:
+            why += f"，15m 情緒 {m15_txt} 還沒轉正，洗盤多單不排前面"
+        elif flush_ready and not market_heavy:
+            why += f"，大盤 1h/4h {htf_txt} 不是偏重，洗盤多單不排前面"
+        elif flush_ready and short_score is not None and short_score > FLUSH_MOOD_SCORE:
+            why += "，高於洗盤多單，洗盤多單不排最前"
+        return ("SHORT", 0.0 if short_score is None else short_score, why)
+    if wash:
+        return ("LONG", FLUSH_MOOD_SCORE,
+                f"大盤 1h/4h {htf_txt} 仍重、15m {m15_txt} 已轉正，幣的區間位置 {where} 不在前段，這一輪選洗盤多單")
+    if flush_ready and at_front:
+        return (None, -1.0, f"幣的區間位置 {where} 已在前段，洗盤多單不追最前面")
+    return (None, -1.0, "市場情緒和幣種情緒沒有同時對上")
 
 
 def bounce_ok(flush: tuple[float, float, float, float] | None, sl_pct: float, price: float) -> bool:

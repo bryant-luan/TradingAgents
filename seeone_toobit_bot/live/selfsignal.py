@@ -818,7 +818,7 @@ class SelfScanner:
         return S.SELF_SIDES + ("LONG",)
 
     def _near_extreme(self, ordered: list, htf: float | None, specs: dict, held: set,
-                      open_sides: tuple = S.SELF_SIDES) -> list:
+                      open_sides: tuple = S.SELF_SIDES, m15: float | None = None) -> list:
         """Names whose 3h price is still near the reversal extreme on an open side.
 
         The review budget is REVIEWS_PER_SCAN See One calls. Names already through the range
@@ -843,13 +843,11 @@ class SelfScanner:
         looked = 0
         n_flush = 0
         for c in ordered:
-            n_tradable = sum(1 for t, _, _, _ in ranked if t)
+            n_tradable = sum(1 for t, _, _ in ranked if t)
             # A flush long sits at the bottom of the 3h range, so its local long
-            # probability loses to shorts and it never takes a review slot.
-            # ENA on Nov 13 passed the flush gates at the 13:45 close (0.13459).
-            # The 14:09 scan filled its 10 calls with other names, and the fill
-            # came at 14:40 at 0.13742, after the 14:15 bar had already run.
-            # Keep walking until a flush is in hand, or 80 names, then put it first.
+            # probability loses to shorts. Keep walking until one wash is in hand.
+            # It is ranked with the market mood and the coin's own place in the
+            # range, not pinned to the first review slot.
             if (looked >= 160 or n_flush >= 2
                     or (n_tradable >= REVIEWS_PER_SCAN and (n_flush >= 1 or looked >= 80))):
                 break
@@ -866,7 +864,7 @@ class SelfScanner:
             narrow = pl["dist"] / pl["price"] < S.SELF_MAX_SL_PCT
             fl = flush(tsym) if S.BOUNCE_ENABLED and not narrow else None
             flush_ready = bool(fl is not None and S.bounce_ok(fl, pl["dist"] / pl["price"], pl["price"]))
-            best, tradable = None, False
+            short_prob, tradable = None, False
             for side, _band in sides:
                 sgn = 1 if side == "LONG" else -1
                 rp = pl["rpos"] if side == "LONG" else 1 - pl["rpos"]
@@ -876,18 +874,20 @@ class SelfScanner:
                 btc_dir = None if btc is None else btc * sgn
                 est = self.local.estimate(side, rp, btc_dir, htf_dir)
                 prob = est.get("prob") if est else None
-                if best is None or (prob or -1) > best:
-                    best = prob or -1
-                tradable = (tradable or (narrow and side in open_sides)
-                            or (side == "LONG" and flush_ready))
-            if best is None:
+                if side == "SHORT" and narrow and side in open_sides:
+                    tradable = True
+                    if prob is not None and (short_prob is None or prob > short_prob):
+                        short_prob = prob
+                tradable = tradable or (narrow and side in open_sides)
+            mood_side, mood_score, _why = S.mood_rank(htf, m15, pl.get("rpos"), flush_ready, short_prob)
+            if mood_side is None and not tradable:
                 continue
-            if flush_ready:
+            if mood_side == "LONG":
                 n_flush += 1
                 tradable = True
-            ranked.append((tradable, flush_ready, best, c))
-        ranked.sort(key=lambda x: (not x[0], not x[1], -(x[2] if x[2] is not None else -1)))
-        return [c for _, _, _, c in ranked[:REVIEWS_PER_SCAN]]
+            ranked.append((tradable, mood_score, c))
+        ranked.sort(key=lambda x: (not x[0], -x[1]))
+        return [c for _, _, c in ranked[:REVIEWS_PER_SCAN]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:
         """Order-book longs are off.
@@ -1216,7 +1216,7 @@ class SelfScanner:
         if seeone_open:
             # Local plans are free. Spend the See One calls on names already sitting
             # near the 3h extreme on a side the window allows, including the liquid-short band.
-            ordered = self._near_extreme(ordered, htf, specs, held, open_sides)
+            ordered = self._near_extreme(ordered, htf, specs, held, open_sides, m15)
         # One name written to OPEN_NEXT is reviewed before the extreme queue, then the file is removed.
         # INUSDT was gated at +0.54R on Nov 11 18:25 Taipei, which clears the +0.50R floor.
         pin_file = self.path.parent / "OPEN_NEXT"
@@ -1261,18 +1261,41 @@ class SelfScanner:
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.self_direc_window(direc, sd) is not None and m15_ok(sd)]
+                rpos = pl_long.get("rpos")
                 fl = flush(tsym) if S.BOUNCE_ENABLED and d / px >= S.BOUNCE_MIN_SL_PCT else None
                 bounce = S.bounce_ok(fl, d / px, px) and m15_ok("LONG")
-                if bounce and "LONG" not in eligible:
-                    eligible.insert(0, "LONG")
+                at_front = rpos is not None and rpos >= S.FLUSH_FRONT_RPOS
+                if bounce and not at_front and "LONG" not in eligible:
+                    eligible.append("LONG")
                 tradable = [sd for sd in eligible if sd in open_sides] if d / px < S.SELF_MAX_SL_PCT else []
-                if bounce:
-                    tradable = ["LONG"] + [sd for sd in tradable if sd != "LONG"]
-                can_open = set(open_sides) | ({"LONG"} if bounce else set())
+                if bounce and not at_front and "LONG" not in tradable:
+                    tradable.append("LONG")
+                can_open = set(open_sides) | ({"LONG"} if bounce and not at_front else set())
                 pick = tradable or eligible
                 if not pick:
                     continue
-                hint = c.get("side") if c.get("side") in pick else pick[0]
+                short_ok = "SHORT" in tradable or "SHORT" in eligible
+                short_prob = None
+                if short_ok and rpos is not None:
+                    btc = (self.btc or {}).get("ret1h")
+                    est = self.local.estimate(
+                        "SHORT", 1 - rpos,
+                        None if btc is None else -btc,
+                        None if htf is None else -htf)
+                    short_prob = est.get("prob") if est else None
+                mood_side, _mood_score, mood_why = S.mood_rank(
+                    htf, m15, rpos, bounce, short_prob, short_ok=short_ok)
+                # The measured short read is the other side of the same coin.
+                # A wash that fits the mood wins only when that read is not stronger.
+                if mood_side == "LONG" and "LONG" in pick:
+                    hint = "LONG"
+                    self.log("MOOD", symbol=sym, side="LONG", htf=htf, m15=m15, rpos=rpos, note=mood_why)
+                elif mood_side == "SHORT" and "SHORT" in pick:
+                    hint = "SHORT"
+                    if bounce:
+                        self.log("MOOD", symbol=sym, side="SHORT", htf=htf, m15=m15, rpos=rpos, note=mood_why)
+                else:
+                    hint = c.get("side") if c.get("side") in pick else pick[0]
                 # Both sides are only needed to measure the model's long/short bias. Once that bias is known,
                 # one call plus the saved bias matches the old de-bias math and cuts the request in half.
                 both = (reviewed + 1) % BIAS_EVERY == 0 and len(eligible) == 2
@@ -1608,6 +1631,7 @@ class SelfScanner:
                    "price": pl["tps"][i], "hit": False} for i in range(len(TP_R))]
         sig = {"id": f"self:{sym}:{side}:{int(time.time() // 900)}", "symbol": sym, "side": side, "status": "ACTIVE",
                "timeframe": "15m", "entry_price": pl["price"], "stop_price": pl["stop"], "current_price": pl["price"],
+               "range_pos": pl.get("rpos"),
                "entry_at": now, "levels": levels, "signal_path": S.BOUNCE_PATH if c.get("bounce_long") else "SELF ANALYSIS", "path_subtype": None,
                "strong_liquid_short": bool(c.get("strong_liquid_short")),
                "fade_entry": bool(c.get("fade_entry"))}

@@ -565,8 +565,13 @@ class Bot:
                     and "重評" not in (c.get("reason") or "")
                     and "變弱" not in (c.get("reason") or "")]
         last = decisive[-S.BOUNCE_STOP_AFTER_LOSSES:]
-        if len(last) == S.BOUNCE_STOP_AFTER_LOSSES and all((c.get("r_result") or 0) <= S.BOUNCE_LOSS_R for c in last):
-            return f"爆量洗盤多單實盤已連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，停用"
+        halted = (len(last) == S.BOUNCE_STOP_AFTER_LOSSES
+                  and all((c.get("r_result") or 0) <= S.BOUNCE_LOSS_R for c in last))
+        side, _score, why = S.mood_rank(htf, getattr(self, "m15", None), sig.get("range_pos"), True, None)
+        if side != "LONG":
+            if halted:
+                return f"爆量洗盤多單連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，而且{why}"
+            return why
         return None
 
     def _risk_trades(self) -> list:
