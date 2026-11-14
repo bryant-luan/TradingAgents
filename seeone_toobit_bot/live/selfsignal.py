@@ -1257,7 +1257,8 @@ class SelfScanner:
                     if m15 is None:
                         return True
                     sgn = 1 if sd == "LONG" else -1
-                    return m15 * sgn < S.M15_MAX_DEFAULT
+                    cap = S.SELF_SHORT_M15_MAX if sd == "SHORT" else S.M15_MAX_DEFAULT
+                    return m15 * sgn < cap
 
                 eligible = [sd for sd, direc in (("LONG", htf), ("SHORT", None if htf is None else -htf))
                             if S.self_direc_window(direc, sd) is not None and m15_ok(sd)]

@@ -1600,9 +1600,12 @@ class Bot:
                     self.note_skip(sig, f"See One 訊號發出前 2 小時本幣已順方向走 {self.pre:+.2f}R "
                                         f"(≥ {S.FRESH_MAX_R}R)，不是走勢前端，不追")
                     continue
-            if not quiet_short and m15 * sgn >= m15_max:
+            m15_cap = (S.SELF_SHORT_M15_MAX
+                       if src == SELF_SOURCE and sig["side"] == "SHORT" and not bounce
+                       else m15_max)
+            if not quiet_short and m15 * sgn >= m15_cap:
                 self.note_skip(sig, f"See One 15m 方向 {m15:+.1f}，順勢{'做多' if sgn > 0 else '做空'}動能已達 "
-                                    f"{m15 * sgn:+.1f} (上限 {m15_max:+.1f})，追在走勢中段/末端，等回檔或盤整")
+                                    f"{m15 * sgn:+.1f} (上限 {m15_cap:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
             floor = min(htf_min, S.SELF_SHORT_HTF_MIN) if src == SELF_SOURCE and sig["side"] == "SHORT" else htf_min
             if htf is not None and htf * sgn < floor and not bounce:
