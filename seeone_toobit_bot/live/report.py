@@ -255,6 +255,17 @@ def report_venue(name: str, hours: float | None, now: datetime, book: set[str], 
         print(f"  安靜多單模擬 {sample['n']} 筆，勝率 {sample['win']:.0%}，平均 {sample['mean_r']:+.2f}R，"
               f"前半 {h1}，後半 {h2}"
               + ("，已達標但仍不送真單" if sample["ready"] else "，未達標"))
+    ign_bits = []
+    for path, label in (("IGNITION 1m", "1 分鐘起漲"), ("IGNITION 15m", "15 分鐘起漲")):
+        ign = S.ignition_sample(st.get("closed") or [], path)
+        if not ign["n"]:
+            ign_bits.append(f"{label} 0 筆")
+            continue
+        h1 = "—" if ign["h1_r"] is None else f"{ign['h1_r']:+.2f}R"
+        h2 = "—" if ign["h2_r"] is None else f"{ign['h2_r']:+.2f}R"
+        ign_bits.append(f"{label} {ign['n']} 筆，勝率 {ign['win']:.0%}，平均 {ign['mean_r']:+.2f}R，"
+                        f"前半 {h1}，後半 {h2}" + ("，已達標但仍不送真單" if ign["ready"] else "，未達標"))
+    print("  起漲模擬（不送真單）: " + "；".join(ign_bits))
 
     m = st.get("market") or {}
     trend = btc_trend(name)

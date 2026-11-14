@@ -294,6 +294,26 @@ QUIET_LONG_PAPER_MAX = 2
 QUIET_LONG_READY_N = 20
 QUIET_LONG_READY_WIN = 0.55
 QUIET_LONG_READY_R = 0.30
+# Ignition longs. A closed bar breaks the prior base on volume.
+# AKE on Nov 13, 13:22 Taipei: 1m base 1.8% wide, volume 17x the prior 20 minutes,
+# close 3.3% through that high, stop under the base about 5%.
+# The 13:15 15m bar was the same shape: base 3.1% wide, volume 15x, close 7.5% through.
+# Replay on Toobit names with 24h quote volume >= $5M, entry at the signal close,
+# stop at the base low, stop-first, 1R target:
+# 1m (base <= 2.5%, volume >= 8x, close within 6% of the base), ~4 days,
+# 484 trades, 42% hit 1R, -0.17R, both halves negative.
+# 15m (8-bar base <= 6%, volume >= 3x, close within 8%), ~15 days,
+# 1026 trades, 42%, -0.08R, both halves negative.
+# Wider and tighter cuts lost too. Paper only, same promotion bar as quiet longs.
+IGNITION_PAPER = True
+IGNITION_PAPER_MAX = 8
+IGNITION_QUOTE_MIN = 5_000_000
+IGNITION_RULES = {
+    "1m": {"base_bars": 20, "base_max": 0.025, "vol_min": 8.0, "break_max": 0.06,
+           "stop_min": 0.008, "stop_max": 0.12},
+    "15m": {"base_bars": 8, "base_max": 0.06, "vol_min": 3.0, "break_max": 0.08,
+            "stop_min": 0.01, "stop_max": 0.12},
+}
 # 15m breakout entries. Live shorts averaged about 0R with swings from +37 USDT to -32.
 BREAKOUT_ENTRIES = False
 # Same-side entries are no longer spaced 30 minutes apart. Closed pairs opened
@@ -825,6 +845,84 @@ def quiet_long_sample(rows: list) -> dict:
     seen: dict[tuple, dict] = {}
     for c in rows:
         if c.get("path") != "QUIET LONG" or not c.get("paper") or c.get("r_result") is None:
+            continue
+        parts = str(c.get("id") or "").split(":")
+        ts = int(parts[-1]) if parts and parts[-1].isdigit() else 0
+        key = (c.get("symbol") or "", ts // 3600)
+        prev = seen.get(key)
+        if prev is None or (c.get("closed_at") or "") < (prev.get("closed_at") or ""):
+            seen[key] = c
+    xs = sorted(seen.values(), key=lambda c: c.get("closed_at") or "")
+    if not xs:
+        return {"n": 0, "wins": 0, "win": None, "mean_r": None, "h1_r": None, "h2_r": None, "ready": False}
+
+    def mean(part: list) -> float:
+        return round(sum(float(x["r_result"]) for x in part) / len(part), 3)
+
+    mid = len(xs) // 2
+    wins = sum(1 for x in xs if float(x["r_result"]) > 0)
+    h1, h2 = (xs[:mid], xs[mid:]) if mid else (xs, [])
+    out = {
+        "n": len(xs), "wins": wins, "win": round(wins / len(xs), 3), "mean_r": mean(xs),
+        "h1_r": mean(h1) if h1 else None, "h2_r": mean(h2) if h2 else None,
+    }
+    out["ready"] = bool(
+        out["n"] >= QUIET_LONG_READY_N and out["win"] >= QUIET_LONG_READY_WIN
+        and out["mean_r"] is not None and out["mean_r"] >= QUIET_LONG_READY_R
+        and (out["h1_r"] or 0) > 0 and (out["h2_r"] or 0) > 0)
+    return out
+
+
+def ignition_setup(rows: list, interval: str, now_ms: float | None = None) -> dict | None:
+    """The just-closed bar breaks a tight base on a volume multiple. None when it does not.
+
+    Entry is that close. The stop is the base low. The prior bar is inside the base,
+    so a close through the base high is the first close through it.
+    """
+    rule = IGNITION_RULES.get(interval)
+    if not rule or not isinstance(rows, list) or not rows:
+        return None
+    span = 60_000 if interval == "1m" else 900_000
+    now_ms = time.time() * 1000 if now_ms is None else now_ms
+    closed = rows
+    try:
+        if int(rows[-1][0]) >= now_ms - span:
+            closed = rows[:-1]
+    except (TypeError, ValueError, IndexError):
+        return None
+    n = rule["base_bars"]
+    if len(closed) < n + 1:
+        return None
+    bar, base = closed[-1], closed[-(n + 1):-1]
+    try:
+        close, vol = float(bar[4]), float(bar[5])
+        hi = max(float(x[2]) for x in base)
+        lo = min(float(x[3]) for x in base)
+        vols = sorted(float(x[5]) for x in base)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if hi <= 0 or lo <= 0 or close <= hi:
+        return None
+    med = vols[len(vols) // 2]
+    if med <= 0:
+        return None
+    base_pct = (hi - lo) / ((hi + lo) / 2)
+    vol_mult = vol / med
+    break_pct = (close - hi) / hi
+    stop_pct = (close - lo) / close
+    if base_pct > rule["base_max"] or vol_mult < rule["vol_min"] or break_pct > rule["break_max"]:
+        return None
+    if not (rule["stop_min"] <= stop_pct <= rule["stop_max"]):
+        return None
+    return {"entry": close, "stop": lo, "broken": hi, "bar_open": int(bar[0]),
+            "base_pct": base_pct, "vol_mult": vol_mult, "break_pct": break_pct, "stop_pct": stop_pct}
+
+
+def ignition_sample(rows: list, path: str) -> dict:
+    """Closed ignition paper trades for one timeframe. The same symbol in the same hour counts once."""
+    seen: dict[tuple, dict] = {}
+    for c in rows:
+        if c.get("path") != path or not c.get("paper") or c.get("r_result") is None:
             continue
         parts = str(c.get("id") or "").split(":")
         ts = int(parts[-1]) if parts and parts[-1].isdigit() else 0

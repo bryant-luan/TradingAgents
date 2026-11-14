@@ -287,6 +287,9 @@ class SelfScanner:
         self.last_scan = 0.0
         self.last_break = 0.0
         self.last_spike = 0.0
+        self.last_ignition_15 = 0.0
+        self._quote_at = 0.0
+        self._quote: dict[str, float] = {}
         self.basis: dict[str, tuple[float, float]] = {}
         self.local = LocalReview(calib_path)
         self.sim_log = calib_path.parent / "local_review_sim.jsonl"
@@ -1059,6 +1062,94 @@ class SelfScanner:
                  broken=broken, price=price, stop=stop, listing=where,
                  note="備案，掛不到就算" + ("。這個幣只在本所" if where == "only" else ""))
         return [{"sig": sig, "ev": ev, "source": "突破"}]
+
+    def fresh_ignitions(self, held: set, specs: dict) -> list:
+        """1m every call, 15m when that bar has had time to close. Paper signals only.
+
+        The replay of both rules lost in each half, so nothing here is a live order.
+        Names under the quote-volume floor are skipped: that is the universe the replay used.
+        """
+        if not S.IGNITION_PAPER:
+            return []
+        now = time.time()
+        if now - self._quote_at > 600:
+            try:
+                self._quote = quote_volumes()
+            except Exception:
+                self._quote = {}
+            self._quote_at = now
+        names = [tsym for tsym, spec in (specs or {}).items()
+                 if tsym not in held and (spec or {}).get("seeone")
+                 and self._quote.get(tsym, 0) >= S.IGNITION_QUOTE_MIN]
+        do_15 = now - self.last_ignition_15 >= SCAN_EVERY_S
+        if do_15:
+            self.last_ignition_15 = now
+        intervals = ("1m", "15m") if do_15 else ("1m",)
+        now_ms = now * 1000
+
+        def one(item):
+            tsym, interval = item
+            need = S.IGNITION_RULES[interval]["base_bars"] + 3
+            try:
+                rows = klines(tsym, interval, need)
+            except Exception:
+                return None
+            hit = S.ignition_setup(rows, interval, now_ms)
+            if not hit:
+                return None
+            return tsym, interval, hit
+
+        found = []
+        tasks = [(tsym, interval) for tsym in names for interval in intervals]
+        with ThreadPoolExecutor(12) as pool:
+            for hit in pool.map(one, tasks):
+                if hit:
+                    found.append(hit)
+        found.sort(key=lambda item: (item[1] != "1m", -item[2]["vol_mult"]))
+        # The 1m break is the earlier price. A 15m bar on the same name is the same move, later.
+        seen = set()
+        out = []
+        for tsym, interval, hit in found:
+            if tsym in seen:
+                continue
+            seen.add(tsym)
+            spec = specs.get(tsym) or {}
+            sym = spec.get("seeone") or tsym
+            out.append(self._ignition_signal(sym, interval, hit))
+        if out or do_15:
+            self.log("IGNITION_SCAN", checked=len(names), m15=do_15,
+                     found=[(specs.get(tsym, {}).get("seeone") or tsym, interval, round(hit["vol_mult"], 1))
+                            for tsym, interval, hit in found[:8]])
+        return out
+
+    def _ignition_signal(self, sym: str, interval: str, hit: dict) -> dict:
+        px, dist = hit["entry"], hit["entry"] - hit["stop"]
+        tps = [px + dist * r for r in TP_R]
+        levels = [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1, "r_multiple": TP_R[i],
+                   "price": tps[i], "hit": False} for i in range(len(TP_R))]
+        label = "1 分鐘" if interval == "1m" else "15 分鐘"
+        path = f"IGNITION {interval}"
+        sig = {"id": f"ign:{sym}:{interval}:{hit['bar_open']}", "symbol": sym, "side": "LONG",
+               "status": "ACTIVE", "timeframe": interval, "entry_price": px, "stop_price": hit["stop"],
+               "current_price": px, "entry_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "levels": levels, "signal_path": path, "path_subtype": None, "broken": hit["broken"],
+               "ignition": True, "paper_only": True}
+        reasons = [
+            f"{label}起漲：收盤 {px:.6g} 漲破前段高點 {hit['broken']:.6g}，這一段量是中位數的 {hit['vol_mult']:.1f} 倍",
+            f"底座振幅 {hit['base_pct']:.1%}，突破 {hit['break_pct']:.1%}，止損放在底座 {hit['stop']:.6g}（{hit['stop_pct']:.1%}）",
+            "只記模擬倉。1 分鐘重放 484 筆、42%、-0.17R；15 分鐘 1026 筆、42%、-0.08R，前後半都是負的",
+            f"模擬滿 {S.QUIET_LONG_READY_N} 筆、勝率至少 {S.QUIET_LONG_READY_WIN:.0%}、"
+            f"平均 R 至少 {S.QUIET_LONG_READY_R:+.2f} 且前後半都為正，才考慮實盤",
+        ]
+        ev = {"ok": True, "score": 90.0, "tier": "NORMAL", "reasons": reasons,
+              "factors": {f"source:{path}": 0.0, "side:LONG": 0.0},
+              "skip": None, "cur_r": 0.0,
+              "analysis": {"prob": None, "edge": None, "quality": None, "ev_r": None}}
+        self.log("IGNITION", symbol=sym, side="LONG", timeframe=interval, price=px, stop=hit["stop"],
+                 vol_mult=round(hit["vol_mult"], 2), base_pct=round(hit["base_pct"] * 100, 2),
+                 break_pct=round(hit["break_pct"] * 100, 2),
+                 note="模擬，不送真單")
+        return {"sig": sig, "ev": ev, "source": path}
 
     def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
              htf: float | None = None) -> list:
