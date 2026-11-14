@@ -828,6 +828,13 @@ class SelfScanner:
         """
         if htf is None:
             return []
+        short_only = tuple(open_sides) == ("SHORT",)
+        if short_only:
+            # Mover boards have wide stops. The short that clears the bar has a stop
+            # under 1%, and those names sit off the boards. Look there first.
+            def on_board(c: dict) -> bool:
+                return any(str(t).startswith(("強勢榜", "潛力榜", "客製化", "主流幣")) for t in (c.get("tags") or []))
+            ordered = sorted(ordered, key=on_board)
         sides = []
         for side in ("LONG", "SHORT"):
             direc = htf if side == "LONG" else -htf
@@ -848,9 +855,14 @@ class SelfScanner:
             # probability loses to shorts. Keep walking until one wash is in hand.
             # It is ranked with the market mood and the coin's own place in the
             # range, not pinned to the first review slot.
-            if (looked >= 160 or n_flush >= 2
-                    or (n_tradable >= REVIEWS_PER_SCAN and (n_flush >= 1 or looked >= 80))):
+            # In a short-only tape, keep walking until the review slate is full of
+            # stops under 1%. The probability and expected-value gates are unchanged.
+            look_cap = 400 if short_only else 160
+            if (looked >= look_cap or n_flush >= 2
+                    or (n_tradable >= REVIEWS_PER_SCAN and (short_only or n_flush >= 1 or looked >= 80))):
                 break
+            if short_only and c.get("symbol") in MAJORS:
+                continue
             tsym = S.to_toobit(c["symbol"])
             if tsym not in specs or tsym in held:
                 continue
@@ -887,6 +899,10 @@ class SelfScanner:
                 tradable = True
             ranked.append((tradable, mood_score, c))
         ranked.sort(key=lambda x: (not x[0], -x[1]))
+        if short_only:
+            ranked = [row for row in ranked if row[0]]
+            self.log("SHORT_SLATE", looked=looked, tradable=len(ranked),
+                     reviewing=min(REVIEWS_PER_SCAN, len(ranked)))
         return [c for _, _, c in ranked[:REVIEWS_PER_SCAN]]
 
     def orderbook_spikes(self, held: set, specs: dict) -> list:

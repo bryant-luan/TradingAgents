@@ -329,6 +329,10 @@ REVERSAL_ROUNDTRIP_R = 1.0
 REVERSAL_DRIFT_PCT = 0.003
 REVERSAL_BACK_PCT = 0.002
 MAX_SAME_SIDE = 2               # open positions on one side
+# A bear tape can hold three self-scan shorts. Each one still clears the same
+# 52.5% probability and +0.50R expected value, so the extra slot does not change
+# the win rate or the R of the trades that open. The book cap stays at 3.
+SELF_SHORT_MAX_SAME_SIDE = 3
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
 QUIET_MAX_SAME_SIDE = 3
