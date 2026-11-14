@@ -57,13 +57,13 @@ MIN_EV_R = 0.50
 # +1.37R / +1.15R by half), against 62%, +1.03R at 50-52.5%. That replay holds to the exchange stop.
 # It does not apply the live 40% recheck or the -0.85R flatten, and the reviews in that band only
 # carry about +0.10R to +0.25R expected value.
-# Live shorts with a filled stop under 1% split the other way. EV under +0.50R: Gate 9 closes,
+# Live shorts with a filled stop under 1% split by expected value. EV under +0.50R: Gate 9 closes,
 # -23.6 USDT, -0.40R (-0.46R / -0.35R by half); Toobit 8 closes, -12.5 USDT, -0.11R, negative in
-# both halves. EV at or above +0.50R: 12 closes across both books, +44.4 USDT, +0.27R. Gate's
-# Nov 11 loss was the low-EV bucket: five recheck exits, -10.5 USDT, and ZK / MUBARAK flattened
-# at -0.85R, -14.0 USDT. The live floor stays +0.50R. Probability stays at 52.5% because a review
-# can clear +0.50R EV below 61%.
-SHORT_MIN_EV_R = 0.50
+# both halves. EV at or above +0.50R: 12 closes across both books, +44.4 USDT, +0.27R. That split
+# is too small to retune from, and a tape of +0.20R to +0.42R reviews was opening nothing, so the
+# live record had stopped growing. Reviews from +0.20R to +0.50R now open at the normal risk and
+# stay in the live sample. The 8% size still requires +0.50R. Probability stays at 52.5%.
+SHORT_MIN_EV_R = S.SELF_SHORT_SAMPLE_EV
 SHORT_MIN_PROB = 52.5
 CONFIRM_MIN_PROB = 50.0
 REVIEW_COOLDOWN_S = 900

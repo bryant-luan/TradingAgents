@@ -759,6 +759,11 @@ class Bot:
                 margin_cap = max(margin_cap, S.SELF_SHORT_MARGIN_CAP_PCT)
                 ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌、非逆強勢) 風險 {risk_pct:.0%}："
                                                  "驗算 74% 勝、+1.44R"]
+        elif (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
+              and S.SELF_SHORT_SAMPLE_EV <= ((ev.get("analysis") or {}).get("ev_r") or 0) < S.SELF_SHORT_FULL_RISK_EV):
+            ev_r = (ev.get("analysis") or {}).get("ev_r") or 0
+            ev["reasons"] = ev["reasons"] + [
+                f"期望值 {ev_r:+.2f}R 未達滿倉 +{S.SELF_SHORT_FULL_RISK_EV:.2f}R，以一般風險開倉，記入實盤樣本"]
         room_pct = getattr(self, "day_room", equity * risk_pct) / equity
         if not probe and room_pct < S.MIN_RISK_PCT:
             self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"

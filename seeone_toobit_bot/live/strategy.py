@@ -202,8 +202,11 @@ SELF_SHORT_BTC24H_MIN = 0.0
 # still ~0.4, so 8% is about a fifth of it; sequential max drawdown on that haircut replay was 27%.
 # 8% at a 1% stop and 25x needs a 32% margin slot.
 SELF_SHORT_RISK_PCT = 0.08
-# The live +1.11R came from reviews at +0.50R EV or more; below that the setup opens at the normal risk.
+# The live +1.11R came from reviews at +0.50R EV or more. Those keep the 8% size.
+# From +0.20R up to that line the short still opens, at the normal risk, so the live
+# sample in this band can grow. Below +0.20R stays out.
 SELF_SHORT_FULL_RISK_EV = 0.50
+SELF_SHORT_SAMPLE_EV = 0.20
 SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # Of 21 indicators replayed on those 335 shorts, only two split them the same way in both halves:
 # the coin already up 3%+ over 24h, or 15m EMA20 more than 0.14% above EMA50. Either one: 52% win,
