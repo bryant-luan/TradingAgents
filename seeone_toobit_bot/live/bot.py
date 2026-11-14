@@ -54,6 +54,13 @@ def combo_target(day: str) -> tuple[float, float] | None:
     return (float(lo), float(hi)) if d == day else None
 
 
+def _book_pnl(c: dict) -> float:
+    """Quiet-long paper probes do not move the live day's profit or loss."""
+    if c.get("paper_probe"):
+        return 0.0
+    return c.get("pnl") or 0
+
+
 def combo_gain(day: str) -> float:
     total = 0.0
     for p in BOOK_STATES:
@@ -61,7 +68,7 @@ def combo_gain(day: str) -> float:
             closed = json.loads(p.read_text()).get("closed") or []
         except (OSError, ValueError):
             continue
-        total += sum(c.get("pnl") or 0 for c in closed if (c.get("closed_at") or "").startswith(day))
+        total += sum(_book_pnl(c) for c in closed if (c.get("closed_at") or "").startswith(day))
     return total
 
 
@@ -255,7 +262,7 @@ class Bot:
             # Taipei on Nov 8 was a qualified review; the maker kept 32,791 of 353,265
             # contracts and this cleanup flattened it at +0.06R. Price later reached +1R.
             partial_keep = "保留已成交" in str((tr.get("entry_fill") or {}).get("note") or "")
-            if (not tr.get("exit_reason") and not partial_keep
+            if (not tr.get("exit_reason") and not tr.get("paper_probe") and not partial_keep
                     and not any(tp["filled"] for tp in tr["tps"])
                     and tr["risk_usdt"] < ref_eq * S.MIN_RISK_PCT * 0.5):
                 tr["exit_reason"] = (f"小倉位清理: 風險僅 {tr['risk_usdt']:.2f}u "
@@ -411,6 +418,13 @@ class Bot:
             log_event("TP_HIT", trade_id=tr["id"], symbol=sym, side=side, label=tp["label"], price=tp["price"],
                       qty=tp["qty"], paper=True, reason=f"模擬盤觸及 {tp['label']}")
 
+    def _with_paper(self, positions: dict) -> dict:
+        """Keep a paper probe in the management map without hiding a real position."""
+        merged = dict(positions)
+        for key, pos in self._paper_positions().items():
+            merged.setdefault(key, pos)
+        return merged
+
     def _paper_positions(self) -> dict:
         out = {}
         for tr in self.st["trades"].values():
@@ -434,15 +448,22 @@ class Bot:
                 close_px = tr["entry"]
         mult = float(self.tb.specs()[sym]["multiplier"])
         pnl = (float(close_px) - float(tr["entry"])) * sgn * float(tr["contracts"]) * mult
+        if tr.get("paper_probe"):
+            pnl -= float(tr["contracts"]) * mult * (
+                float(tr["entry"]) * S.MAKER_FEE + float(close_px) * S.TAKER_FEE)
         r_result = round(pnl / tr["risk_usdt"], 3) if tr.get("risk_usdt") else None
         reason = tr.get("exit_reason") or "模擬盤結束"
         log_event("EXIT", trade_id=tid, symbol=sym, side=side, reason=reason, paper=True,
                   entry=tr["entry"], close_avg=close_px, realized_pnl_usdt=round(pnl, 4), r_result=r_result,
-                  held_min=round((time.time() - tr["opened_ts"]) / 60, 1))
+                  held_min=round((time.time() - tr["opened_ts"]) / 60, 1),
+                  paper_probe=bool(tr.get("paper_probe")))
         self.st["closed"].append({"id": tid, "symbol": sym, "side": side, "path": tr.get("path"),
                                   "pnl": round(pnl, 4), "r_result": r_result, "closed_at": now_iso(),
-                                  "reason": reason, "paper": True, "listing": tr.get("listing")})
+                                  "reason": reason, "paper": True, "paper_probe": bool(tr.get("paper_probe")),
+                                  "listing": tr.get("listing")})
         self.st["trades"].pop(tid, None)
+        if tr.get("paper_probe") and tr.get("path") == "QUIET LONG":
+            self._note_quiet_long()
 
     def _end_paper(self):
         for tid, tr in list(self.st["trades"].items()):
@@ -537,8 +558,68 @@ class Bot:
             return f"爆量洗盤多單實盤已連續 {S.BOUNCE_STOP_AFTER_LOSSES} 筆虧損，停用"
         return None
 
+    def _risk_trades(self) -> list:
+        """Trades that use the live book's margin and loss room. A full paper bot counts its own."""
+        if self.paper:
+            return list(self.st["trades"].values())
+        return [t for t in self.st["trades"].values() if not t.get("paper_probe")]
+
+    def _same_side(self, side: str) -> list:
+        return [t for t in self._risk_trades() if t["side"] == side and not t.get("exit_reason")]
+
+    def _release_paper(self, tsym: str):
+        """A live entry on this symbol settles the paper probe at the current price."""
+        if self.paper:
+            return
+        for tid, tr in list(self.st["trades"].items()):
+            if not tr.get("paper_probe") or tr["tsym"] != tsym or tr.get("exit_reason"):
+                continue
+            tr["exit_reason"] = "這個幣改開實盤，模擬單按現價結算"
+            try:
+                tr["paper_exit_px"] = self.tb.price(tsym)
+            except Exception:
+                tr["paper_exit_px"] = tr["entry"]
+            self.finish(tid, tr)
+
+    def _note_quiet_long(self):
+        rows = list(self.st["closed"])
+        for p in BOOK_STATES:
+            if p == STATE_FILE:
+                continue
+            try:
+                rows.extend(json.loads(p.read_text()).get("closed") or [])
+            except (OSError, ValueError):
+                continue
+        sample = S.quiet_long_sample(rows)
+        log_event("QUIET_LONG_PAPER", **sample,
+                  reason=("模擬樣本已達標，仍不送真單" if sample["ready"]
+                          else f"模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、勝率 {S.QUIET_LONG_READY_WIN:.0%}、"
+                               f"平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
+
+    def _open_quiet_long_paper(self, sig, ev, src, reg, equity):
+        if not sig.get("paper_only"):
+            return
+        open_n = sum(1 for t in self.st["trades"].values() if t.get("paper_probe") and not t.get("exit_reason"))
+        if open_n >= S.QUIET_LONG_PAPER_MAX:
+            self.note_skip(sig, f"安靜多單模擬已有 {open_n} 筆，上限 {S.QUIET_LONG_PAPER_MAX}")
+            return
+        tsym = S.to_toobit(sig["symbol"])
+        if any(t["tsym"] == tsym and not t.get("paper_probe") for t in self.st["trades"].values()):
+            self.note_skip(sig, "這個幣有實盤倉，模擬多單不疊加")
+            return
+        if any(t["tsym"] == tsym and t.get("paper_probe") and not t.get("exit_reason")
+               for t in self.st["trades"].values()):
+            self.note_skip(sig, "這個幣的安靜多單模擬還在")
+            return
+        try:
+            self.open_trade(sig, ev, src, reg, equity)
+        except ToobitError as e:
+            self.st["traded_ids"].append(sig["id"])
+            log_event("ERROR", where="quiet_long_paper", symbol=sig["symbol"], error=str(e))
+
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
+        probe = bool(sig.get("paper_only")) and not self.paper
         if S.SKIP_GATE_ONLY and getattr(self.tb, "name", "") == "gate" and listing(sym) == "only":
             self.note_skip(sig, "只在 Gate 上市的幣先不開：11-09 COOL、FATCOIN、FLORK、ZZZ 4 筆全虧")
             return False
@@ -575,20 +656,20 @@ class Bot:
                 ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌、非逆強勢) 風險 {risk_pct:.0%}："
                                                  "驗算 74% 勝、+1.44R"]
         room_pct = getattr(self, "day_room", equity * risk_pct) / equity
-        if room_pct < S.MIN_RISK_PCT:
+        if not probe and room_pct < S.MIN_RISK_PCT:
             self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
                                 f"已計入持倉到止損的風險)，不足 {S.MIN_RISK_PCT:.0%} 最低風險")
             return False
-        if room_pct < risk_pct:
+        if not probe and room_pct < risk_pct:
             ev["reasons"] = ev["reasons"] + [f"風險 {risk_pct:.0%} 受每日止損剩餘額度限制為 {room_pct:.1%}"]
             risk_pct = room_pct
         sz = S.size_position(equity, price, stop, spec, risk_pct, margin_cap)
         if not sz:
             self.note_skip(sig, f"無法以至少 {S.MIN_RISK_PCT:.0%} 風險建立部位 (槓桿/保證金上限或最小下單量)，不開小倉")
             return False
-        used = sum(t.get("margin") or 0 for t in self.st["trades"].values())
+        used = sum(t.get("margin") or 0 for t in self._risk_trades())
         room = equity * S.MAX_TOTAL_MARGIN_PCT - used
-        if sz["margin"] > room:
+        if not probe and sz["margin"] > room:
             self.note_skip(sig, f"這筆保證金 {sz['margin']:.0f}u、{sz['leverage']}x，"
                                 f"剩餘保證金額度 {max(0, room):.0f}u，總上限 {S.MAX_TOTAL_MARGIN_PCT:.0%}，再開不下")
             return False
@@ -602,7 +683,9 @@ class Bot:
         if self.dry:
             log_event("DRY_ENTRY", **entry_info)
             return True
-        if self.paper:
+        if not sig.get("paper_only"):
+            self._release_paper(sym)
+        if self.paper or sig.get("paper_only"):
             self.st["traded_ids"].append(sig["id"])
             fill = {"filled": sz["contracts"], "maker": sz["contracts"], "taker": 0, "order_ids": [],
                     "note": "模擬盤，未送交易所"}
@@ -650,7 +733,8 @@ class Bot:
         entry = float(pos.get("avgPrice") or p["price"])
         contracts = fill["filled"] or sz["contracts"]
         plan = S.tp_plan(sig, contracts, spec["min_contracts"])
-        tps = self.place_tps(sym, side, p.get("tp_ref", entry), plan)
+        paper = bool(self.paper or sig.get("paper_only"))
+        tps = self.place_tps(sym, side, p.get("tp_ref", entry), plan, paper=paper)
         sz = {**sz, "contracts": contracts}
         entry_fee = S.MAKER_FEE if fill["maker"] >= fill["taker"] else S.TAKER_FEE
         tid = f"{sym}:{side}:{int(time.time())}"
@@ -672,12 +756,14 @@ class Bot:
             "same_side_at_entry": sum(1 for t in self.st["trades"].values() if t["side"] == side),
             "factors": ev["factors"], "entry_cur_r": ev["cur_r"], "score": ev["score"], "regime": p["regime"],
             "listing": listing(sym),
-            "paper": self.paper,
+            "paper": paper,
+            "paper_probe": bool(sig.get("paper_only")),
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=fill.get("order_ids"),
-                  listing=self.st["trades"][tid]["listing"], paper=bool(self.paper),
+                  listing=self.st["trades"][tid]["listing"], paper=paper,
+                  paper_probe=bool(sig.get("paper_only")),
                   tp_orders=[(t["label"], t["price"], t["qty"], t["order_id"]) for t in tps], **p["entry_info"])
-        if hasattr(self, "day_room"):
+        if hasattr(self, "day_room") and not (sig.get("paper_only") and not self.paper):
             self.day_room -= self.st["trades"][tid]["risk_usdt"]
 
     def reconcile(self, positions: dict):
@@ -973,9 +1059,9 @@ class Bot:
             log_event("TP_MIGRATE", trade_id=tr["id"], symbol=sym, moved_to_maker=moved,
                       reason="觸發市價止盈改為 Maker 限價止盈，降低手續費")
 
-    def place_tps(self, sym: str, side: str, entry: float, plan: list) -> list:
+    def place_tps(self, sym: str, side: str, entry: float, plan: list, paper: bool = False) -> list:
         """TPs as post-only limit closes (maker fee); a TP that would cross falls back to a trigger order."""
-        if self.paper:
+        if paper or self.paper:
             tps = []
             for tp in plan:
                 if (tp["price"] <= entry) if side == "LONG" else (tp["price"] >= entry):
@@ -1025,13 +1111,13 @@ class Bot:
         return out
 
     def _margin_full(self, equity: float) -> bool:
-        used = sum(t.get("margin") or 0 for t in self.st["trades"].values())
+        used = sum(t.get("margin") or 0 for t in self._risk_trades())
         return used >= equity * S.MAX_TOTAL_MARGIN_PCT - 1
 
     def open_risk(self) -> float:
         specs = self.tb.specs()
         total = 0.0
-        for t in self.st["trades"].values():
+        for t in self._risk_trades():
             sgn = 1 if t["side"] == "LONG" else -1
             mult = float(specs.get(t["tsym"], {}).get("multiplier", 0))
             total += t["contracts"] * mult * max(0.0, (t["entry"] - t["stop"]) * sgn)
@@ -1117,7 +1203,7 @@ class Bot:
                 self._mark_equity, _ = self.equity()
             except Exception:
                 self._mark_equity = self.st.get("day_start_equity") or 0
-            self.manage(positions, sigmap)
+            self.manage(self._with_paper(positions), sigmap)
             positions = {(p["symbol"], p.get("side")): p for p in self.tb.positions()}
             self.reconcile(positions)
 
@@ -1129,7 +1215,7 @@ class Bot:
             if self.st["day"] != day:
                 self.st["day"], self.st["day_start_equity"] = day, equity
             else:
-                today = sum(c["pnl"] or 0 for c in self.st["closed"] if c["closed_at"].startswith(day))
+                today = sum(_book_pnl(c) for c in self.st["closed"] if c["closed_at"].startswith(day))
             self.st["day_start_balance"] = bal - today
             self.st["day_peak_balance"] = bal
             for k in ("halted", "day_lock_armed", "day_lock_hit", "day_peak_equity", "day_lock_ts", "day_target_done",
@@ -1140,7 +1226,7 @@ class Bot:
         # so half of it was kept out of position size and each new trade risked about 4.4u
         # instead of 5% of the account. Principal only moves up.
         cutoff = (os.environ.get("GATE_SIM_UNTIL") or "") if getattr(self.tb, "name", "") == "gate" else ""
-        booked = sum((c.get("pnl") or 0) for c in self.st["closed"]
+        booked = sum(_book_pnl(c) for c in self.st["closed"]
                      if not cutoff or (c.get("closed_at") or "") >= cutoff)
         capital = self.realized - booked
         if capital > self.st["principal"] + 1:
@@ -1153,7 +1239,7 @@ class Bot:
         # on Nov 10 read as 151u profit and stopped new entries for the day.
         self.st.pop("day_target_done", None)
         start = self.st["day_start_balance"]
-        gained = sum(c.get("pnl") or 0 for c in self.st["closed"] if (c.get("closed_at") or "").startswith(day))
+        gained = sum(_book_pnl(c) for c in self.st["closed"] if (c.get("closed_at") or "").startswith(day))
         peak_gain = self.st["day_peak_gain"] = max(self.st.get("day_peak_gain", 0.0), gained)
         peak = start + peak_gain
         override = LOCK_OFF_FILE.exists() and LOCK_OFF_FILE.read_text().strip() == day
@@ -1179,18 +1265,21 @@ class Bot:
             if why:
                 self.st["combo_done"] = day
                 log_event("DAY_TARGET_DONE", combined=round(total, 2), band=list(band), reason=why + "，今日停止開新倉")
+        live_open = True
         if self.st.get("day_target_hit") or (band and self.st.get("combo_done") == day):
             if signals is not None:
                 self.record_signal_snapshots(signals)
-            return
-        if not override and peak - start >= S.DAY_TARGET_ARM_USDT and not self.st.get("day_lock_armed"):
+            live_open = False
+        if live_open and not override and peak - start >= S.DAY_TARGET_ARM_USDT and not self.st.get("day_lock_armed"):
             self.st["day_lock_armed"] = True
             self.st["day_lock_ts"] = time.time()
             log_event("DAY_LOCK_ARMED", day_start_balance=round(start, 2), balance=round(bal, 2),
                       reason=f"當日已實現獲利達 {S.DAY_TARGET_ARM_USDT:.0f}u。進場仍用同一套規則，"
                              f"一路放到 {S.DAY_TARGET_CAP_USDT:.0f}u 才停止開新倉")
         loss_floor = self.st["day_start_equity"] * (1 - S.DAILY_STOP_PCT)
-        if RISK_OPEN_FILE.exists():
+        if not live_open:
+            self.day_room = 0
+        elif RISK_OPEN_FILE.exists():
             if self.st.get("risk_open_logged") != day:
                 self.st.pop("halted", None)
                 self.st["risk_open_logged"] = day
@@ -1205,7 +1294,8 @@ class Bot:
                           day_start_equity=self.st["day_start_equity"], equity=equity)
             if signals is not None:
                 self.record_signal_snapshots(signals)
-            return
+            live_open = False
+            self.day_room = 0
         else:
             self.day_room = equity - loss_floor - self.open_risk()
         if sigmap is None:
@@ -1213,8 +1303,10 @@ class Bot:
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
             self.record_signal_snapshots(signals)
             return
-        if self._margin_full(equity):
+        if live_open and self._margin_full(equity):
             self.record_signal_snapshots(signals)
+            live_open = False
+        if not live_open and not S.QUIET_LONG_PAPER:
             return
 
         dirs = self.dirs = self.so.directions()
@@ -1227,7 +1319,8 @@ class Bot:
         specs = self.tb.specs()
         # Each venue publishes its own contract list. A coin listed only on the other exchange is not traded here.
         self.st["tradable_contracts"] = len(specs)
-        held_syms = {s for s, _ in positions} | {t["tsym"] for t in self.st["trades"].values()}
+        held_syms = {s for s, _ in positions} | {
+            t["tsym"] for t in self.st["trades"].values() if not t.get("paper_probe") or self.paper}
 
         cands = [(s, "官方訊號") for s in signals if s.get("status") == "ACTIVE"]
         cands += [(b, "強勢榜") for b in board_rows if b.get("id") and b["id"] not in sigmap]
@@ -1288,9 +1381,13 @@ class Bot:
             btc24h = None
         self.btc24h = btc24h
         moves = {}
+        paper_later = []
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
-            if self._margin_full(size_eq):
-                break
+            if sig.get("paper_only"):
+                paper_later.append((sig, ev, src))
+                continue
+            if not live_open or self._margin_full(size_eq):
+                continue
             sgn = 1 if sig["side"] == "LONG" else -1
             cd = self.learner.p.get("symbol_cooldown", {}).get(sig["symbol"], 0)
             if cd > time.time():
@@ -1308,7 +1405,7 @@ class Bot:
                 if sig["side"] == "LONG" and not S.ORDERBOOK_LONGS:
                     self.note_skip(sig, "訂單簿爆漲多單停用：實盤 8 筆 -0.35R、-20u")
                     continue
-                same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
+                same = self._same_side(sig["side"])
                 if len(same) >= S.MAX_SAME_SIDE:
                     self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
                     continue
@@ -1319,7 +1416,7 @@ class Bot:
                     log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
                 continue
             if sig.get("breakout"):
-                same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
+                same = self._same_side(sig["side"])
                 if len(same) >= S.MAX_SAME_SIDE:
                     self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
                     continue
@@ -1453,7 +1550,7 @@ class Bot:
                 self.note_skip(sig, f"{sig['symbol']} 15m RSI 在{'做多' if sgn > 0 else '做空'}方向只有 {rsi:.0f} "
                                     f"(< 下限 {rsi_min:.0f})，短線動能與方向相反，等轉強再進")
                 continue
-            same = [t for t in self.st["trades"].values() if t["side"] == sig["side"]]
+            same = self._same_side(sig["side"])
             same_cap = S.QUIET_MAX_SAME_SIDE if sig.get("quiet_strong_short") or sig.get("quiet_strong_long") else S.MAX_SAME_SIDE
             if len(same) >= same_cap:
                 self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
@@ -1463,6 +1560,9 @@ class Bot:
             except ToobitError as e:
                 self.st["traded_ids"].append(sig["id"])
                 log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
+        if S.QUIET_LONG_PAPER:
+            for sig, ev, src in paper_later:
+                self._open_quiet_long_paper(sig, ev, src, reg, size_eq)
 
     def _scan_worker(self, reg, rhits, held, specs, m15, htf):
         """Self-scan, order-book spikes and 15m breakouts. The self-scan spaces its See One reviews
@@ -1632,6 +1732,7 @@ class Bot:
             tradable = None
         self.st["tradable_contracts"] = tradable
         log_event("START", dry_run=self.dry, paper=self.paper, exchange=self.tb.name, tradable_contracts=tradable,
+                  quiet_long_paper=S.QUIET_LONG_PAPER, quiet_longs_live=S.QUIET_LONGS,
                   sim_until=os.environ.get("GATE_SIM_UNTIL"),
                   seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,

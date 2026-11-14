@@ -281,11 +281,19 @@ QUIET_MAX_SAME_SIDE = 3
 # Quiet shorts are an entry alongside the self-scan short. Liquid names with the
 # 1h/4h already aligned in [1.5, 2.5) were +0.76R on 37 reviews. The four live
 # closes (XAG, XAU, XRP, SOXL) all won, mean +1.01R. The same band on the long
-# side was -0.99R on 14 rows, both halves negative, so quiet longs stay off.
+# side was -0.99R on 14 rows, both halves negative, so quiet longs stay off the
+# live book. They paper-trade until a fresh sample clears the bar below.
 QUIET_HTF_MIN = 1.5
 QUIET_HTF_MAX = 2.5
 QUIET_ENTRIES = True
 QUIET_LONGS = False
+QUIET_LONG_PAPER = True
+QUIET_LONG_PAPER_MAX = 2
+# Promotion is recorded, not automatic. 20 closes, win rate at least 55%,
+# mean R at least +0.30, and both halves above zero. Until then no live order.
+QUIET_LONG_READY_N = 20
+QUIET_LONG_READY_WIN = 0.55
+QUIET_LONG_READY_R = 0.30
 # 15m breakout entries. Live shorts averaged about 0R with swings from +37 USDT to -32.
 BREAKOUT_ENTRIES = False
 # Same-side entries are no longer spaced 30 minutes apart. Closed pairs opened
@@ -812,6 +820,39 @@ def recipe_hits(recipes: list) -> dict:
     return out
 
 
+def quiet_long_sample(rows: list) -> dict:
+    """Closed quiet-long paper trades. The same symbol in the same hour counts once."""
+    seen: dict[tuple, dict] = {}
+    for c in rows:
+        if c.get("path") != "QUIET LONG" or not c.get("paper") or c.get("r_result") is None:
+            continue
+        parts = str(c.get("id") or "").split(":")
+        ts = int(parts[-1]) if parts and parts[-1].isdigit() else 0
+        key = (c.get("symbol") or "", ts // 3600)
+        prev = seen.get(key)
+        if prev is None or (c.get("closed_at") or "") < (prev.get("closed_at") or ""):
+            seen[key] = c
+    xs = sorted(seen.values(), key=lambda c: c.get("closed_at") or "")
+    if not xs:
+        return {"n": 0, "wins": 0, "win": None, "mean_r": None, "h1_r": None, "h2_r": None, "ready": False}
+
+    def mean(part: list) -> float:
+        return round(sum(float(x["r_result"]) for x in part) / len(part), 3)
+
+    mid = len(xs) // 2
+    wins = sum(1 for x in xs if float(x["r_result"]) > 0)
+    h1, h2 = (xs[:mid], xs[mid:]) if mid else (xs, [])
+    out = {
+        "n": len(xs), "wins": wins, "win": round(wins / len(xs), 3), "mean_r": mean(xs),
+        "h1_r": mean(h1) if h1 else None, "h2_r": mean(h2) if h2 else None,
+    }
+    out["ready"] = bool(
+        out["n"] >= QUIET_LONG_READY_N and out["win"] >= QUIET_LONG_READY_WIN
+        and out["mean_r"] is not None and out["mean_r"] >= QUIET_LONG_READY_R
+        and (out["h1_r"] or 0) > 0 and (out["h2_r"] or 0) > 0)
+    return out
+
+
 def path_expectancy(signals: list, own_trades: list) -> dict:
     """Mean realized R per signal_path, from See One's closed signals and our own closed trades."""
     stats: dict[str, list] = {}
@@ -819,9 +860,9 @@ def path_expectancy(signals: list, own_trades: list) -> dict:
         if s.get("status") == "CLOSED" and s.get("realized_r") is not None:
             stats.setdefault(s.get("signal_path") or "?", []).append(float(s["realized_r"]))
     own: dict[str, list] = {}
-    for t in own_trades[-30:]:
-        if t.get("r_result") is not None:
-            own.setdefault(t.get("path") or "?", []).append(float(t["r_result"]))
+    live_own = [t for t in own_trades if not t.get("paper") and t.get("r_result") is not None]
+    for t in live_own[-30:]:
+        own.setdefault(t.get("path") or "?", []).append(float(t["r_result"]))
     return {
         "seeone": {k: (round(sum(v) / len(v), 3), len(v)) for k, v in stats.items()},
         "own": {k: (round(sum(v) / len(v), 3), len(v)) for k, v in own.items()},

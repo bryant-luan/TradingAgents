@@ -16,6 +16,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from . import strategy as S
 from .exchange import connect
 from .market import klines
 from .rulescore import line as rule_line
@@ -235,7 +236,8 @@ def report_venue(name: str, hours: float | None, now: datetime, book: set[str], 
             where = place_label(as_tsym(e.get("symbol") or e.get("trade_id")), book, other)
         prefix = "模擬 " if e.get("paper") else ""
         print(f"  {tpe(e['ts'])} {prefix}{msg}" + (f" | {where}" if where else ""))
-    closed = [c for c in st["closed"] if c.get("closed_at", "") > since and c.get("pnl") is not None]
+    closed = [c for c in st["closed"] if c.get("closed_at", "") > since and c.get("pnl") is not None
+              and not c.get("paper")]
     if closed:
         print(f"  期間已平倉 {len(closed)} 筆，合計 {sum(c['pnl'] for c in closed):+.2f}u，"
               f"平均 {sum(c['r_result'] or 0 for c in closed) / len(closed):+.2f}R")
@@ -246,6 +248,13 @@ def report_venue(name: str, hours: float | None, now: datetime, book: set[str], 
             rs = [x.get("r_result") or 0 for x in rows]
             print(f"  其中{label} {len(rows)} 筆，合計 {sum(x.get('pnl') or 0 for x in rows):+.2f}u，"
                   f"平均 {sum(rs) / len(rows):+.2f}R")
+    sample = S.quiet_long_sample(st.get("closed") or [])
+    if sample["n"]:
+        h1 = "—" if sample["h1_r"] is None else f"{sample['h1_r']:+.2f}R"
+        h2 = "—" if sample["h2_r"] is None else f"{sample['h2_r']:+.2f}R"
+        print(f"  安靜多單模擬 {sample['n']} 筆，勝率 {sample['win']:.0%}，平均 {sample['mean_r']:+.2f}R，"
+              f"前半 {h1}，後半 {h2}"
+              + ("，已達標但仍不送真單" if sample["ready"] else "，未達標"))
 
     m = st.get("market") or {}
     trend = btc_trend(name)
