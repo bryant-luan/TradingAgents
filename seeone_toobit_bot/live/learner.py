@@ -42,6 +42,8 @@ class Learner:
         self.path, self.insight_log, self.log = path, insight_log, log_event
         self._close_mtime: dict[str, float] = {}
         self._close_stats: dict[str, dict] | None = None
+        self._close_rows: list[dict] | None = None
+        self._sample_stamp: dict[str, float] | None = None
         self.p = {**json.loads(json.dumps(DEFAULTS))}
         if path.exists():
             self.p.update(json.loads(path.read_text()))
@@ -52,22 +54,26 @@ class Learner:
         root = parent.parent if parent.name == "gate" else parent
         return [root, root / "gate"]
 
-    def _shared_stats(self) -> dict:
-        """Factor results from each book's own fills. The seeded copy is not added twice."""
+    def _trade_logs(self) -> tuple[list[Path], dict[str, float]]:
         logs = [base / "trades" / "live_trades.jsonl" for base in self.book_roots()]
         logs = [p for p in logs if p.exists()]
         stamp = {}
         for path in logs:
             try:
-                st = path.stat()
+                stamp[str(path)] = path.stat().st_mtime
             except OSError:
                 continue
-            stamp[str(path)] = st.st_mtime
-        if self._close_stats is not None and stamp == self._close_mtime:
-            return self._close_stats
-        entries: dict[str, dict] = {}
-        exits: list[dict] = []
+        return logs, stamp
+
+    def _live_closes(self) -> list[dict]:
+        """Real fills only. Paper trades and adopted positions are not optimization samples."""
+        logs, stamp = self._trade_logs()
+        if self._close_rows is not None and stamp == self._close_mtime:
+            return self._close_rows
+        entries: dict[str, tuple[str, dict]] = {}
+        exits: list[tuple[str, dict]] = []
         for path in logs:
+            venue = "gate" if path.parent.parent.name == "gate" else "toobit"
             try:
                 lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
             except OSError:
@@ -80,38 +86,89 @@ class Learner:
                 except ValueError:
                     continue
                 event, tid = row.get("event"), row.get("trade_id")
-                if not tid:
+                if not tid or row.get("paper"):
                     continue
                 if event == "ENTRY":
-                    entries[tid] = row
+                    entries[tid] = (venue, row)
                 elif event == "EXIT" and row.get("r_result") is not None:
-                    exits.append(row)
-        merged: dict[str, dict] = {}
+                    exits.append((venue, row))
+        rows: list[dict] = []
         seen: set[str] = set()
-        for row in exits:
+        for venue, row in exits:
             tid = row["trade_id"]
             if tid in seen:
                 continue
             seen.add(tid)
-            opened = entries.get(tid) or {}
-            if opened.get("source") == "接管持倉":
+            opened_venue, opened = entries.get(tid, (venue, {}))
+            if opened.get("paper") or opened.get("source") == "接管持倉":
                 continue
-            r = float(row["r_result"])
-            win = r > FLAT_R
-            for tag in opened.get("factors") or {}:
+            rows.append({
+                "venue": opened_venue,
+                "trade_id": tid,
+                "ts": row.get("ts"),
+                "symbol": opened.get("symbol") or row.get("symbol"),
+                "side": opened.get("side") or row.get("side"),
+                "path": opened.get("path") or row.get("path"),
+                "source": opened.get("source") or row.get("source"),
+                "score": opened.get("score"),
+                "r": float(row["r_result"]),
+                "pnl": row.get("realized_pnl_usdt"),
+                "factors": opened.get("factors") or {},
+            })
+        merged: dict[str, dict] = {}
+        for row in rows:
+            win = row["r"] > FLAT_R
+            for tag in row["factors"]:
                 slot = merged.setdefault(tag, {"n": 0, "wins": 0, "sum_r": 0.0})
                 slot["n"] += 1
                 slot["wins"] += int(win)
-                slot["sum_r"] = round(slot["sum_r"] + r, 4)
+                slot["sum_r"] = round(slot["sum_r"] + row["r"], 4)
         self._close_mtime = stamp
+        self._close_rows = rows
         self._close_stats = merged
-        return merged
+        return rows
+
+    def _shared_stats(self) -> dict:
+        """Factor results from each book's real fills. The seeded copy is not added twice."""
+        self._live_closes()
+        return self._close_stats or {}
+
+    def reference_summary(self) -> dict:
+        rows = self._live_closes()
+
+        def pack(xs: list[dict]) -> dict:
+            n = len(xs)
+            wins = sum(1 for r in xs if r["r"] > FLAT_R)
+            mean = None if n == 0 else round(sum(r["r"] for r in xs) / n, 3)
+            return {"n": n, "wins": wins, "win_rate": None if n == 0 else round(wins / n, 3), "mean_r": mean}
+
+        by: dict[str, list] = {}
+        for row in rows:
+            by.setdefault(row.get("path") or "?", []).append(row)
+        return {"books": ["toobit", "gate"], **pack(rows),
+                "by_path": {k: pack(v) for k, v in sorted(by.items())}}
+
+    def _publish_samples(self, rows: list[dict]):
+        """Write the real-fill ledger once per change, for the optimizer to read back."""
+        if self._close_mtime == self._sample_stamp:
+            return
+        dest = self.book_roots()[0] / "live_samples.json"
+        summary = self.reference_summary()
+        payload = {"updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **summary, "samples": rows}
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False))
+        tmp.replace(dest)
+        self._sample_stamp = dict(self._close_mtime)
+        self.log("LIVE_REFERENCE", **summary)
 
     def absorb_peers(self) -> list[str]:
-        """Set score weights from both books' closes. Cooldowns and the score floor stay local."""
+        """Set score weights from both books' real fills. Cooldowns and the score floor stay local."""
+        rows = self._live_closes()
+        self._publish_samples(rows)
         changes = []
         adj = self.p.setdefault("factor_adj", {})
-        for tag, st in self._shared_stats().items():
+        for tag, st in (self._close_stats or {}).items():
             if st["n"] < FACTOR_MIN_N:
                 continue
             new = round(max(FACTOR_ADJ_MIN, min(FACTOR_ADJ_MAX, st["sum_r"] / st["n"] * FACTOR_GAIN)), 1)
@@ -120,7 +177,7 @@ class Learner:
                 adj[tag] = new
                 changes.append(
                     f"因子 [{tag}] 權重 {old:+.1f} → {new:+.1f} "
-                    f"(兩所合計 n={st['n']}, 勝率 {st['wins'] / st['n']:.0%}, 平均 {st['sum_r'] / st['n']:+.2f}R)"
+                    f"(實盤合計 n={st['n']}, 勝率 {st['wins'] / st['n']:.0%}, 平均 {st['sum_r'] / st['n']:+.2f}R)"
                 )
         if changes:
             self.save()

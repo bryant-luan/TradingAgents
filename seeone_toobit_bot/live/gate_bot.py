@@ -4,7 +4,7 @@ Gate reads seeone_toobit_bot/.env.gate. See One login still comes from .env.
 Its book, pause file, and log live under logs/gate, so it does not manage Toobit positions.
 The learned thresholds and review calibration are copied once from the Toobit bot.
 Later, each book keeps its own cooldowns and score floor, and both recompute factor
-weights from the two books' closed trades together.
+weights from the two books' real fills. Paper closes stay out of that sample.
 """
 import json
 import os

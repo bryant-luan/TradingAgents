@@ -40,7 +40,7 @@ def score(path: Path | None = None) -> dict:
     closed = {}
     for ev in _rows(path):
         tid = ev.get("trade_id")
-        if not tid or ev.get("ts", "") < RULE_SINCE:
+        if not tid or ev.get("paper") or ev.get("ts", "") < RULE_SINCE:
             continue
         if ev.get("event") == "ENTRY":
             opened[tid] = ev

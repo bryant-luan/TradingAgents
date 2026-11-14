@@ -198,5 +198,6 @@ class Shadow:
         self.log("SHADOW_OPTIMIZE", samples=len(rows), win_rate=round(wins / len(rows), 3),
                  avg_r=round(sum(r["r"] for r in rows) / len(rows), 3), changes=changes or ["無變動"],
                  evidence=evidence, threshold=cal_note, cvd_ratio=cvd_note, tp_split=split_note,
-                 effective_min_score=p["effective_min_score"])
+                 effective_min_score=p["effective_min_score"],
+                 live_reference=self.learner.reference_summary())
         self.learner.save()
