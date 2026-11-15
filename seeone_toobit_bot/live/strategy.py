@@ -431,7 +431,10 @@ SELF_SHORT_MAX_SAME_SIDE = 3
 # on the exchange stop. Promotion is the quiet-long bar, recorded by the close
 # note, and it does not turn the path back on by itself.
 SELF_ANALYSIS_PAPER = True
-SELF_ANALYSIS_PAPER_MAX = 3
+# The live book stays at 3. Paper was full at 3 by 05:56 Taipei on Nov 16
+# (BONK, GALA, C98), and the next shorts that had already cleared the review
+# were dropped, including HOT at 65%. Six lets the next passing short on.
+SELF_ANALYSIS_PAPER_MAX = 6
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
 QUIET_MAX_SAME_SIDE = 3
