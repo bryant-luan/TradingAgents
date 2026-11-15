@@ -318,8 +318,7 @@ class Bot:
         Market-closing it filled through the stop on XMR (Nov 10 10:57 Taipei): the print
         was +3.06R, the lock was about +3R, and the fill realized +2.43R.
         """
-        lk = (S.paper_peak_lock_r(tr.get("mfe_r", 0.0)) if tr.get("paper") else
-              S.lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit"))))
+        lk = S.held_lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
         return not (lk is not None and lk > 0 and cur_r > lk)
 
     def protect(self, tr: dict):
@@ -385,8 +384,7 @@ class Bot:
                       reason=tr["exit_reason"])
             self.maker_close(tr, urgent=not tr["exit_reason"].startswith("大週期"))
             return
-        lk = (S.paper_peak_lock_r(tr.get("mfe_r", 0.0)) if tr.get("paper") else
-              S.lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit"))))
+        lk = S.held_lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
         if lk is None or lk <= tr.get("lock_r", -1):
             return
         buf = tr.get("be_buffer", 0.0012)
@@ -1875,6 +1873,7 @@ class Bot:
                   seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,
                   daily_stop_pct=S.DAILY_STOP_PCT, lock_ladder=S.LOCK_LADDER, trail_gap_r=S.TRAIL_GAP_R,
+                  peak_lock=[S.PAPER_PEAK_ARM_R, S.PAPER_PEAK_GAP_R],
                   day_lock=[S.DAY_LOCK_TRIGGER_PCT, S.DAY_LOCK_GIVEBACK], profit_reserve=S.PROFIT_RESERVE,
                   principal=self.st.get("principal"), learned=self.learner.summary())
         while True:

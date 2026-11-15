@@ -404,10 +404,10 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 # at +2R was worse (+1.241R on the shorts). After +3R the stop now stays 1R behind the high,
 # stepped by 0.25R, and the floor at +3R is +2R: +3.02R locks +2.00R, +4.00R locks +3.00R.
 LOCK_LADDER = ((2.0, 0.0), (3.0, 2.0))
-# Paper probes (ignition, quiet) lock the open profit once it has reached +1R.
+# Live and paper positions lock the open profit once it has reached +1R.
 # The stop sits 0.5R behind the best price, stepped by 0.25R: +1.00R locks +0.50R,
-# +1.50R locks +1.00R, +2.00R locks +1.50R. Live self-scan keeps the ladder above.
-# Tightening that ladder before +2R cut the 5m replay about in half.
+# +1.50R locks +1.00R, +2.00R locks +1.50R. The ladder above stays for the day's
+# profit lock, which can move a stop to break-even from +0.3R.
 PAPER_PEAK_ARM_R = 1.0
 PAPER_PEAK_GAP_R = 0.5
 # Gate live, 2026-11-14 12:06-12:41 Taipei. BANANAS31 flush long filled at 0.004077,
@@ -560,7 +560,7 @@ def btc_dir_ok(aligned_pct: float | None, side: str) -> bool:
 
 
 def paper_peak_lock_r(mfe_r: float) -> float | None:
-    """R locked for a paper probe once the best price has reached +1R. None before that."""
+    """R locked once the best price has reached +1R. None before that."""
     if mfe_r < PAPER_PEAK_ARM_R:
         return None
     locked = math.floor((mfe_r - PAPER_PEAK_GAP_R) / TRAIL_STEP_R) * TRAIL_STEP_R
@@ -581,6 +581,16 @@ def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float 
         trail = math.floor((mfe_r - TRAIL_GAP_R) / TRAIL_STEP_R) * TRAIL_STEP_R
         best = max(best, round(trail, 2))
     return best
+
+
+def held_lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:
+    """R locked on a live or paper position. The peak trail wins, except the day's profit lock can go to break-even from +0.3R."""
+    peak = paper_peak_lock_r(mfe_r)
+    if day_locked:
+        early = lock_r(mfe_r, high, True)
+        if early is not None and (peak is None or early > peak):
+            return early
+    return peak
 
 
 class SeeOne:
