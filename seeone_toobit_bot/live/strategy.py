@@ -227,6 +227,30 @@ SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # ATR %, stop/ATR, hour and Bollinger width split well in the first half and flipped in the second.
 SELF_SHORT_WEAK_RET24H = 3.0
 SELF_SHORT_WEAK_EMA_GAP = 0.14
+
+
+def self_short_full_live(side: str, btc24h: float | None, sl_pct: float, ev_r: float | None,
+                         ret24h: float | None, ema_gap: float | None) -> bool:
+    """The one self-scan slice with a measured live edge stays a real order.
+
+    Stop under 1%, BTC 24h at or above 0, expected value at least +0.50R, and the
+    coin not already extended. Replay +1.23R (335; both halves, every day) and the
+    live book +1.11R (5, +53.6 USDT). A coin already up 3% or with EMA20 above EMA50
+    was only +0.71R, and every other live slice was near or under 0R, so those paper.
+    """
+    if side != "SHORT":
+        return False
+    if btc24h is None or btc24h < SELF_SHORT_BTC24H_MIN:
+        return False
+    if sl_pct >= SELF_MAX_SL_PCT:
+        return False
+    if (ev_r or 0) < SELF_SHORT_FULL_RISK_EV:
+        return False
+    if ret24h is not None and ret24h > SELF_SHORT_WEAK_RET24H:
+        return False
+    if ema_gap is not None and ema_gap > SELF_SHORT_WEAK_EMA_GAP:
+        return False
+    return True
 # Self-scan shorts use a wider 1h/4h window than the -0.5..1.5 core. On the 5m exit replay
 # (stop < 1%, probability >= 52.5%, 30-minute dedupe): -2.5..-1.5 was 89% win, +1.33R
 # (116; +1.21R / +1.44R by half) and 1.5..2.5 was 68%, +0.50R (80; +0.48R / +0.52R).
@@ -354,10 +378,11 @@ MAX_SAME_SIDE = 2               # open positions on one side
 # 52.5% probability and +0.50R expected value, so the extra slot does not change
 # the win rate or the R of the trades that open. The book cap stays at 3.
 SELF_SHORT_MAX_SAME_SIDE = 3
-# Self-scan entries other than the flush long and the quiet short. 116 live
-# closes, 37% win, -0.18R, -269 USDT. New ones paper at this cap. Existing live
-# positions stay on the exchange stop. Promotion is the quiet-long bar, recorded
-# by the close note, and it does not turn the path back on by itself.
+# Self-scan entries other than the flush long, the quiet short, and the full-risk
+# short in self_short_full_live. The whole path was 116 live closes, 37% win,
+# -0.18R, -269 USDT. Those others paper at this cap. Existing live positions stay
+# on the exchange stop. Promotion is the quiet-long bar, recorded by the close
+# note, and it does not turn the path back on by itself.
 SELF_ANALYSIS_PAPER = True
 SELF_ANALYSIS_PAPER_MAX = 3
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of

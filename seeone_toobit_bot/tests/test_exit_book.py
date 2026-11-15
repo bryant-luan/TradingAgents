@@ -5,9 +5,24 @@ import unittest
 from pathlib import Path
 
 from live import bot as botmod
+from live import strategy as S
 from live.bot import Bot, filled_margin, position_gone, position_pnl, remaining_contracts, tp_fill_verdict, tp_still_ahead
 from live.gate import Gate, GateError, price_order_view
 from live.toobit import ToobitError
+
+
+class FullLive(unittest.TestCase):
+    def test_measured_short_stays_live(self):
+        self.assertTrue(S.self_short_full_live("SHORT", 0.4, 0.008, 0.62, 1.0, 0.05))
+
+    def test_other_slices_paper(self):
+        self.assertFalse(S.self_short_full_live("LONG", 0.4, 0.008, 0.62, 1.0, 0.05))
+        self.assertFalse(S.self_short_full_live("SHORT", -0.4, 0.008, 0.62, 1.0, 0.05))
+        self.assertFalse(S.self_short_full_live("SHORT", None, 0.008, 0.62, 1.0, 0.05))
+        self.assertFalse(S.self_short_full_live("SHORT", 0.4, 0.012, 0.62, 1.0, 0.05))
+        self.assertFalse(S.self_short_full_live("SHORT", 0.4, 0.008, 0.30, 1.0, 0.05))
+        self.assertFalse(S.self_short_full_live("SHORT", 0.4, 0.008, 0.62, 4.0, 0.05))
+        self.assertFalse(S.self_short_full_live("SHORT", 0.4, 0.008, 0.62, 1.0, 0.20))
 
 
 class Verdict(unittest.TestCase):

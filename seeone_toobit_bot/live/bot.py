@@ -1937,12 +1937,24 @@ class Bot:
                 self.note_skip(sig, f"{sig['symbol']} 15m RSI 在{'做多' if sgn > 0 else '做空'}方向只有 {rsi:.0f} "
                                     f"(< 下限 {rsi_min:.0f})，短線動能與方向相反，等轉強再進")
                 continue
+            full_live = False
+            if (src == SELF_SOURCE and not bounce and not sig.get("quiet_strong_short")
+                    and not sig.get("quiet_strong_long")):
+                px = float(sig["entry_price"])
+                sl_pct = abs(px - float(sig["stop_price"])) / px if px else 1.0
+                try:
+                    r24, gap = short_strength(S.to_toobit(sig["symbol"]))
+                except Exception:
+                    r24, gap = None, None
+                full_live = S.self_short_full_live(
+                    sig["side"], getattr(self, "btc24h", None), sl_pct,
+                    (ev.get("analysis") or {}).get("ev_r"), r24, gap)
             self_paper = (S.SELF_ANALYSIS_PAPER and src == SELF_SOURCE and not bounce
-                          and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long"))
+                          and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long")
+                          and not full_live)
             if self_paper:
                 # A live self-scan book of 116 closes won 37% and averaged -0.18R (-269 USDT).
-                # Flush longs and quiet shorts stay live. New self-scan entries paper until
-                # that sample clears the same bar the quiet longs use.
+                # Flush longs, quiet shorts, and the full-risk short stay live. The rest paper.
                 sig = {**sig, "paper_only": True}
                 open_n = sum(1 for t in self.st["trades"].values()
                              if t.get("paper_probe") and not t.get("exit_reason")
