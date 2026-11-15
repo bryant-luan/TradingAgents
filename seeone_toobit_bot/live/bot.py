@@ -103,7 +103,7 @@ SCAN_RESULT_TTL_S = 900
 # While the main loop is inside a See One scan, this thread still ratchets exchange stops.
 FAST_GUARD_S = 1               # with a position open, watch price every second
 SPIKE_DROP_R = 0.45             # one-second adverse jump treated as a wick
-DEEP_ADVERSE_R = -0.85          # exit before a wick can slip through the full stop
+DEEP_ADVERSE_R = -0.85          # paper mark only; live keeps the exchange stop
 # After TP1 the exchange stop moves here, and the runner is also cut here.
 # With TP1 at 10% of the size, the 552-review replay averaged +0.80R at -0.5R,
 # +0.76R at -0.25R and lower at the entry, ahead in both halves of Nov 4-10.
@@ -519,9 +519,14 @@ class Bot:
         # 84 turned reviews (5m bars, live ladder, fees, Nov 4-13) took +0.79R
         # (+0.92 / +0.66 by half) down to +0.63R (+0.71 / +0.56). Seven wicks recovered
         # past that, and that outweighed the ~0.15R saved on 21 full stops. Taipei 00:00-06:00
-        # was a wash, so this is not a session rule. Other paths keep the early exit.
+        # was a wash, so this is not a session rule.
+        # Every live path now does the same. The -0.85R market flatten was the largest
+        # live loss bucket: 32 closes, 3 wins, -344 USDT, -26.7R. Twenty-six of them
+        # finished worse than -1.05R (-380 USDT), past the resting stop the rule was
+        # meant to beat. A live position keeps that stop. Paper still marks out here.
         flush_hold = tr.get("path") == S.BOUNCE_PATH and not tp_filled
         ignition_hold = ignition and not tp_filled
+        live_stop = not tr.get("paper")
         adverse = None
         urgent = True
         if htf_flat:
@@ -535,7 +540,8 @@ class Bot:
         elif (prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and cur_r <= 0
               and self._spike_through_lock(tr, cur_r)):
             adverse = f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉"
-        elif not flush_hold and not ignition_hold and cur_r <= (AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R):
+        elif (not live_stop and not flush_hold and not ignition_hold
+              and cur_r <= (AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R)):
             line = AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R
             adverse = f"浮虧 {cur_r:+.2f}R 已深於 {line}R，先平倉，避免插針滑過止損"
         if adverse:
@@ -645,6 +651,8 @@ class Bot:
             self._note_quiet_long()
         elif tr.get("paper_probe") and str(tr.get("path") or "").startswith("IGNITION"):
             self._note_ignition(tr.get("path"))
+        elif tr.get("paper_probe") and tr.get("path") == "SELF ANALYSIS":
+            self._note_self_analysis()
 
     def _end_paper(self):
         for tid, tr in list(self.st["trades"].items()):
@@ -815,6 +823,21 @@ class Bot:
         log_event("IGNITION_PAPER", path=path, **sample,
                   reason=(f"{label}起漲模擬已達標，仍不送真單" if sample["ready"]
                           else f"{label}起漲模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、"
+                               f"勝率 {S.QUIET_LONG_READY_WIN:.0%}、平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
+
+    def _note_self_analysis(self):
+        rows = list(self.st["closed"])
+        for p in BOOK_STATES:
+            if p == STATE_FILE:
+                continue
+            try:
+                rows.extend(json.loads(p.read_text()).get("closed") or [])
+            except (OSError, ValueError):
+                continue
+        sample = S.ignition_sample(rows, "SELF ANALYSIS")
+        log_event("SELF_PAPER", path="SELF ANALYSIS", **sample,
+                  reason=("自選驗算模擬已達標，仍不送真單" if sample["ready"]
+                          else f"自選驗算模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、"
                                f"勝率 {S.QUIET_LONG_READY_WIN:.0%}、平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
 
     def _open_ignition_paper(self, sig, ev, src, reg, equity):
@@ -1914,13 +1937,30 @@ class Bot:
                 self.note_skip(sig, f"{sig['symbol']} 15m RSI 在{'做多' if sgn > 0 else '做空'}方向只有 {rsi:.0f} "
                                     f"(< 下限 {rsi_min:.0f})，短線動能與方向相反，等轉強再進")
                 continue
-            same = self._same_side(sig["side"])
-            same_cap = (S.QUIET_MAX_SAME_SIDE if sig.get("quiet_strong_short") or sig.get("quiet_strong_long")
-                        else S.SELF_SHORT_MAX_SAME_SIDE if src == SELF_SOURCE and sig["side"] == "SHORT"
-                        else S.MAX_SAME_SIDE)
-            if len(same) >= same_cap:
-                self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
-                continue
+            self_paper = (S.SELF_ANALYSIS_PAPER and src == SELF_SOURCE and not bounce
+                          and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long"))
+            if self_paper:
+                # A live self-scan book of 116 closes won 37% and averaged -0.18R (-269 USDT).
+                # Flush longs and quiet shorts stay live. New self-scan entries paper until
+                # that sample clears the same bar the quiet longs use.
+                sig = {**sig, "paper_only": True}
+                open_n = sum(1 for t in self.st["trades"].values()
+                             if t.get("paper_probe") and not t.get("exit_reason")
+                             and t.get("path") == "SELF ANALYSIS")
+                if open_n >= S.SELF_ANALYSIS_PAPER_MAX:
+                    self.note_skip(sig, f"自選驗算模擬已有 {open_n} 筆，上限 {S.SELF_ANALYSIS_PAPER_MAX}")
+                    continue
+                if any(t["tsym"] == tsym and not t.get("exit_reason") for t in self.st["trades"].values()):
+                    self.note_skip(sig, "這個幣已有倉位，自選驗算模擬不疊加")
+                    continue
+            else:
+                same = self._same_side(sig["side"])
+                same_cap = (S.QUIET_MAX_SAME_SIDE if sig.get("quiet_strong_short") or sig.get("quiet_strong_long")
+                            else S.SELF_SHORT_MAX_SAME_SIDE if src == SELF_SOURCE and sig["side"] == "SHORT"
+                            else S.MAX_SAME_SIDE)
+                if len(same) >= same_cap:
+                    self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
+                    continue
             try:
                 self.open_trade(sig, ev, src, reg, size_eq)
             except ToobitError as e:
@@ -2133,7 +2173,8 @@ class Bot:
         self.st["tradable_contracts"] = tradable
         log_event("START", dry_run=self.dry, paper=self.paper, exchange=self.tb.name, tradable_contracts=tradable,
                   quiet_long_paper=S.QUIET_LONG_PAPER, quiet_longs_live=S.QUIET_LONGS,
-                  ignition_paper=S.IGNITION_PAPER, ignition_max=S.IGNITION_PAPER_MAX,
+                  ignition_paper=S.IGNITION_PAPER, ignition_1m=S.IGNITION_1M,
+                  ignition_max=S.IGNITION_PAPER_MAX, self_analysis_paper=S.SELF_ANALYSIS_PAPER,
                   sim_until=os.environ.get("GATE_SIM_UNTIL"),
                   seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,

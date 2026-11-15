@@ -354,6 +354,12 @@ MAX_SAME_SIDE = 2               # open positions on one side
 # 52.5% probability and +0.50R expected value, so the extra slot does not change
 # the win rate or the R of the trades that open. The book cap stays at 3.
 SELF_SHORT_MAX_SAME_SIDE = 3
+# Self-scan entries other than the flush long and the quiet short. 116 live
+# closes, 37% win, -0.18R, -269 USDT. New ones paper at this cap. Existing live
+# positions stay on the exchange stop. Promotion is the quiet-long bar, recorded
+# by the close note, and it does not turn the path back on by itself.
+SELF_ANALYSIS_PAPER = True
+SELF_ANALYSIS_PAPER_MAX = 3
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
 QUIET_MAX_SAME_SIDE = 3
@@ -384,7 +390,10 @@ QUIET_LONG_READY_R = 0.30
 # 15m (8-bar base <= 6%, volume >= 3x, close within 8%), ~15 days,
 # 1026 trades, 42%, -0.08R, both halves negative.
 # Wider and tighter cuts lost too. Paper only, same promotion bar as quiet longs.
+# The 1m paper book then closed 97 times, 33% win, -0.28R, -206 USDT. New 1m
+# ignition longs stay off. 15m (15 closes, 47%, -0.12R) keeps collecting.
 IGNITION_PAPER = True
+IGNITION_1M = False
 IGNITION_PAPER_MAX = 8
 IGNITION_QUOTE_MIN = 5_000_000
 IGNITION_RULES = {

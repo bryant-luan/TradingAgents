@@ -1090,7 +1090,7 @@ class SelfScanner:
         return [{"sig": sig, "ev": ev, "source": "突破"}]
 
     def fresh_ignitions(self, held: set, specs: dict) -> list:
-        """1m every call, 15m when that bar has had time to close. Paper signals only.
+        """15m when that bar has had time to close. 1m stays off. Paper signals only.
 
         The replay of both rules lost in each half, so nothing here is a live order.
         Names under the quote-volume floor are skipped: that is the universe the replay used.
@@ -1110,7 +1110,13 @@ class SelfScanner:
         do_15 = now - self.last_ignition_15 >= SCAN_EVERY_S
         if do_15:
             self.last_ignition_15 = now
-        intervals = ("1m", "15m") if do_15 else ("1m",)
+        intervals = []
+        if S.IGNITION_1M:
+            intervals.append("1m")
+        if do_15:
+            intervals.append("15m")
+        if not intervals:
+            return []
         now_ms = now * 1000
 
         def one(item):

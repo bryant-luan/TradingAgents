@@ -267,23 +267,33 @@ class Manage(unittest.TestCase):
         tr = trade()
         tr["tps"] = []
         b.protect(tr)
-        self.assertTrue(tr.get("exchange_flat"))
         self.assertIsNone(tr.get("exit_reason"))
         self.assertEqual(book.closed, [])
         book.stops.clear()
         b.replace_stop(tr, 1.008, "again")
+        self.assertTrue(tr.get("exchange_flat"))
         self.assertEqual(book.stops, [])
 
-    def test_open_loser_still_flattens(self):
+    def test_open_loser_keeps_the_exchange_stop(self):
         book = FakeBook()
-        book.px = 1.009
+        book.px = 1.009  # -0.9R on the short, past the old -0.85 market line
         book.rows = [{"side": "SHORT", "position": "100"}]
         b = bot(book)
         tr = trade()
         tr["tps"] = []
         b.protect(tr)
+        self.assertIsNone(tr.get("exit_reason"))
+        self.assertEqual(book.closed, [])
+
+    def test_paper_loser_still_flattens(self):
+        book = FakeBook()
+        book.px = 1.009
+        b = bot(book)
+        tr = trade()
+        tr["paper"] = True
+        tr["tps"] = []
+        b.protect(tr)
         self.assertTrue(str(tr.get("exit_reason") or "").startswith("浮虧"))
-        self.assertEqual(book.closed, [("CGPT-SWAP-USDT", "SHORT")])
 
     def test_close_of_an_already_flat_book_drops_the_sentence(self):
         book = FakeBook()
