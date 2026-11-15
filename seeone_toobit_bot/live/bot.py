@@ -129,6 +129,31 @@ MARKET_ENTRY_FALLBACK = False
 MAKER_CLOSE_TRIES = 6
 MAKER_CLOSE_WAIT_S = 30
 FINAL_STATUS = {"FILLED", "REJECTED", "CANCELED", "PARTIALLY_CANCELED"}
+# A missing open-order row is not a fill. CGPT on Nov 15 (Toobit, 15:56 Taipei) lost TP3-TP5
+# from the open list in one read. They were marked filled, the -0.5R line armed, and an hour
+# later a price on the already-flat book was written down as a -0.53R loss. The fill was +1.07R.
+# Gate NEO and OG the same afternoon got a wick sentence on a close that had already happened.
+TP_CANCELLED = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "PARTIALLY_CANCELED", "PARTIALLY_CANCELLED"}
+
+
+def tp_fill_verdict(status: str | None, executed_qty, order_qty) -> str:
+    """filled, cancelled, or pending. Pending means the open-order list missed a live order."""
+    try:
+        executed = float(executed_qty or 0)
+        qty = float(order_qty or 0)
+    except (TypeError, ValueError):
+        executed, qty = 0.0, 0.0
+    if (status or "").upper() == "FILLED" or (qty > 0 and executed >= qty):
+        return "filled"
+    if (status or "").upper() in TP_CANCELLED:
+        return "cancelled"
+    return "pending"
+
+
+def position_gone(err: BaseException) -> bool:
+    """The exchange is refusing a stop or close because that position is already flat."""
+    text = str(err).lower().replace(" ", "")
+    return "noposition" in text or "no_short_position" in text or "no_long_position" in text
 
 
 def now_iso():
@@ -200,16 +225,50 @@ class Bot:
         except ToobitError:
             pass
 
-    def replace_stop(self, tr: dict, new_stop: float, reason: str):
+    def _note_exchange_flat(self, tr: dict, where: str):
+        """The venue no longer has this position. Stop moving its stop, and drop an exit sentence that was only a price read."""
+        if not tr.get("exchange_flat"):
+            tr["exchange_flat"] = True
+            log_event("EXCHANGE_FLAT", trade_id=tr.get("id"), symbol=tr.get("tsym"), side=tr.get("side"),
+                      where=where, note="交易所已無此倉，不再改止損；出場理由改由成交紀錄決定")
+        reason = str(tr.get("exit_reason") or "")
+        if reason.startswith(("浮虧", "一秒", "大週期", "最高浮盈")):
+            tr.pop("exit_reason", None)
+
+    def _still_open(self, tr: dict) -> bool:
+        """True when the venue still shows this position. A read error does not block a real exit."""
+        if tr.get("paper"):
+            return True
+        if tr.get("exchange_flat"):
+            return False
+        try:
+            rows = self.tb.positions(tr["tsym"])
+        except ToobitError as e:
+            if position_gone(e):
+                self._note_exchange_flat(tr, "positions")
+                return False
+            return True
+        if any(p.get("side") == tr["side"] for p in rows):
+            return True
+        self._note_exchange_flat(tr, "positions")
+        return False
+
+    def replace_stop(self, tr: dict, new_stop: float, reason: str) -> bool:
         sym, side = tr["tsym"], tr["side"]
         if tr.get("paper"):
             px = self.tb.fmt_price(sym, new_stop)
             log_event("STOP_MOVE", trade_id=tr["id"], symbol=sym, side=side, old_stop=tr["stop"], new_stop=px,
                       reason=reason, paper=True)
             tr["stop"] = float(px)
-            return
+            return True
         px = self.tb.fmt_price(sym, new_stop)
-        self.tb.set_position_stop(sym, side, px)
+        try:
+            self.tb.set_position_stop(sym, side, px)
+        except ToobitError as e:
+            if position_gone(e):
+                self._note_exchange_flat(tr, "replace_stop")
+                return False
+            raise
         stale = []
         for o in self.tb.open_orders(sym, "STOP_PROFIT_LOSS"):
             if o.get("orderType") == f"STOP_{side}_LOSS" and float(o["stopPrice"]) != float(px):
@@ -218,6 +277,7 @@ class Bot:
         log_event("STOP_MOVE", trade_id=tr["id"], symbol=sym, side=side, old_stop=tr["stop"], new_stop=px,
                   reason=reason, cancelled_old_sl=stale)
         tr["stop"] = float(px)
+        return True
 
     # ------------------------------------------------------------------ management
     def manage(self, positions: dict, sigmap: dict):
@@ -234,11 +294,25 @@ class Bot:
                 self.migrate_tps(tr)
             open_ids = set()
             if not tr.get("paper"):
-                for kind in {tp.get("kind", "STOP") for tp in tr["tps"] if not tp["filled"]}:
+                for kind in {tp.get("kind", "STOP") for tp in tr["tps"] if not tp["filled"] and not tp.get("cancelled")}:
                     open_ids |= {str(o["orderId"]) for o in self.tb.open_orders(sym, kind)}
-            newly = [tp for tp in tr["tps"] if not tp["filled"] and not tp.get("cancelled") and tp.get("order_id")
-                     and str(tp["order_id"]) not in open_ids]
-            for tp in newly:
+            missing = [tp for tp in tr["tps"] if not tp["filled"] and not tp.get("cancelled") and tp.get("order_id")
+                       and str(tp["order_id"]) not in open_ids]
+            for tp in missing:
+                try:
+                    q = self.tb.order(str(tp["order_id"]))
+                except ToobitError as e:
+                    log_event("ERROR", trade_id=tid, where="tp_status", symbol=sym, label=tp.get("label"), error=str(e))
+                    continue
+                verdict = tp_fill_verdict(q.get("status"), q.get("executedQty"), tp.get("qty"))
+                if verdict == "pending":
+                    continue
+                if verdict == "cancelled":
+                    tp["cancelled"] = True
+                    log_event("TP_CANCELLED", trade_id=tid, symbol=sym, side=side, label=tp.get("label"),
+                              price=tp.get("price"), qty=tp.get("qty"), status=q.get("status"),
+                              reason="委託已不在掛單裡且沒有成交，不當成止盈")
+                    continue
                 tp["filled"] = True
                 tp["filled_at"] = now_iso()
                 log_event("TP_HIT", trade_id=tid, symbol=sym, side=side, label=tp["label"], price=tp["price"],
@@ -327,7 +401,7 @@ class Bot:
             self._protect(tr)
 
     def _protect(self, tr: dict):
-        if tr.get("exit_reason"):
+        if tr.get("exit_reason") or tr.get("exchange_flat"):
             return
         sym, side = tr["tsym"], tr["side"]
         sgn = 1 if side == "LONG" else -1
@@ -366,8 +440,11 @@ class Bot:
         # was a wash, so this is not a session rule. Other paths keep the early exit.
         flush_hold = tr.get("path") == S.BOUNCE_PATH and not tp_filled
         ignition_hold = ignition and not tp_filled
+        adverse = None
+        urgent = True
         if htf_flat:
-            tr["exit_reason"] = (f"大週期順方向 {htf * sgn:+.2f} 已低於 {htf_floor}，趨勢消失，平倉")
+            adverse = f"大週期順方向 {htf * sgn:+.2f} 已低於 {htf_floor}，趨勢消失，平倉"
+            urgent = False
         # A one-second wick that is still on the profitable side of the entry is not a stop-out.
         # MOCA short (Gate, Nov 11 12:35 Taipei) fell from +0.75R to +0.15R and was market-closed
         # at +0.05R. Price then reached about +3.3R. MELANIA (Toobit, Nov 10 06:06) was the same
@@ -375,14 +452,19 @@ class Bot:
         # still flattens, so a spike through the stop is not left on.
         elif (prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and cur_r <= 0
               and self._spike_through_lock(tr, cur_r)):
-            tr["exit_reason"] = (f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉")
+            adverse = f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉"
         elif not flush_hold and not ignition_hold and cur_r <= (AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R):
             line = AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R
-            tr["exit_reason"] = (f"浮虧 {cur_r:+.2f}R 已深於 {line}R，先平倉，避免插針滑過止損")
-        if tr.get("exit_reason") and tr["exit_reason"].startswith(("大週期", "一秒", "浮虧")):
+            adverse = f"浮虧 {cur_r:+.2f}R 已深於 {line}R，先平倉，避免插針滑過止損"
+        if adverse:
+            # The quote can keep moving after the venue has already closed. CGPT's +1.07R
+            # fill was labeled -0.53R that way. Confirm the position before writing the sentence.
+            if not self._still_open(tr):
+                return
+            tr["exit_reason"] = adverse
             log_event("ADVERSE_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, cur_r=round(cur_r, 3),
                       reason=tr["exit_reason"])
-            self.maker_close(tr, urgent=not tr["exit_reason"].startswith("大週期"))
+            self.maker_close(tr, urgent=urgent)
             return
         lk = S.held_lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
         if lk is None or lk <= tr.get("lock_r", -1):
@@ -395,12 +477,15 @@ class Bot:
         label = "保本(含手續費)" if lk == 0 else f"鎖利 +{lk}R"
         why = f"最高浮盈 {tr['mfe_r']:+.2f}R，止損上移至{label}"
         if (px - target) * sgn <= px * 0.0015:
+            if not self._still_open(tr):
+                return
             tr["exit_reason"] = f"{why}，但現價 {px} 已回落至鎖利線附近，直接 Maker 平倉鎖住利潤"
             log_event("LOCK_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, lock_r=lk,
                       mfe_r=tr["mfe_r"], reason=tr["exit_reason"])
             self.maker_close(tr)
             return
-        self.replace_stop(tr, target, why)
+        if not self.replace_stop(tr, target, why):
+            return
         tr["lock_r"] = lk
         log_event("PROFIT_LOCK", trade_id=tr["id"], symbol=sym, side=side, mfe_r=tr["mfe_r"], lock_r=lk,
                   stop=tr["stop"], reason=why)
@@ -1135,15 +1220,22 @@ class Bot:
                 time.sleep(0.5)
                 q = self.tb.order(o["orderId"])
             maker += int(float(q.get("executedQty") or 0))
+        reason = tr.get("exit_reason")
         pos = next((p for p in self.tb.positions(sym) if p.get("side") == side), None)
         if pos:
             taker = int(float(pos["position"]))
             try:
                 self.tb.flash_close(sym, side)
             except ToobitError as e:
-                log_event("ERROR", trade_id=tr["id"], where="flash_close", error=str(e))
+                if position_gone(e):
+                    taker = 0
+                else:
+                    log_event("ERROR", trade_id=tr["id"], where="flash_close", error=str(e))
+        if maker == 0 and taker == 0:
+            # Nothing was sent. The sentence was a price read on a book the venue had already closed.
+            self._note_exchange_flat(tr, "maker_close")
         log_event("EXIT_FILL", trade_id=tr["id"], symbol=sym, side=side, maker_contracts=maker, taker_contracts=taker,
-                  reason=tr.get("exit_reason"))
+                  reason=reason)
 
     def migrate_tps(self, tr: dict):
         """Swap trigger-market TPs (taker) for post-only limit TPs (maker) on trades opened before maker TPs existed."""
@@ -1734,7 +1826,7 @@ class Bot:
                 continue
             moved = False
             for tr in list(self.st["trades"].values()):
-                if tr.get("exit_reason"):
+                if tr.get("exit_reason") or tr.get("exchange_flat"):
                     continue
                 try:
                     before = (tr.get("stop"), tr.get("lock_r"), tr.get("mfe_r"))
