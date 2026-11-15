@@ -22,7 +22,7 @@ from . import strategy as S
 from .market import klines, listing, quote_volumes
 from .localreview import LocalReview
 
-SCAN_EVERY_S = 900          # one analysis-review pass every 15 minutes
+SCAN_EVERY_S = 300          # one analysis-review pass every 5 minutes
 MAJORS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"]
 ATR_MULT = 1.5
 MIN_STOP_PCT = 0.008
@@ -66,7 +66,7 @@ MIN_EV_R = 0.50
 SHORT_MIN_EV_R = S.SELF_SHORT_SAMPLE_EV
 SHORT_MIN_PROB = 52.5
 CONFIRM_MIN_PROB = 50.0
-REVIEW_COOLDOWN_S = 900
+REVIEW_COOLDOWN_S = 300       # the same name can be reviewed again after 5 minutes
 # See One answered ~200 reviews/hour for two days before the Nov 6 11:52 burst. The 15s gap
 # stays. A mixed tape still spends this many calls. A short-only tape does not stop at this
 # count: every name with a stop under 1% is reviewed, and a 429 still pauses the scan.
