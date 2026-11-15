@@ -1951,6 +1951,11 @@ class Bot:
             self_paper = (S.SELF_ANALYSIS_PAPER and src == SELF_SOURCE and not bounce
                           and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long")
                           and not full_live)
+            if self_paper and not S.SELF_ANALYSIS_PAPER_OPEN:
+                # 17 paper closes, 6% win, -0.53R, both halves negative. The open
+                # paper shorts stay. A new one under the live line is not opened.
+                self.note_skip(sig, "自選空單未達實盤門檻。模擬 17 筆、勝率 6%、平均 -0.53R，前後半都是負的，不再開新模擬倉")
+                continue
             if self_paper:
                 # A live self-scan book of 116 closes won 37% and averaged -0.18R (-269 USDT).
                 # Flush longs, quiet shorts, and the full-risk short stay live. The rest paper.
