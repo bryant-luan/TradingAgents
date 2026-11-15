@@ -160,10 +160,11 @@ def position_pnl(rows: list, side: str, opened_ts: float, slack_s: int = 60, ope
     """PnL of the position this trade opened.
 
     A close in the minute before the record can be the previous round trip. When the venue
-    gives an open time, only the position opened nearest this trade is counted. Partial
+    gives an open time near this trade, only that position is counted. A position we took
+    over was opened earlier, so its close is the one after we started tracking it. Partial
     closes of that same position are summed. Rows without an open time keep the old window.
     """
-    opened_ms = opened_ts * 1000
+    opened_ms = int(opened_ts * 1000)
     same = []
     for h in rows:
         if h.get("side") != side:
@@ -176,14 +177,19 @@ def position_pnl(rows: list, side: str, opened_ts: float, slack_s: int = 60, ope
     dated = [h for h in same if int(h.get("openTime") or 0)]
     if dated:
         def dist(h: dict) -> int:
-            return abs(int(h["openTime"]) - int(opened_ms))
-        nearest = min(dated, key=dist)
-        if dist(nearest) > open_slack_s * 1000:
-            return None, None
-        anchor = int(nearest["openTime"])
-        chosen = [h for h in dated if abs(int(h["openTime"]) - anchor) < 2000]
+            return abs(int(h["openTime"]) - opened_ms)
+        near = [h for h in dated if dist(h) <= open_slack_s * 1000]
+        if near:
+            anchor = int(min(near, key=dist)["openTime"])
+            chosen = [h for h in near if abs(int(h["openTime"]) - anchor) < 2000]
+        else:
+            # Adopted after the venue opened it. A round trip that already closed before
+            # we started tracking is not this trade.
+            chosen = [h for h in dated if int(h.get("closeTime") or 0) >= opened_ms - 5000]
     else:
         chosen = same
+    if not chosen:
+        return None, None
     pnl = sum(float(h.get("realizedPnL") or h.get("realizedPnl") or 0) for h in chosen)
     close_px = max(chosen, key=lambda h: int(h.get("closeTime") or 0)).get("closeAvgPrice")
     return pnl, close_px

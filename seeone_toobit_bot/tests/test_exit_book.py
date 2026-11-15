@@ -194,6 +194,18 @@ class Manage(unittest.TestCase):
         self.assertEqual(pnl, 1.07)
         self.assertEqual(px, 0.99)
 
+    def test_adopted_position_is_not_dropped(self):
+        opened = 1_700_000_000
+        rows = [
+            {"side": "SHORT", "openTime": (opened - 3600) * 1000, "closeTime": (opened - 30) * 1000,
+             "realizedPnL": 20.0, "closeAvgPrice": 0.9},
+            {"side": "SHORT", "openTime": (opened - 7200) * 1000, "closeTime": (opened + 90) * 1000,
+             "realizedPnL": 1.07, "closeAvgPrice": 0.99},
+        ]
+        pnl, px = position_pnl(rows, "SHORT", opened)
+        self.assertEqual(pnl, 1.07)
+        self.assertEqual(px, 0.99)
+
     def test_partial_closes_of_the_same_position_add_up(self):
         opened = 1_700_000_000
         open_ms = (opened - 5) * 1000
