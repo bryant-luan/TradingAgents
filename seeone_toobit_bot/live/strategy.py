@@ -203,10 +203,16 @@ SELF_SHORT_BTC24H_MIN = 0.0
 # 8% at a 1% stop and 25x needs a 32% margin slot.
 SELF_SHORT_RISK_PCT = 0.08
 # The live +1.11R came from reviews at +0.50R EV or more. Those keep the 8% size.
-# From +0.20R up to that line the short still opens, at the normal risk, so the live
-# sample in this band can grow. Below +0.20R stays out.
+# From +0.20R up to that line the short still opens, at the normal risk.
+# While the 1h/4h score is still negative, quality of at least 60 and a de-biased
+# probability of 52.5% to 60% still paid in the +0.10R to +0.20R band: 139 resolved
+# shorts, stop under 1%, 65.5% hit TP1 first, +0.31R, halves +0.30R / +0.31R.
+# Below +0.15R that quality band's later half was only +0.04R, so the bear floor
+# stops there. Quality under 60 has no settled sample and stays out. The flush
+# long is the other half of this tape: it waits until the 15m score has turned up.
 SELF_SHORT_FULL_RISK_EV = 0.50
 SELF_SHORT_SAMPLE_EV = 0.20
+SELF_SHORT_BEAR_EV = 0.15
 SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # Of 21 indicators replayed on those 335 shorts, only two split them the same way in both halves:
 # the coin already up 3%+ over 24h, or 15m EMA20 more than 0.14% above EMA50. Either one: 52% win,
@@ -284,8 +290,9 @@ def mood_rank(htf: float | None, m15: float | None, rpos: float | None,
 
     Market mood is the 1h/4h score, with the 15m score as the short-term turn.
     Coin mood is its place in the last 3h: near 0 is washed out, near 1 is the front.
-    A flush long is the pick only when the higher timeframe is still heavy, the 15m
-    mood has turned up, and the coin is not already in the front half of its range.
+    While that higher timeframe is still heavy and the 15m score has not turned up,
+    the trade is the short. A flush long waits for the bounce: the 15m score has to
+    be positive, and the coin has to be off its low, before it can rank ahead.
     A short whose own read is stronger stays ahead of that flush.
     """
     at_front = rpos is not None and rpos >= FLUSH_FRONT_RPOS

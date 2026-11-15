@@ -1389,6 +1389,11 @@ class SelfScanner:
             flush_long = side == "LONG" and bounce
             floor_prob, floor_ev = ((max(min_prob, SHORT_MIN_PROB), SHORT_MIN_EV_R) if side == "SHORT"
                                     else (min_prob, MIN_EV_R))
+            # The market is still short. A review that already cleared quality 60
+            # opens from +0.15R so the bear is traded, not watched. Quality under 60
+            # stays out. The flush long is unchanged: it still needs the 15m turn.
+            if (side == "SHORT" and htf is not None and htf < 0 and quality >= MIN_QUALITY):
+                floor_ev = min(floor_ev, S.SELF_SHORT_BEAR_EV)
             # The flush-long replay covered every review from 45% up, whatever its EV, quality or 1H read.
             gated = (prob < min_prob if flush_long else
                      prob < floor_prob or edge < MIN_EDGE or quality < MIN_QUALITY or ev < floor_ev)

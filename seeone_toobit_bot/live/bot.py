@@ -760,9 +760,14 @@ class Bot:
                 ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌、非逆強勢) 風險 {risk_pct:.0%}："
                                                  "驗算 74% 勝、+1.44R"]
         elif (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
-              and S.SELF_SHORT_SAMPLE_EV <= ((ev.get("analysis") or {}).get("ev_r") or 0) < S.SELF_SHORT_FULL_RISK_EV):
+              and (S.SELF_SHORT_BEAR_EV if getattr(self, "htf", None) is not None and self.htf < 0
+                   else S.SELF_SHORT_SAMPLE_EV)
+              <= ((ev.get("analysis") or {}).get("ev_r") or 0) < S.SELF_SHORT_FULL_RISK_EV):
             ev_r = (ev.get("analysis") or {}).get("ev_r") or 0
+            bear = ev_r < S.SELF_SHORT_SAMPLE_EV
             ev["reasons"] = ev["reasons"] + [
+                f"大盤偏空，期望值 {ev_r:+.2f}R 未達滿倉 +{S.SELF_SHORT_FULL_RISK_EV:.2f}R，以一般風險開倉，記入實盤樣本"
+                if bear else
                 f"期望值 {ev_r:+.2f}R 未達滿倉 +{S.SELF_SHORT_FULL_RISK_EV:.2f}R，以一般風險開倉，記入實盤樣本"]
         room_pct = getattr(self, "day_room", equity * risk_pct) / equity
         if not probe and room_pct < S.MIN_RISK_PCT:
