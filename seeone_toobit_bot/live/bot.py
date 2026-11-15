@@ -1957,6 +1957,10 @@ class Bot:
             self_paper = (S.SELF_ANALYSIS_PAPER and src == SELF_SOURCE and not bounce
                           and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long")
                           and not full_live)
+            if self_paper and S.self_short_sample_live(sl_pct):
+                # The review already cleared. A stop under 1% goes live at normal
+                # risk. The expected-value floor only decides the larger size.
+                self_paper = False
             if self_paper and not S.SELF_ANALYSIS_PAPER_OPEN:
                 # 17 paper closes, 6% win, -0.53R, both halves negative. The open
                 # paper shorts stay. A new one under the live line is not opened.

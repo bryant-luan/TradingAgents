@@ -377,6 +377,14 @@ def self_short_full_live(side: str, btc24h: float | None, sl_pct: float, ev_r: f
     if ema_gap is not None and ema_gap > SELF_SHORT_WEAK_EMA_GAP:
         return False
     return True
+
+
+def self_short_sample_live(sl_pct: float) -> bool:
+    """A reviewed short with a stop under 1% is a live order at the normal risk.
+
+    Full size still needs self_short_full_live. A wider stop stays out.
+    """
+    return sl_pct < SELF_MAX_SL_PCT
 # Self-scan shorts use a wider 1h/4h window than the -0.5..1.5 core. On the 5m exit replay
 # (stop < 1%, probability >= 52.5%, 30-minute dedupe): -2.5..-1.5 was 89% win, +1.33R
 # (116; +1.21R / +1.44R by half) and 1.5..2.5 was 68%, +0.50R (80; +0.48R / +0.52R).
