@@ -293,6 +293,11 @@ class Bot:
             if pos is None:
                 self.finish(tid, tr)
                 continue
+            # A "no position" reply can be a lag. If the venue still shows the position, keep trailing it.
+            if tr.get("exchange_flat"):
+                tr.pop("exchange_flat", None)
+                log_event("EXCHANGE_BACK", trade_id=tid, symbol=sym, side=side,
+                          note="交易所倉位還在，繼續移動止損")
 
             if tr.get("paper"):
                 self._paper_mark(tr)
@@ -404,11 +409,19 @@ class Bot:
         return not (lk is not None and lk > 0 and cur_r > lk)
 
     def protect(self, tr: dict):
-        """Ratchet the exchange stop from the best price reached: break-even first, then lock part of the open profit."""
-        with self._protect_lock:
-            self._protect(tr)
+        """Ratchet the exchange stop from the best price reached: break-even first, then lock part of the open profit.
 
-    def _protect(self, tr: dict):
+        The quote is read before the lock. A paper name's slow price must not hold the lock the live stop is waiting on.
+        """
+        if tr.get("exit_reason") or tr.get("exchange_flat"):
+            return
+        px = self.tb.price(tr["tsym"])
+        with self._protect_lock:
+            if tr.get("exit_reason") or tr.get("exchange_flat"):
+                return
+            self._protect(tr, px)
+
+    def _protect(self, tr: dict, px: float):
         if tr.get("exit_reason") or tr.get("exchange_flat"):
             return
         sym, side = tr["tsym"], tr["side"]
@@ -419,7 +432,6 @@ class Bot:
         dist, entry = tr["init_dist"], tr["entry"]
         if not dist:
             return
-        px = self.tb.price(sym)
         cur_r = (px - entry) * sgn / dist
         if cur_r > tr.get("mfe_r", 0.0):
             tr["mfe_r"] = round(cur_r, 3)
@@ -1882,10 +1894,9 @@ class Bot:
             if self.dry or self.stopping:
                 continue
             moved = False
-            # Live stops first. A slow paper quote must not sit in front of a real position.
+            # Paper quotes stay on their own loop. Eight of them were sitting in front of the next live stop.
             guarding = [t for t in self.st["trades"].values()
-                        if not t.get("exit_reason") and not t.get("exchange_flat")]
-            guarding.sort(key=lambda t: 1 if t.get("paper") else 0)
+                        if not t.get("paper") and not t.get("exit_reason") and not t.get("exchange_flat")]
             for tr in guarding:
                 try:
                     before = (tr.get("stop"), tr.get("lock_r"), tr.get("mfe_r"))
@@ -1897,6 +1908,20 @@ class Bot:
                     log_event("ERROR", trade_id=tr.get("id"), where="fast_guard", error=repr(e)[:200])
             if moved:
                 save_state(self.st)
+
+    def paper_guard(self):
+        """Paper stops and peak locks. Separate from the live guard so a slow quote cannot delay a real stop."""
+        while not self.stopping:
+            time.sleep(3)
+            if self.dry or self.stopping:
+                continue
+            for tr in list(self.st["trades"].values()):
+                if not tr.get("paper") or tr.get("exit_reason") or tr.get("exchange_flat"):
+                    continue
+                try:
+                    self.protect(tr)
+                except Exception as e:
+                    log_event("ERROR", trade_id=tr.get("id"), where="paper_guard", error=repr(e)[:200])
 
     def reversal_loop(self):
         """15m reversal notes. Kept off the stop thread: those kline reads were delaying the 1-second guard."""
@@ -2013,6 +2038,7 @@ class Bot:
         if not once:
             threading.Thread(target=self.watchdog, daemon=True).start()
             threading.Thread(target=self.fast_guard, daemon=True, name="fast-guard").start()
+            threading.Thread(target=self.paper_guard, daemon=True, name="paper-guard").start()
             threading.Thread(target=self.reversal_loop, daemon=True, name="reversal").start()
         try:
             me = self.so.me()

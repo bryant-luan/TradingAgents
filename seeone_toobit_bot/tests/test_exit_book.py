@@ -116,8 +116,10 @@ class Manage(unittest.TestCase):
         }
         b = bot(book)
         tr = trade()
+        tr["exchange_flat"] = True
         b.st["trades"] = {"1": tr}
         b.manage({("CGPT-SWAP-USDT", "SHORT"): book.rows[0]}, {})
+        self.assertFalse(tr.get("exchange_flat"))
         self.assertTrue(tr["tps"][0]["filled"])
         # Cancelled, still ahead of the price, and posted once. It is not a fill.
         self.assertFalse(tr["tps"][1].get("cancelled"))
