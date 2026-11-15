@@ -56,6 +56,7 @@ class Learner:
         if path.exists():
             self.p.update(json.loads(path.read_text()))
         self.absorb_peers()
+        self._arm_loss_review()
 
     def book_roots(self) -> list[Path]:
         parent = self.path.parent
@@ -353,10 +354,93 @@ class Learner:
             rec = {**base, "type": "FLAT", "note": "接近保本出場 (多為 TP1 後保本止損)", "changes": changes}
             self.log("FLAT", **rec)
 
+        self.note_rule(tr, r, reason, save=False)
         self.refresh_effective()
         p["last_update"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self._insight(rec)
         self.save()
+
+    def note_rule(self, tr: dict, r: float | None, reason: str, save: bool = True):
+        """Three straight losses stop this rule. Paper and live both count.
+
+        The live self-scan short is the exception: its three losses raise the
+        expected-value bar in ``_roll_short_floor``.
+        """
+        if r is None or "小倉" in (reason or ""):
+            return
+        paper = bool(tr.get("paper") or tr.get("paper_probe"))
+        path, side = tr.get("path"), tr.get("side")
+        if not paper and path == "SELF ANALYSIS" and side == "SHORT":
+            return
+        rules = self.p.setdefault("rule_streaks", {})
+        note = S.roll_rule(rules, S.rule_key(path, side, paper), float(r), tr.get("tsym"))
+        if note:
+            self.log("RULE_STOP", reason=note, path=path, side=side, paper=paper)
+        if save:
+            self.save()
+
+    def _arm_loss_review(self):
+        changed = False
+        base = S.SELF_SHORT_FULL_RISK_EV
+        if self.p.get("loss_review_v") != 1:
+            self.p["loss_review_v"] = 1
+            changed = True
+            current = float(self.p.get("self_short_ev_floor") or base)
+            stepped = S.stuck_floor_step(base, self.p.get("short_loss_evs") or [], current)
+            if stepped is not None:
+                self.p["self_short_ev_floor"] = stepped
+                self.log("RULE_TIGHTEN",
+                         reason=f"最近 {S.LOSS_REVIEW_N} 筆自選空單虧損的期望值都低於 {current:.2f}R，實盤門檻 → {stepped:.2f}R")
+        if "rule_streaks" not in self.p:
+            self.p["rule_streaks"] = S.replay_rule_streaks(self._rule_closes())
+            changed = True
+            stopped = [key for key, row in self.p["rule_streaks"].items() if row.get("open") is False]
+            if stopped:
+                self.log("RULE_STOP", rules=stopped, reason="連續 3 筆虧損，這些規則停止新開倉")
+        if changed:
+            self.save()
+
+    def _rule_closes(self) -> list[dict]:
+        """This book's closes, paper included, oldest first."""
+        path = self.path.parent / "trades" / "live_trades.jsonl"
+        if not path.exists():
+            return []
+        entries: dict[str, dict] = {}
+        exits: list[dict] = []
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return []
+        for line in lines:
+            if '"event": "ENTRY"' not in line and '"event": "EXIT"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            event, tid = row.get("event"), row.get("trade_id")
+            if not tid:
+                continue
+            if event == "ENTRY":
+                entries[tid] = row
+            elif event == "EXIT" and row.get("r_result") is not None:
+                exits.append(row)
+        out: list[dict] = []
+        seen: set[str] = set()
+        for row in exits:
+            tid = row["trade_id"]
+            if tid in seen:
+                continue
+            seen.add(tid)
+            opened = entries.get(tid) or {}
+            out.append({
+                "paper": bool(row.get("paper") or row.get("paper_probe") or opened.get("paper")),
+                "path": opened.get("path") or row.get("path"),
+                "side": opened.get("side") or row.get("side"),
+                "symbol": opened.get("symbol") or row.get("symbol"),
+                "r": float(row["r_result"]),
+            })
+        return out
 
     def _roll_short_floor(self, tr: dict, r: float, reason: str, changes: list):
         """Every three live self-scan short losses, raise the live bar to just above their best EV.
@@ -375,8 +459,8 @@ class Learner:
             evs = p.setdefault("short_loss_evs", [])
             evs.append({"symbol": tr.get("tsym"), "ev": None if ev is None else round(float(ev), 4), "r": r})
             del evs[:-S.LOSS_REVIEW_N]
-            new = S.roll_ev_floor(base, evs)
             old = float(p.get("self_short_ev_floor") or base)
+            new = S.roll_ev_floor(base, evs, old)
             if new > old + 1e-9:
                 p["self_short_ev_floor"] = new
                 shown = ", ".join(_loss_label(item) for item in evs)

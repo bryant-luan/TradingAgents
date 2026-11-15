@@ -18,9 +18,43 @@ class FullLive(unittest.TestCase):
     def test_three_losses_raise_the_live_bar(self):
         losses = [{"ev": 0.44}, {"ev": 0.44}, {"ev": 0.50}]
         self.assertEqual(S.roll_ev_floor(0.50, losses), 0.51)
-        self.assertEqual(S.roll_ev_floor(0.50, [{"ev": 0.32}, {"ev": 0.27}, {"ev": 0.37}]), 0.50)
+        # All three were already under the line. The bar still steps up.
+        self.assertEqual(S.roll_ev_floor(0.50, [{"ev": 0.32}, {"ev": 0.27}, {"ev": 0.37}]), 0.55)
+        self.assertEqual(S.stuck_floor_step(0.50, [{"ev": 0.37}, {"ev": 0.27}, {"ev": 0.32}], 0.50), 0.55)
+        self.assertIsNone(S.stuck_floor_step(0.50, [{"ev": 0.44}, {"ev": 0.50}, {"ev": 0.73}], 0.74))
         self.assertFalse(S.self_short_full_live("SHORT", 0.4, 0.008, 0.50, 1.0, 0.05, 0.51))
         self.assertTrue(S.self_short_full_live("SHORT", 0.4, 0.008, 0.73, 1.0, 0.05, 0.51))
+
+    def test_three_straight_losses_stop_that_rule(self):
+        rules = {}
+        key = S.rule_key("IGNITION 15m", "LONG", True)
+        self.assertIsNone(S.roll_rule(rules, key, -1.0, "AGT"))
+        self.assertIsNone(S.roll_rule(rules, key, 0.4, "KAVA"))
+        self.assertEqual(rules[key]["streak"], 0)
+        self.assertIsNone(S.roll_rule(rules, key, -1.0, "TON"))
+        self.assertIsNone(S.roll_rule(rules, key, -1.0, "BTW"))
+        note = S.roll_rule(rules, key, -1.0, "BULLA")
+        self.assertIn("停止新開倉", note)
+        self.assertFalse(S.rule_open(rules, key))
+        self.assertIsNone(S.roll_rule(rules, key, 1.2, "EVAA"))
+        self.assertFalse(S.rule_open(rules, key))
+
+    def test_a_live_self_short_keeps_its_bar_instead_of_stopping(self):
+        closes = [
+            {"paper": False, "path": "SELF ANALYSIS", "side": "SHORT", "symbol": "LTC", "r": -0.93},
+            {"paper": False, "path": "SELF ANALYSIS", "side": "SHORT", "symbol": "BONK", "r": -1.48},
+            {"paper": False, "path": "SELF ANALYSIS", "side": "SHORT", "symbol": "COTI", "r": -0.87},
+            {"paper": True, "path": "SELF ANALYSIS", "side": "SHORT", "symbol": "CRV", "r": -0.42},
+            {"paper": True, "path": "SELF ANALYSIS", "side": "SHORT", "symbol": "BMT", "r": -0.53},
+            {"paper": True, "path": "SELF ANALYSIS", "side": "SHORT", "symbol": "0G", "r": -0.59},
+        ]
+        rules = S.replay_rule_streaks(closes)
+        self.assertNotIn(S.rule_key("SELF ANALYSIS", "SHORT", False), rules)
+        self.assertFalse(S.rule_open(rules, S.rule_key("SELF ANALYSIS", "SHORT", True)))
+        reopened = S.replay_rule_streaks(closes + [
+            {"paper": True, "path": "SELF ANALYSIS", "side": "SHORT", "symbol": "KAVA", "r": 1.5},
+        ])
+        self.assertTrue(S.rule_open(reopened, S.rule_key("SELF ANALYSIS", "SHORT", True)))
 
     def test_a_win_steps_the_bar_back(self):
         self.assertEqual(S.ease_ev_floor(0.51, 0.50), 0.50)

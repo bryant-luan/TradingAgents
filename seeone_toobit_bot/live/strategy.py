@@ -230,11 +230,14 @@ GATE_PAPER_SCALE = 1.6
 # stops there. Quality under 60 has no settled sample and stays out. The flush
 # long is the other half of this tape: it waits until the 15m score has turned up.
 SELF_SHORT_FULL_RISK_EV = 0.50
-# Three live self-scan short losses roll this bar up. The next live short has to
-# clear the highest expected value among those three, so the same print is not
-# sent again. A later win steps it back toward the line above. See learner.py.
+# Three straight losses review the rule, on the live book and on paper.
+# A self-scan short raises the expected-value bar. If those three were already
+# under the bar, the bar still steps up, so the same print is not sent again.
+# Every other rule stops opening. A win clears a streak that has not stopped
+# the rule. A stopped rule stays stopped. See learner.py.
 LOSS_REVIEW_N = 3
 LOSS_REVIEW_R = -0.30
+RULE_FLAT_R = 0.05
 SELF_SHORT_SAMPLE_EV = 0.20
 SELF_SHORT_BEAR_EV = 0.15
 SELF_SHORT_MARGIN_CAP_PCT = 0.33
@@ -247,24 +250,100 @@ SELF_SHORT_WEAK_RET24H = 3.0
 SELF_SHORT_WEAK_EMA_GAP = 0.14
 
 
-def roll_ev_floor(base: float, losses: list) -> float:
-    """Live expected-value bar after the latest three losses.
+def roll_ev_floor(base: float, losses: list, current: float | None = None) -> float:
+    """Expected-value bar after the latest three losses.
 
-    The next live short has to clear the highest expected value in that trio.
-    An identical print does not get another live order. The bar does not fall
-    below ``base``.
+    The next short has to clear the highest expected value in that trio.
+    When every value in the trio was already under the bar, the bar still
+    steps up by 0.05R. It does not fall below ``base``.
     """
+    floor = base if current is None else float(current)
     last = list(losses)[-LOSS_REVIEW_N:]
     if len(last) < LOSS_REVIEW_N:
-        return base
+        return round(floor, 2)
     evs = []
     for item in last:
         ev = item.get("ev") if isinstance(item, dict) else item
         if ev is not None:
             evs.append(float(ev))
     if not evs:
-        return base
-    return round(max(base, max(evs) + 0.01), 2)
+        return round(max(base, floor + 0.05), 2)
+    cleared = max(evs) + 0.01
+    if cleared > floor + 1e-9:
+        return round(max(base, cleared), 2)
+    return round(max(base, floor + 0.05), 2)
+
+
+def stuck_floor_step(base: float, losses: list, current: float) -> float | None:
+    """One step when three losses left the bar sitting on its measured line."""
+    if current > base + 1e-9:
+        return None
+    new = roll_ev_floor(base, losses, current)
+    if new > current + 1e-9:
+        return new
+    return None
+
+
+def rule_key(path: str | None, side: str | None, paper: bool) -> str:
+    return f"{'模擬' if paper else '實盤'}|{path or '?'}|{side or '?'}"
+
+
+def roll_rule(rules: dict, key: str, r: float, symbol: str | None = None) -> str | None:
+    """Three straight losses stop new entries of this rule.
+
+    A win clears the streak. A rule that has already stopped stays stopped,
+    including when a position that was already open later wins.
+    """
+    row = rules.setdefault(key, {"streak": 0, "open": True, "last": []})
+    if row.get("open", True) is False:
+        return None
+    if r <= LOSS_REVIEW_R:
+        row["streak"] = int(row.get("streak") or 0) + 1
+        last = row.setdefault("last", [])
+        last.append({"symbol": symbol, "r": round(float(r), 3)})
+        del last[:-LOSS_REVIEW_N]
+        if row["streak"] >= LOSS_REVIEW_N:
+            row["open"] = False
+            shown = ", ".join(
+                f"{(item.get('symbol') or '').replace('-SWAP-USDT', '')} {item['r']:+.2f}R"
+                for item in last)
+            return f"{key} 連續 {LOSS_REVIEW_N} 筆虧損（{shown}），停止新開倉"
+        return None
+    if r > RULE_FLAT_R:
+        row["streak"] = 0
+        row["last"] = []
+    return None
+
+
+def rule_open(rules: dict | None, key: str) -> bool:
+    row = (rules or {}).get(key) or {}
+    return row.get("open", True) is not False
+
+
+def replay_rule_streaks(closes: list[dict]) -> dict:
+    """Current streak of every rule except the live self-scan short.
+
+    That short raises its expected-value bar instead of stopping. A win later
+    in the history clears an older trio, so only a streak that is still open
+    at the last close stops the rule.
+    """
+    rules: dict = {}
+    for row in closes:
+        paper = bool(row.get("paper"))
+        path, side = row.get("path"), row.get("side")
+        if not paper and path == "SELF ANALYSIS" and side == "SHORT":
+            continue
+        if row.get("r") is None:
+            continue
+        r = float(row["r"])
+        key = rule_key(path, side, paper)
+        held = rules.get(key)
+        if held and held.get("open") is False and r > RULE_FLAT_R:
+            held["open"] = True
+            held["streak"] = 0
+            held["last"] = []
+        roll_rule(rules, key, r, row.get("symbol"))
+    return rules
 
 
 def ease_ev_floor(current: float, base: float, step: float = 0.05) -> float:

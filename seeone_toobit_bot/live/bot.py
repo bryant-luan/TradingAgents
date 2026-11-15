@@ -640,6 +640,7 @@ class Bot:
                                   "reason": reason, "paper": True, "paper_probe": bool(tr.get("paper_probe")),
                                   "listing": tr.get("listing")})
         self.st["trades"].pop(tid, None)
+        self.learner.note_rule(tr, r_result, reason)
         if tr.get("paper_probe") and tr.get("path") == "QUIET LONG":
             self._note_quiet_long()
         elif tr.get("paper_probe") and str(tr.get("path") or "").startswith("IGNITION"):
@@ -905,6 +906,11 @@ class Bot:
 
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
+        paper = bool(self.paper or sig.get("paper_only"))
+        key = S.rule_key(sig.get("signal_path"), side, paper)
+        if not S.rule_open(self.learner.p.get("rule_streaks"), key):
+            self.note_skip(sig, f"{key} 連續 {S.LOSS_REVIEW_N} 筆虧損後已停止新開倉")
+            return False
         probe = bool(sig.get("paper_only")) and not self.paper
         if S.SKIP_GATE_ONLY and getattr(self.tb, "name", "") == "gate" and listing(sym) == "only":
             self.note_skip(sig, "只在 Gate 上市的幣先不開：11-09 COOL、FATCOIN、FLORK、ZZZ 4 筆全虧")
