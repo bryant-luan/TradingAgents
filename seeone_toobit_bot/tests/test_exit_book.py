@@ -300,6 +300,29 @@ class Manage(unittest.TestCase):
         self.assertIsNone(tr.get("exit_reason"))
         self.assertEqual(book.closed, [])
 
+    def test_live_spike_keeps_the_exchange_stop(self):
+        book = FakeBook()
+        book.px = 1.0045  # -0.45R, a 0.56R drop from the previous print
+        book.rows = [{"side": "SHORT", "position": "100"}]
+        b = bot(book)
+        tr = trade()
+        tr["_prev_r"] = 0.11
+        tr["tps"] = []
+        b.protect(tr)
+        self.assertIsNone(tr.get("exit_reason"))
+        self.assertEqual(book.closed, [])
+
+    def test_paper_spike_still_flattens(self):
+        book = FakeBook()
+        book.px = 1.0045
+        b = bot(book)
+        tr = trade()
+        tr["paper"] = True
+        tr["_prev_r"] = 0.11
+        tr["tps"] = []
+        b.protect(tr)
+        self.assertTrue(str(tr.get("exit_reason") or "").startswith("一秒內逆向"))
+
     def test_paper_loser_still_flattens(self):
         book = FakeBook()
         book.px = 1.009

@@ -535,9 +535,14 @@ class Bot:
         # A one-second wick that is still on the profitable side of the entry is not a stop-out.
         # MOCA short (Gate, Nov 11 12:35 Taipei) fell from +0.75R to +0.15R and was market-closed
         # at +0.05R. Price then reached about +3.3R. MELANIA (Toobit, Nov 10 06:06) was the same
-        # kind of wick and was still about +1.5R an hour later. A wick that crosses to a loss
-        # still flattens, so a spike through the stop is not left on.
-        elif (prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and cur_r <= 0
+        # kind of wick and was still about +1.5R an hour later.
+        # A wick that crosses through the stop is not market-sold on a live book either.
+        # HAEDAL (Toobit, Nov 10) went from -0.52R to -1.08R and the market fill was -1.10R,
+        # past the 7.5 USDT stop, for -12.9 on the exchange. AGT the same week printed -1.61R
+        # against a 9 USDT stop. HOLO (Gate, Nov 10 21:30 Taipei) went from -0.16R to -1.39R
+        # and the bill shows -10.68 USDT. The resting stop is the fill those spikes were
+        # trying to beat. Paper still marks the wick.
+        elif (not live_stop and prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and cur_r <= 0
               and self._spike_through_lock(tr, cur_r)):
             adverse = f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉"
         elif (not live_stop and not flush_hold and not ignition_hold
