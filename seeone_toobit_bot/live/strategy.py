@@ -35,6 +35,10 @@ class SeeOneLimited(Exception):
         super().__init__(f"分析驗算限流中，{wait_s:.0f} 秒內不再打")
 
 
+class SeeOneNoData(Exception):
+    """This symbol has no market data. See One itself answered, so the scan keeps going."""
+
+
 # Minimum space between analysis-review posts, and how long to stay silent after a 429
 # when See One does not send Retry-After. A burst at 11:52 Taipei on Nov 6 started the
 # penalty; probing every 5 or 15 minutes kept it alive. One quiet hour matches the gap
@@ -697,6 +701,17 @@ class SeeOne:
                     raise SeeOneLimited(pause)
                 if r.status_code == 429:
                     raise requests.HTTPError(f"429 {path}", response=r)
+                if is_review and r.status_code == 503:
+                    detail = ""
+                    try:
+                        body = r.json()
+                        detail = str(body.get("detail") or "") if isinstance(body, dict) else ""
+                    except ValueError:
+                        detail = ""
+                    # AUS200 and the other index names answer this while BTC and ETH review normally.
+                    # It is one symbol missing data, not an outage, and must not open the breaker.
+                    if "行情資料暫時無法取得" in detail:
+                        raise SeeOneNoData(detail or "行情資料暫時無法取得")
                 if r.status_code >= 500:
                     raise requests.HTTPError(f"{r.status_code} {path}")
                 r.raise_for_status()

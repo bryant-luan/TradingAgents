@@ -829,9 +829,11 @@ class SelfScanner:
         if short_only:
             # Mover boards have wide stops. The short that clears the bar has a stop
             # under 1%, and those names sit off the boards. Look there first.
+            # Index and stock names often have no See One tape and answer 503. They go last
+            # so a missing quote does not sit in front of a crypto short.
             def on_board(c: dict) -> bool:
                 return any(str(t).startswith(("強勢榜", "潛力榜", "客製化", "主流幣")) for t in (c.get("tags") or []))
-            ordered = sorted(ordered, key=on_board)
+            ordered = sorted(ordered, key=lambda c: ("TradFi" in (c.get("tags") or []), on_board(c)))
         sides = []
         for side in ("LONG", "SHORT"):
             direc = htf if side == "LONG" else -htf
@@ -1339,6 +1341,10 @@ class SelfScanner:
                                                  share=True)
             except Exception as e:
                 self.log("ERROR", where="self_review", symbol=sym, error=repr(e)[:300])
+                # One index or stock with no tape. See One is up; review the next name.
+                if isinstance(e, S.SeeOneNoData) or "行情資料暫時無法取得" in repr(e):
+                    self.d.setdefault("unsupported", {})[sym] = time.time() + 30 * 60
+                    return False
                 # SeeOneLimited is raised only after a real 429 (or when the shared cooldown is
                 # still open). The clock lives on the client, so this scan just stops.
                 if isinstance(e, S.SeeOneLimited):
@@ -1383,8 +1389,11 @@ class SelfScanner:
                 px15 = pl_long.get("px15")
             oi15 = snap.get("oi15")
             for sd, plx in plans.items():
+                # A one-sided review fills the other probability from the saved bias.
+                # That side has no fresh response, and dropping the name here used to
+                # throw away five of every six shorts before the entry gate.
                 if sd not in rv:
-                    return False
+                    continue
                 self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf,
                             pl_long.get("rpos"), pl_long.get("rsi"), self.btc.get("ret1h"), px15, oi15)
             self._flow_shadow(sym, side, px, pl, prob, htf, side in tradable)
