@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from live import bot as botmod
-from live.bot import Bot, filled_margin, position_gone, tp_fill_verdict, tp_still_ahead
+from live.bot import Bot, filled_margin, position_gone, position_pnl, remaining_contracts, tp_fill_verdict, tp_still_ahead
 from live.gate import Gate, GateError, price_order_view
 from live.toobit import ToobitError
 
@@ -179,6 +179,38 @@ class Manage(unittest.TestCase):
         b.manage({}, {})
         self.assertIn("1", b.st["trades"])
         self.assertFalse(tr.get("exchange_flat"))
+
+    def test_a_previous_round_trip_is_not_this_trades_pnl(self):
+        opened = 1_700_000_000
+        rows = [
+            {"side": "SHORT", "openTime": (opened - 3600) * 1000, "closeTime": (opened - 30) * 1000,
+             "realizedPnL": 20.0, "closeAvgPrice": 0.9},
+            {"side": "SHORT", "openTime": (opened - 8) * 1000, "closeTime": (opened + 40) * 1000,
+             "realizedPnL": 1.07, "closeAvgPrice": 0.99},
+            {"side": "LONG", "openTime": (opened - 8) * 1000, "closeTime": (opened + 40) * 1000,
+             "realizedPnL": 9.0, "closeAvgPrice": 1.1},
+        ]
+        pnl, px = position_pnl(rows, "SHORT", opened)
+        self.assertEqual(pnl, 1.07)
+        self.assertEqual(px, 0.99)
+
+    def test_partial_closes_of_the_same_position_add_up(self):
+        opened = 1_700_000_000
+        open_ms = (opened - 5) * 1000
+        rows = [
+            {"side": "SHORT", "openTime": open_ms, "closeTime": (opened + 10) * 1000,
+             "realizedPnL": 0.4, "closeAvgPrice": 0.99},
+            {"side": "SHORT", "openTime": open_ms + 500, "closeTime": (opened + 80) * 1000,
+             "realizedPnL": 0.67, "closeAvgPrice": 0.97},
+        ]
+        pnl, px = position_pnl(rows, "SHORT", opened)
+        self.assertEqual(round(pnl, 2), 1.07)
+        self.assertEqual(px, 0.97)
+
+    def test_filled_targets_leave_the_book_risk(self):
+        tr = trade()
+        tr["tps"][0]["filled"] = True
+        self.assertEqual(remaining_contracts(tr), 90)
 
     def test_partial_fill_keeps_its_share_of_margin(self):
         self.assertEqual(filled_margin(353265, 32791, 80.0), round(80.0 * 32791 / 353265, 4))

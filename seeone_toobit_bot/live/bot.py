@@ -156,6 +156,48 @@ def position_gone(err: BaseException) -> bool:
     return "noposition" in text or "no_short_position" in text or "no_long_position" in text
 
 
+def position_pnl(rows: list, side: str, opened_ts: float, slack_s: int = 60, open_slack_s: int = 600) -> tuple[float | None, object]:
+    """PnL of the position this trade opened.
+
+    A close in the minute before the record can be the previous round trip. When the venue
+    gives an open time, only the position opened nearest this trade is counted. Partial
+    closes of that same position are summed. Rows without an open time keep the old window.
+    """
+    opened_ms = opened_ts * 1000
+    same = []
+    for h in rows:
+        if h.get("side") != side:
+            continue
+        if int(h.get("closeTime") or 0) < opened_ms - slack_s * 1000:
+            continue
+        same.append(h)
+    if not same:
+        return None, None
+    dated = [h for h in same if int(h.get("openTime") or 0)]
+    if dated:
+        def dist(h: dict) -> int:
+            return abs(int(h["openTime"]) - int(opened_ms))
+        nearest = min(dated, key=dist)
+        if dist(nearest) > open_slack_s * 1000:
+            return None, None
+        anchor = int(nearest["openTime"])
+        chosen = [h for h in dated if abs(int(h["openTime"]) - anchor) < 2000]
+    else:
+        chosen = same
+    pnl = sum(float(h.get("realizedPnL") or h.get("realizedPnl") or 0) for h in chosen)
+    close_px = max(chosen, key=lambda h: int(h.get("closeTime") or 0)).get("closeAvgPrice")
+    return pnl, close_px
+
+
+def remaining_contracts(tr: dict) -> int:
+    """Contracts still open after the take-profits that have filled."""
+    left = int(tr.get("contracts") or 0)
+    for tp in tr.get("tps") or []:
+        if tp.get("filled"):
+            left -= int(tp.get("qty") or 0)
+    return max(0, left)
+
+
 def filled_margin(planned: int, filled: int, margin: float) -> float:
     """A partial fill keeps the same fraction of the planned margin."""
     if planned and filled != planned:
@@ -624,10 +666,7 @@ class Bot:
                 self.cancel_quiet(tp["order_id"], tp.get("kind", "STOP"))
         pnl, close_px = None, None
         try:
-            for h in self.tb.history_positions(sym, 10):
-                if h.get("side") == side and int(h.get("closeTime") or 0) >= tr["opened_ts"] * 1000 - 60000:
-                    pnl = (pnl or 0) + float(h.get("realizedPnL") or h.get("realizedPnl") or 0)
-                    close_px = h.get("closeAvgPrice")
+            pnl, close_px = position_pnl(self.tb.history_positions(sym, 10), side, tr["opened_ts"])
         except ToobitError as e:
             log_event("ERROR", trade_id=tid, where="history_positions", error=str(e))
         fees = self.trade_fees(sym, tr["opened_ts"])
@@ -1416,7 +1455,7 @@ class Bot:
         for t in self._risk_trades():
             sgn = 1 if t["side"] == "LONG" else -1
             mult = float(specs.get(t["tsym"], {}).get("multiplier", 0))
-            total += t["contracts"] * mult * max(0.0, (t["entry"] - t["stop"]) * sgn)
+            total += remaining_contracts(t) * mult * max(0.0, (t["entry"] - t["stop"]) * sgn)
         return total
 
     def pre_move(self, sig: dict) -> float | None:

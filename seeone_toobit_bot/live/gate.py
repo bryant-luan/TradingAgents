@@ -380,8 +380,11 @@ class Gate:
             if when < 10_000_000_000:
                 when *= 1000
             close_px = row.get("short_price") if side == "LONG" else row.get("long_price")
-            out.append({"side": side, "closeTime": int(when), "realizedPnL": row.get("pnl") or 0,
-                        "closeAvgPrice": close_px})
+            opened = float(row.get("first_open_time") or 0)
+            if opened and opened < 10_000_000_000:
+                opened *= 1000
+            out.append({"side": side, "closeTime": int(when), "openTime": int(opened),
+                        "realizedPnL": row.get("pnl") or 0, "closeAvgPrice": close_px})
         return out
 
     def set_isolated(self, symbol: str):
