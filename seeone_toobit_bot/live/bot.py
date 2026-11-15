@@ -95,7 +95,11 @@ RECONCILE_S = 60
 ADOPT_TP_R = [1.0, 1.5, 2.0, 3.0, 4.0]
 ADOPT_MAX_STOP_PCT = 0.06
 LOOP_SECONDS = 30
-SCAN_RESULT_TTL_S = 120
+# A passing short is published as soon as it is reviewed. The main loop may be inside a
+# maker entry (six 30s rests) and only reads the queue when that cycle returns. 120s was
+# shorter than one entry, so the review was dropped and the name waited out its 5-minute
+# cooldown. The entry gate still rejects a price that has left the band.
+SCAN_RESULT_TTL_S = 900
 # While the main loop is inside a See One scan, this thread still ratchets exchange stops.
 FAST_GUARD_S = 1               # with a position open, watch price every second
 SPIKE_DROP_R = 0.45             # one-second adverse jump treated as a wick
@@ -1695,6 +1699,9 @@ class Bot:
             found, self._scan_out = self._scan_out, []
         for at, f, src in found:
             if time.time() - at > SCAN_RESULT_TTL_S:
+                log_event("SCAN_STALE", symbol=f["sig"].get("symbol"), side=f["sig"].get("side"),
+                          age_s=round(time.time() - at),
+                          reason="掃描結果過期，這輪不開；進場價仍會在下一輪重新驗算")
                 continue
             if f["sig"]["id"] in self.st["traded_ids"] or S.to_toobit(f["sig"]["symbol"]) in held_syms:
                 continue
