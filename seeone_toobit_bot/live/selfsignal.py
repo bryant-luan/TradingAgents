@@ -815,7 +815,7 @@ class SelfScanner:
         return S.SELF_SIDES + ("LONG",)
 
     def _near_extreme(self, ordered: list, htf: float | None, specs: dict, held: set,
-                      open_sides: tuple = S.SELF_SIDES, m15: float | None = None) -> list:
+                      open_sides: tuple = S.SELF_SIDES, m15: float | None = None, on_ready=None) -> list:
         """Names whose 3h price is still near the reversal extreme on an open side.
 
         The review budget is REVIEWS_PER_SCAN See One calls. Names already through the range
@@ -894,7 +894,17 @@ class SelfScanner:
             if mood_side == "LONG":
                 n_flush += 1
                 tradable = True
-            ranked.append((tradable, mood_score, {**c, "_plan": pl}))
+            row = {**c, "_plan": pl}
+            ranked.append((tradable, mood_score, row))
+            # Review a narrow-stop short as soon as it is planned. The rest of the
+            # book keeps being walked after that call, so the first See One review
+            # does not wait for the whole slate.
+            if short_only and tradable and on_ready is not None:
+                if sum(1 for t, _, _ in ranked if t) == 1:
+                    self.log("SHORT_REVIEW", symbol=c["symbol"], looked=looked, m15=m15, htf=htf,
+                             note="先審這檔，後面的名單繼續找")
+                if on_ready(row):
+                    break
         ranked.sort(key=lambda x: (not x[0], -x[1]))
         if short_only:
             ranked = [row for row in ranked if row[0]]
@@ -1236,43 +1246,39 @@ class SelfScanner:
             qv_min = self.learner.p.get("quote_vol_min", S.QUOTE_VOL_MIN_DEFAULT)
             ordered.sort(key=lambda c: 0 if qv_map.get(S.to_toobit(c["symbol"]), 0) >= qv_min else 1)
             btc_5m = micro_1h("BTC-SWAP-USDT")[1]
-        if seeone_open:
-            # Local plans are free. Spend the See One calls on names already sitting
-            # near the 3h extreme on a side the window allows, including the liquid-short band.
-            ordered = self._near_extreme(ordered, htf, specs, held, open_sides, m15)
-        # One name written to OPEN_NEXT is reviewed before the extreme queue, then the file is removed.
-        # INUSDT was gated at +0.54R on Nov 11 18:25 Taipei, which clears the +0.50R floor.
-        pin_file = self.path.parent / "OPEN_NEXT"
-        pin_sym = pin_file.read_text().strip().upper() if pin_file.exists() else ""
-        if pin_sym:
-            pin = by_symbol.get(pin_sym)
-            if pin is not None:
-                ordered = [pin] + [c for c in ordered if c.get("symbol") != pin_sym]
-                pin_file.unlink(missing_ok=True)
-        limit = 40 if not seeone_open else len(ordered)
-        pl_long = None
         skipped = {"specs": 0, "plan": 0, "pick": 0}
-        for c in ordered[:limit]:
+        handed: set[str] = set()
+        halted = False
+
+        def review_one(c) -> bool:
+            nonlocal reviewed, shadowed, halted
+            if halted:
+                return True
+            sym = c.get("symbol")
+            if sym in handed:
+                return False
+            handed.add(sym)
+            pl_long = None
             sym = c["symbol"]
             tsym = S.to_toobit(sym)
             if tsym not in specs or tsym in held:
                 skipped["specs"] += 1
-                continue
+                return False
             if not seeone_open:
                 if now - self.d.setdefault("last_shadow", {}).get(sym, 0) < REVIEW_COOLDOWN_S:
-                    continue
+                    return False
                 pl_long = self.plan(tsym, "LONG")
                 self.d["last_shadow"][sym] = time.time()
                 if not pl_long:
-                    continue
+                    return False
                 self._emit_shadow(sym, pl_long, htf, None, None)
                 shadowed += 1
-                continue
+                return False
             try:
                 pl_long = c.get("_plan") or self.plan(tsym, "LONG")
                 if not pl_long:
                     skipped["plan"] += 1
-                    continue
+                    return False
                 d, px = pl_long["dist"], pl_long["price"]
                 pl_short = {**pl_long, "stop": px + d, "tps": [px - d * r for r in TP_R]}
                 plans = {"LONG": pl_long, "SHORT": pl_short}
@@ -1300,7 +1306,7 @@ class SelfScanner:
                 pick = tradable or eligible
                 if not pick:
                     skipped["pick"] += 1
-                    continue
+                    return False
                 short_ok = "SHORT" in tradable or "SHORT" in eligible
                 short_prob = None
                 if short_ok and rpos is not None:
@@ -1339,17 +1345,19 @@ class SelfScanner:
                     self.d["last_review"][sym] = time.time()
                     if pl_long:
                         self._emit_shadow(sym, pl_long, htf, None, None)
-                    break
+                    halted = True
+                    return True
                 if isinstance(e, S.SeeOneDown):
-                    break
+                    halted = True
+                    return True
                 if any(code in repr(e) for code in ("400 ", "404 ", "422 ")):
                     self.d.setdefault("unsupported", {})[sym] = time.time() + 6 * 3600
-                continue
+                return False
             reviewed += 1
             self.d["last_review"][sym] = time.time()
             time.sleep(1.5)
             if any(len((r.get("geometry") or {}).get("targets") or []) != len(TP_R) for r in rv.values()):
-                continue
+                return False
             raw = {sd: float(r.get("probability") or 0) for sd, r in rv.items()}
             samples = self.d.setdefault("bias_samples", [])
             if "LONG" in raw and "SHORT" in raw:
@@ -1376,7 +1384,7 @@ class SelfScanner:
             oi15 = snap.get("oi15")
             for sd, plx in plans.items():
                 if sd not in rv:
-                    continue
+                    return False
                 self.record(sym, tsym, sd, px, plx["stop"], plx["tps"][0], round(raw[sd] - bias, 1), m15, htf,
                             pl_long.get("rpos"), pl_long.get("rsi"), self.btc.get("ret1h"), px15, oi15)
             self._flow_shadow(sym, side, px, pl, prob, htf, side in tradable)
@@ -1385,7 +1393,7 @@ class SelfScanner:
             ev = self.expected_r(r, split, d / px, bias)
             max_prob = self.learner.p.get("self_max_prob")
             if max_prob is not None and prob >= max_prob:
-                continue
+                return False
             flush_long = side == "LONG" and bounce
             floor_prob, floor_ev = ((max(min_prob, SHORT_MIN_PROB), SHORT_MIN_EV_R) if side == "SHORT"
                                     else (min_prob, MIN_EV_R))
@@ -1401,7 +1409,7 @@ class SelfScanner:
                 self.log("SELF_GATE", symbol=sym, side=side, prob=prob, edge=edge,
                          quality=quality, ev=ev, min_prob=floor_prob, min_edge=MIN_EDGE,
                          min_quality=MIN_QUALITY, min_ev=floor_ev)
-                continue
+                return False
             p1h = 0.0
             if not flush_long:
                 try:
@@ -1411,7 +1419,7 @@ class SelfScanner:
             if not flush_long and p1h < CONFIRM_MIN_PROB:
                 self.log("SELF_REJECT", symbol=sym, side=side, prob_15m=prob, prob_1h=round(p1h, 1),
                          reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {CONFIRM_MIN_PROB}%，週期不一致")
-                continue
+                return False
             band = S.self_direc_window(htf if side == "LONG" else None if htf is None else -htf, side)
             found.append(self.to_signal({**c, "side": side, "bounce_long": side == "LONG" and bounce,
                                         "strong_liquid_short": band == "strong_short",
@@ -1419,6 +1427,26 @@ class SelfScanner:
                                         r, pl, prob, round(p1h, 1), quality, ev, regime, raw, bias, edge))
             announce(found[-1])
             time.sleep(0.3)
+            return False
+
+        # One name written to OPEN_NEXT is reviewed before the extreme queue, then the file is removed.
+        # INUSDT was gated at +0.54R on Nov 11 18:25 Taipei, which clears the +0.50R floor.
+        pin_file = self.path.parent / "OPEN_NEXT"
+        pin_sym = pin_file.read_text().strip().upper() if pin_file.exists() else ""
+        pin = by_symbol.get(pin_sym) if pin_sym else None
+        if pin is not None and seeone_open and tuple(open_sides) == ("SHORT",):
+            review_one(pin)
+        if seeone_open:
+            # A short-only tape reviews each narrow stop as soon as it is planned.
+            ordered = self._near_extreme(ordered, htf, specs, held, open_sides, m15,
+                                           on_ready=review_one if tuple(open_sides) == ("SHORT",) else None)
+        if pin is not None:
+            ordered = [pin] + [c for c in ordered if c.get("symbol") != pin_sym]
+            pin_file.unlink(missing_ok=True)
+        limit = 40 if not seeone_open else len(ordered)
+        for c in ordered[:limit]:
+            if review_one(c):
+                break
         self._add_quiet_shorts(ordered[:40], regime, htf, specs, held, found)
         quiet = [f for f in found if f["sig"].get("quiet_strong_short")]
         rest = [f for f in found if not f["sig"].get("quiet_strong_short")]
