@@ -347,7 +347,7 @@ class Manage(unittest.TestCase):
         self.assertIsNone(tr.get("exit_reason"))
         self.assertEqual(book.closed, [])
 
-    def test_paper_spike_still_flattens(self):
+    def test_paper_spike_stays_with_the_stop(self):
         book = FakeBook()
         book.px = 1.0045
         b = bot(book)
@@ -356,7 +356,22 @@ class Manage(unittest.TestCase):
         tr["_prev_r"] = 0.11
         tr["tps"] = []
         b.protect(tr)
-        self.assertTrue(str(tr.get("exit_reason") or "").startswith("一秒內逆向"))
+        self.assertIsNone(tr.get("exit_reason"))
+        self.assertEqual(book.closed, [])
+
+    def test_a_wick_through_the_deep_line_waits_for_the_next_read(self):
+        book = FakeBook()
+        book.px = 1.009  # -0.9R, a 0.7R drop from the previous print
+        b = bot(book)
+        tr = trade()
+        tr["paper"] = True
+        tr["_prev_r"] = -0.2
+        tr["tps"] = []
+        b.protect(tr)
+        self.assertIsNone(tr.get("exit_reason"))
+        tr["_prev_r"] = -0.9
+        b.protect(tr)
+        self.assertTrue(str(tr.get("exit_reason") or "").startswith("浮虧"))
 
     def test_paper_loser_still_flattens(self):
         book = FakeBook()

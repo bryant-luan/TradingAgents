@@ -461,15 +461,6 @@ class Bot:
                 tr["exit_reason"] = "超過 48 小時且已不在 See One 訊號列表，時間止損"
                 self.maker_close(tr)
 
-    def _spike_through_lock(self, tr: dict, cur_r: float) -> bool:
-        """A one-second drop still above a profit-lock stop is left to that stop.
-
-        Market-closing it filled through the stop on XMR (Nov 10 10:57 Taipei): the print
-        was +3.06R, the lock was about +3R, and the fill realized +2.43R.
-        """
-        lk = S.held_lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
-        return not (lk is not None and lk > 0 and cur_r > lk)
-
     def protect(self, tr: dict):
         """Ratchet the exchange stop from the best price reached: break-even first, then lock part of the open profit.
 
@@ -529,22 +520,19 @@ class Bot:
         live_stop = not tr.get("paper")
         adverse = None
         urgent = True
+        # A one-second wick is not an exit. MOCA (Gate, Nov 11) fell from +0.75R to +0.15R
+        # and was sold at +0.05R, then went to about +3.3R. BMT (Gate, Nov 16 06:02 Taipei)
+        # fell from +0.06R to -0.43R and the paper rule flattened it. HAEDAL, AGT and HOLO
+        # were market-sold past the resting stop. The stop is the exit. A wick that is still
+        # past the deep line on the next read is a real move, and the paper rule below takes it.
+        spiked = prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R
         if htf_flat:
             adverse = f"大週期順方向 {htf * sgn:+.2f} 已低於 {htf_floor}，趨勢消失，平倉"
             urgent = False
-        # A one-second wick that is still on the profitable side of the entry is not a stop-out.
-        # MOCA short (Gate, Nov 11 12:35 Taipei) fell from +0.75R to +0.15R and was market-closed
-        # at +0.05R. Price then reached about +3.3R. MELANIA (Toobit, Nov 10 06:06) was the same
-        # kind of wick and was still about +1.5R an hour later.
-        # A wick that crosses through the stop is not market-sold on a live book either.
-        # HAEDAL (Toobit, Nov 10) went from -0.52R to -1.08R and the market fill was -1.10R,
-        # past the 7.5 USDT stop, for -12.9 on the exchange. AGT the same week printed -1.61R
-        # against a 9 USDT stop. HOLO (Gate, Nov 10 21:30 Taipei) went from -0.16R to -1.39R
-        # and the bill shows -10.68 USDT. The resting stop is the fill those spikes were
-        # trying to beat. Paper still marks the wick.
-        elif (not live_stop and prev_r is not None and prev_r - cur_r >= SPIKE_DROP_R and cur_r <= 0
-              and self._spike_through_lock(tr, cur_r)):
-            adverse = f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），視為插針，平倉"
+        elif spiked:
+            log_event("SPIKE_HELD", trade_id=tr["id"], symbol=sym, side=side, price=px,
+                      prev_r=prev_r, cur_r=round(cur_r, 3),
+                      reason=f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），留在止損")
         elif (not live_stop and not flush_hold and not ignition_hold
               and cur_r <= (AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R)):
             line = AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R
