@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from live import bot as botmod
-from live.bot import Bot, position_gone, tp_fill_verdict
+from live.bot import Bot, position_gone, tp_fill_verdict, tp_still_ahead
 from live.toobit import ToobitError
 
 
@@ -23,6 +23,12 @@ class Verdict(unittest.TestCase):
         self.assertTrue(position_gone(ToobitError("{'label': 'AUTO_USER_NO_SHORT_POSITION'}")))
         self.assertFalse(position_gone(ToobitError("ReadTimeout")))
 
+    def test_restore_only_while_the_target_is_still_ahead(self):
+        self.assertTrue(tp_still_ahead("SHORT", 1.0, 0.97))
+        self.assertFalse(tp_still_ahead("SHORT", 0.90, 0.97))
+        self.assertTrue(tp_still_ahead("LONG", 1.0, 1.03))
+        self.assertFalse(tp_still_ahead("LONG", 1.05, 1.03))
+
 
 class FakeBook:
     def __init__(self):
@@ -30,13 +36,22 @@ class FakeBook:
         self.rows = []
         self.stops = []
         self.closed = []
+        self.placed = []
         self.px = 1.0
+        self._n = 0
 
     def order(self, oid):
         return self.orders[str(oid)]
 
     def open_orders(self, symbol, kind="STOP"):
-        return []
+        return [{"orderId": oid} for oid, k in self.placed if k == kind]
+
+    def post_only(self, symbol, side, contracts, price, tag):
+        self._n += 1
+        oid = f"new{self._n}"
+        self.placed.append((oid, "LIMIT"))
+        self.orders[oid] = {"orderId": oid, "status": "NEW", "executedQty": 0}
+        return {"orderId": oid}
 
     def positions(self, symbol):
         return list(self.rows)
@@ -104,13 +119,18 @@ class Manage(unittest.TestCase):
         b.st["trades"] = {"1": tr}
         b.manage({("CGPT-SWAP-USDT", "SHORT"): book.rows[0]}, {})
         self.assertTrue(tr["tps"][0]["filled"])
-        self.assertTrue(tr["tps"][1].get("cancelled"))
+        # Cancelled, still ahead of the price, and posted once. It is not a fill.
+        self.assertFalse(tr["tps"][1].get("cancelled"))
         self.assertFalse(tr["tps"][1].get("filled"))
+        self.assertEqual(tr["tps"][1].get("restore_n"), 1)
+        self.assertEqual(tr["tps"][1].get("order_id"), "new1")
         self.assertFalse(tr["tps"][2].get("filled"))
         self.assertFalse(tr["tps"][2].get("cancelled"))
         # One real TP1 does move the post-TP stop. The cancelled targets do not count as a full take-profit.
         self.assertTrue(book.stops)
         self.assertFalse(all(tp.get("filled") for tp in tr["tps"]))
+        b.manage({("CGPT-SWAP-USDT", "SHORT"): book.rows[0]}, {})
+        self.assertEqual([oid for oid, _ in book.placed], ["new1"])
 
     def test_flat_book_does_not_invent_a_loss(self):
         book = FakeBook()

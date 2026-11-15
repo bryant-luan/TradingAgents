@@ -156,6 +156,12 @@ def position_gone(err: BaseException) -> bool:
     return "noposition" in text or "no_short_position" in text or "no_long_position" in text
 
 
+def tp_still_ahead(side: str, price: float, target: float) -> bool:
+    """The take-profit is still on the profitable side of the latest price."""
+    sgn = 1 if side == "LONG" else -1
+    return (float(target) - float(price)) * sgn > 0
+
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -317,6 +323,8 @@ class Bot:
                 tp["filled_at"] = now_iso()
                 log_event("TP_HIT", trade_id=tid, symbol=sym, side=side, label=tp["label"], price=tp["price"],
                           qty=tp["qty"], reason=f"{tp['label']} ({tp['r']}R) 觸發，部分平倉 {tp['qty']} 張")
+            if not tr.get("paper") and pos is not None:
+                self._restore_cancelled_tps(tr, pos)
             if any(tp.get("filled") and tp.get("label") == "TP1" for tp in tr["tps"]) and not tr.get("exit_reason"):
                 if not tr.get("init_dist"):
                     mult = float(self.tb.specs()[sym]["multiplier"])
@@ -1265,6 +1273,66 @@ class Bot:
             log_event("TP_MIGRATE", trade_id=tr["id"], symbol=sym, moved_to_maker=moved,
                       reason="觸發市價止盈改為 Maker 限價止盈，降低手續費")
 
+    def _submit_tp(self, sym: str, side: str, label: str, qty: int, price: float) -> tuple[str, str] | None:
+        """One reduce-only target. Post-only first; a cross falls back to a trigger. None if neither is accepted."""
+        close_side = "SELL_CLOSE" if side == "LONG" else "BUY_CLOSE"
+        px = self.tb.fmt_price(sym, price)
+        try:
+            o = self.tb.post_only(sym, close_side, qty, px, str(label).lower())
+            time.sleep(0.6)
+            if self.tb.order(o["orderId"]).get("status") == "REJECTED":
+                raise ToobitError("post-only rejected")
+            return str(o["orderId"]), "LIMIT"
+        except ToobitError:
+            try:
+                o = self.tb.close_trigger(sym, side, qty, px, str(label).lower())
+                return str(o.get("orderId")), "STOP"
+            except ToobitError as e:
+                log_event("ERROR", where="tp_order", symbol=sym, label=label, error=str(e))
+                return None
+
+    def _restore_cancelled_tps(self, tr: dict, pos: dict):
+        """A cancelled target that never filled is posted once more, while it is still ahead of the price.
+
+        CGPT's later targets left the book without a fill. Leaving them cancelled drops the runner.
+        A target the price has already traded through is not posted again.
+        """
+        if tr.get("paper") or tr.get("exit_reason"):
+            return
+        try:
+            left = int(float(pos.get("position") or 0))
+        except (TypeError, ValueError):
+            return
+        for tp in tr.get("tps") or []:
+            if tp.get("filled") or tp.get("cancelled") or not tp.get("order_id"):
+                continue
+            left -= int(tp.get("qty") or 0)
+        if left <= 0:
+            return
+        try:
+            px = self.tb.price(tr["tsym"])
+        except Exception:
+            return
+        for tp in tr.get("tps") or []:
+            if not tp.get("cancelled") or tp.get("filled") or tp.get("restore_n"):
+                continue
+            if not tp_still_ahead(tr["side"], px, tp.get("price") or 0):
+                continue
+            qty = min(int(tp.get("qty") or 0), left)
+            if qty <= 0:
+                continue
+            tp["restore_n"] = 1
+            placed = self._submit_tp(tr["tsym"], tr["side"], tp.get("label") or "tp", qty, float(tp["price"]))
+            if not placed:
+                continue
+            tp["cancelled"] = False
+            tp["order_id"], tp["kind"] = placed
+            tp["qty"] = qty
+            left -= qty
+            log_event("TP_RESTORE", trade_id=tr.get("id"), symbol=tr["tsym"], side=tr["side"],
+                      label=tp.get("label"), qty=qty, price=tp.get("price"), order_id=tp["order_id"],
+                      reason="止盈委託被取消且沒有成交，價格尚未到目標，補掛一次")
+
     def place_tps(self, sym: str, side: str, entry: float, plan: list, paper: bool = False) -> list:
         """TPs as post-only limit closes (maker fee); a TP that would cross falls back to a trigger order."""
         if paper or self.paper:
@@ -1275,25 +1343,14 @@ class Bot:
                 tps.append({**tp, "price": float(self.tb.fmt_price(sym, tp["price"])), "order_id": None,
                             "kind": "PAPER", "filled": False})
             return tps
-        close_side = "SELL_CLOSE" if side == "LONG" else "BUY_CLOSE"
         tps = []
         for tp in plan:
             if (tp["price"] <= entry) if side == "LONG" else (tp["price"] >= entry):
                 continue
-            px = self.tb.fmt_price(sym, tp["price"])
             rec = {**tp, "order_id": None, "kind": "LIMIT", "filled": False}
-            try:
-                o = self.tb.post_only(sym, close_side, tp["qty"], px, tp["label"].lower())
-                time.sleep(0.6)
-                if self.tb.order(o["orderId"]).get("status") == "REJECTED":
-                    raise ToobitError("post-only rejected")
-                rec["order_id"] = str(o["orderId"])
-            except ToobitError:
-                try:
-                    o = self.tb.close_trigger(sym, side, tp["qty"], px, tp["label"].lower())
-                    rec.update(order_id=str(o.get("orderId")), kind="STOP")
-                except ToobitError as e:
-                    log_event("ERROR", where="tp_order", symbol=sym, label=tp["label"], error=str(e))
+            placed = self._submit_tp(sym, side, tp["label"], tp["qty"], tp["price"])
+            if placed:
+                rec["order_id"], rec["kind"] = placed
             tps.append(rec)
         return tps
 
@@ -1825,9 +1882,11 @@ class Bot:
             if self.dry or self.stopping:
                 continue
             moved = False
-            for tr in list(self.st["trades"].values()):
-                if tr.get("exit_reason") or tr.get("exchange_flat"):
-                    continue
+            # Live stops first. A slow paper quote must not sit in front of a real position.
+            guarding = [t for t in self.st["trades"].values()
+                        if not t.get("exit_reason") and not t.get("exchange_flat")]
+            guarding.sort(key=lambda t: 1 if t.get("paper") else 0)
+            for tr in guarding:
                 try:
                     before = (tr.get("stop"), tr.get("lock_r"), tr.get("mfe_r"))
                     self.protect(tr)
@@ -1838,12 +1897,17 @@ class Bot:
                     log_event("ERROR", trade_id=tr.get("id"), where="fast_guard", error=repr(e)[:200])
             if moved:
                 save_state(self.st)
-            if time.time() - getattr(self, "_rev_at", 0) >= 15:
-                self._rev_at = time.time()
-                try:
-                    self.watch_reversals()
-                except Exception as e:
-                    log_event("ERROR", where="watch_reversals", error=repr(e)[:200])
+
+    def reversal_loop(self):
+        """15m reversal notes. Kept off the stop thread: those kline reads were delaying the 1-second guard."""
+        while not self.stopping:
+            time.sleep(15)
+            if self.dry or self.stopping:
+                continue
+            try:
+                self.watch_reversals()
+            except Exception as e:
+                log_event("ERROR", where="watch_reversals", error=repr(e)[:200])
 
     def watch_reversals(self):
         """Record a 15m reversal. Exit only if the next bar also finishes against the trade.
@@ -1949,6 +2013,7 @@ class Bot:
         if not once:
             threading.Thread(target=self.watchdog, daemon=True).start()
             threading.Thread(target=self.fast_guard, daemon=True, name="fast-guard").start()
+            threading.Thread(target=self.reversal_loop, daemon=True, name="reversal").start()
         try:
             me = self.so.me()
         except Exception as e:
