@@ -404,6 +404,12 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 # at +2R was worse (+1.241R on the shorts). After +3R the stop now stays 1R behind the high,
 # stepped by 0.25R, and the floor at +3R is +2R: +3.02R locks +2.00R, +4.00R locks +3.00R.
 LOCK_LADDER = ((2.0, 0.0), (3.0, 2.0))
+# Paper probes (ignition, quiet) lock the open profit once it has reached +1R.
+# The stop sits 0.5R behind the best price, stepped by 0.25R: +1.00R locks +0.50R,
+# +1.50R locks +1.00R, +2.00R locks +1.50R. Live self-scan keeps the ladder above.
+# Tightening that ladder before +2R cut the 5m replay about in half.
+PAPER_PEAK_ARM_R = 1.0
+PAPER_PEAK_GAP_R = 0.5
 # Gate live, 2026-11-14 12:06-12:41 Taipei. BANANAS31 flush long filled at 0.004077,
 # initial stop 0.004010. TP1 through TP4 filled. Best open profit +4.80R. The stop
 # moved to break-even at +2.17R, then trailed to +3.5R at 0.004317. Exit +3.4R, +17.65 USDT.
@@ -551,6 +557,14 @@ def btc_dir_ok(aligned_pct: float | None, side: str) -> bool:
     if aligned_pct is None:
         return True
     return aligned_pct >= BTC1H_MIN_DEFAULT
+
+
+def paper_peak_lock_r(mfe_r: float) -> float | None:
+    """R locked for a paper probe once the best price has reached +1R. None before that."""
+    if mfe_r < PAPER_PEAK_ARM_R:
+        return None
+    locked = math.floor((mfe_r - PAPER_PEAK_GAP_R) / TRAIL_STEP_R) * TRAIL_STEP_R
+    return round(max(0.0, locked), 2)
 
 
 def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:
