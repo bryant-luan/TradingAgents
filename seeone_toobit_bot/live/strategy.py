@@ -233,11 +233,16 @@ SELF_SHORT_WEAK_EMA_GAP = 0.14
 # Together, -2.5..2.5 was 62%, +0.49R (918; +0.84R / +0.15R) against 57%, +0.36R
 # (722; +0.69R / +0.03R) inside -1.5..1.5. At or above +2.5 the later half was -0.18R (21).
 # That cap was sitting the book out once 1h/4h reached about -4.3 (short-aligned +4.3).
-# Shorts keep opening through that bear until the aligned score reaches +6. Longs and
-# other paths keep HTF_MAX_DEFAULT. The trend-gone exit uses the floor below, so a short
-# opened in this bear is not closed for being too bearish.
+# Shorts keep opening through that bear until the aligned score reaches +6, but only
+# while BTC's last hour is not bouncing against the short. JST on Nov 15 entered at
+# aligned +3.9 with BTC +1.70% over the last hour and closed -0.55R in 32 minutes.
+# Longs and other paths keep HTF_MAX_DEFAULT. The trend-gone exit uses the floor below,
+# so a short opened in this bear is not closed for being too bearish.
 SELF_SHORT_HTF_MIN = -2.5
 SELF_SHORT_HTF_MAX = 6.0
+# The +2.5 line is the replay's late half. Past it, a 24h downtrend no longer excuses
+# a BTC bounce. A short inside the line can still use that waiver.
+SELF_SHORT_LATE_HTF = 2.5
 # A 15m score of -2.5 is aligned +2.5 for a short, which the shared 2.5 cap treats as
 # already late. Shorts may still open until the 15m score is aligned +3. A 15m of -3.5
 # (aligned +3.5) stays a skip, the same late-chase case as Nov 4.
@@ -554,6 +559,17 @@ def self_direc_window(direc: float | None, side: str) -> str | None:
     if side == "SHORT":
         return direc_window(direc, side, SELF_SHORT_HTF_MIN, SELF_SHORT_HTF_MAX)
     return direc_window(direc, side)
+
+
+def self_short_late_bounce(htf: float | None, btc1h: float | None) -> bool:
+    """A short whose 1h/4h move is already finished, while BTC's last hour is bouncing.
+
+    `htf` is the raw 1h/4h score (negative in a bear). `btc1h` is BTC's last-hour
+    return in percent. Both have to be present. A missing quote does not block.
+    """
+    if htf is None or btc1h is None:
+        return False
+    return htf * -1 >= SELF_SHORT_LATE_HTF and btc1h * -1 < SELF_BTC1H_MIN
 
 
 def btc_dir_ok(aligned_pct: float | None, side: str) -> bool:

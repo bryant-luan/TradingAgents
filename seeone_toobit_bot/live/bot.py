@@ -1634,9 +1634,18 @@ class Bot:
             # Bounce longs held 56-76% TP1-first in every BTC 1h bucket, so neither BTC bound applies to them.
             downtrend = (src == SELF_SOURCE and sig["side"] == "SHORT" and not bounce
                           and btc24h is not None and btc24h < S.SELF_SHORT_BTC24H_TREND)
-            if aligned is not None and aligned < btc_min and not bounce and not quiet_short and not downtrend:
-                self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
-                                    f"(順方向 {aligned:+.2f}% < {btc_min:+.2f}%)，等大盤同向再進")
+            # BTC down more than 1% over 24h may still open a short while the last hour
+            # bounces. That waiver stops once 1h/4h is already at the late line: the
+            # short has run, and the bounce is the entry JST took.
+            late_bounce = (src == SELF_SOURCE and sig["side"] == "SHORT" and not bounce
+                           and S.self_short_late_bounce(htf, btc1h))
+            if aligned is not None and aligned < btc_min and not bounce and not quiet_short and (not downtrend or late_bounce):
+                if late_bounce:
+                    self.note_skip(sig, f"1h/4h 順方向 {htf * sgn:+.1f} 已達 {S.SELF_SHORT_LATE_HTF:+.1f}，空頭這段已走完，"
+                                        f"且 BTC 近 1 小時 {btc1h:+.2f}% 正在反彈，不追")
+                else:
+                    self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
+                                        f"(順方向 {aligned:+.2f}% < {btc_min:+.2f}%)，等大盤同向再進")
                 continue
             if src == SELF_SOURCE and aligned is not None and aligned >= S.BTC1H_CHASE_MAX and not bounce:
                 self.note_skip(sig, f"BTC 近 1 小時已順{'做多' if sgn > 0 else '做空'}方向走 {aligned:+.2f}% "
