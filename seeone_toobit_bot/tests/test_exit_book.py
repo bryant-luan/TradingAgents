@@ -26,6 +26,30 @@ class FullLive(unittest.TestCase):
         self.assertEqual(S.ease_ev_floor(0.51, 0.50), 0.50)
         self.assertEqual(S.ease_ev_floor(0.62, 0.50), 0.57)
 
+    def test_gate_book_is_larger_and_toobit_stays(self):
+        gate, toobit = S.book_limits("gate"), S.book_limits("toobit")
+        self.assertEqual(gate["risk"], 0.08)
+        self.assertEqual(gate["short_risk"], 0.12)
+        self.assertGreater(gate["total_margin"], toobit["total_margin"])
+        self.assertEqual(toobit["risk"], S.MIN_RISK_PCT)
+        self.assertEqual(toobit["short_risk"], S.SELF_SHORT_RISK_PCT)
+
+    def test_open_paper_scales_once_without_changing_r(self):
+        trades = {"a": {
+            "tsym": "WLD-SWAP-USDT", "paper": True, "paper_probe": True,
+            "contracts": 595, "risk_usdt": 7.7945, "margin": 14.07,
+            "tps": [{"qty": 59}, {"qty": 59}, {"qty": 119}, {"qty": 178}, {"qty": 180}],
+        }, "b": {
+            "tsym": "LIVE-SWAP-USDT", "paper": False, "contracts": 100, "risk_usdt": 8.0,
+        }}
+        names = S.scale_open_paper(trades, 1.6)
+        self.assertEqual(names, ["WLD-SWAP-USDT"])
+        self.assertEqual(trades["a"]["contracts"], 952)
+        self.assertEqual(sum(tp["qty"] for tp in trades["a"]["tps"]), 952)
+        self.assertAlmostEqual(trades["a"]["risk_usdt"] / 7.7945, 952 / 595, places=4)
+        self.assertEqual(trades["b"]["contracts"], 100)
+        self.assertEqual(S.scale_open_paper(trades, 1.0), [])
+
     def test_other_slices_paper(self):
         self.assertFalse(S.self_short_full_live("LONG", 0.4, 0.008, 0.62, 1.0, 0.05))
         self.assertFalse(S.self_short_full_live("SHORT", -0.4, 0.008, 0.62, 1.0, 0.05))

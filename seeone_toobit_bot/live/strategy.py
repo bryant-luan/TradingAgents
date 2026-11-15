@@ -208,6 +208,19 @@ SELF_SHORT_BTC24H_TREND = -1.0
 # still ~0.4, so 8% is about a fifth of it; sequential max drawdown on that haircut replay was 27%.
 # 8% at a 1% stop and 25x needs a 32% margin slot.
 SELF_SHORT_RISK_PCT = 0.08
+# Gate only, from 2026-11-16. The user asked for a larger book. Toobit stays
+# at 5% / 8%. Gate steps the same two lines to 8% and 12%. A 1% stop at 25x
+# needs 32% and 48% of equity as margin; the caps sit just above that so the
+# size is not clipped back to 5%. Open paper positions sized at 5% are scaled
+# once by 8/5. Live exchange positions are left alone.
+GATE_RISK_PCT = 0.08
+GATE_HIGH_RISK_PCT = 0.12
+GATE_SELF_SHORT_RISK_PCT = 0.12
+GATE_NORMAL_MARGIN_CAP_PCT = 0.42
+GATE_HIGH_MARGIN_CAP_PCT = 0.55
+GATE_SELF_SHORT_MARGIN_CAP_PCT = 0.55
+GATE_MAX_TOTAL_MARGIN_PCT = 0.98
+GATE_PAPER_SCALE = 1.6
 # The live +1.11R came from reviews at +0.50R EV or more. Those keep the 8% size.
 # From +0.20R up to that line the short still opens, at the normal risk.
 # While the 1h/4h score is still negative, quality of at least 60 and a de-biased
@@ -1277,6 +1290,69 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         skip = f"綜合分數 {score} < {min_score}"
     return {"ok": skip is None, "score": score, "reasons": reasons, "factors": factors,
             "skip": skip, "cur_r": round(cur_r, 3)}
+
+
+def book_limits(exchange: str) -> dict:
+    """Risk and margin caps for one book. Gate is the larger of the two."""
+    if exchange == "gate":
+        return {
+            "risk": GATE_RISK_PCT,
+            "high_risk": GATE_HIGH_RISK_PCT,
+            "short_risk": GATE_SELF_SHORT_RISK_PCT,
+            "margin": GATE_NORMAL_MARGIN_CAP_PCT,
+            "high_margin": GATE_HIGH_MARGIN_CAP_PCT,
+            "short_margin": GATE_SELF_SHORT_MARGIN_CAP_PCT,
+            "total_margin": GATE_MAX_TOTAL_MARGIN_PCT,
+        }
+    return {
+        "risk": MIN_RISK_PCT,
+        "high_risk": HIGH_RISK_PCT,
+        "short_risk": SELF_SHORT_RISK_PCT,
+        "margin": NORMAL_MARGIN_CAP_PCT,
+        "high_margin": HIGH_MARGIN_CAP_PCT,
+        "short_margin": SELF_SHORT_MARGIN_CAP_PCT,
+        "total_margin": MAX_TOTAL_MARGIN_PCT,
+    }
+
+
+def _split_qty(qtys: list[int], new_total: int) -> list[int]:
+    old = sum(qtys)
+    if old <= 0 or not qtys:
+        return qtys
+    raw = [q * new_total / old for q in qtys]
+    floors = [int(x) for x in raw]
+    left = new_total - sum(floors)
+    order = sorted(range(len(raw)), key=lambda i: (raw[i] - floors[i], i), reverse=True)
+    for i in order[:max(0, left)]:
+        floors[i] += 1
+    return floors
+
+
+def scale_open_paper(trades: dict, scale: float) -> list[str]:
+    """Enlarge open paper positions. R is unchanged because risk scales with size."""
+    changed = []
+    for tr in trades.values():
+        if tr.get("exit_reason") or not (tr.get("paper") or tr.get("paper_probe")):
+            continue
+        old = int(tr.get("contracts") or 0)
+        if old <= 0:
+            continue
+        new = max(old, int(round(old * scale)))
+        if new == old:
+            continue
+        ratio = new / old
+        tr["contracts"] = new
+        if tr.get("risk_usdt"):
+            tr["risk_usdt"] = round(float(tr["risk_usdt"]) * ratio, 4)
+        if tr.get("margin"):
+            tr["margin"] = round(float(tr["margin"]) * ratio, 2)
+        tps = tr.get("tps") or []
+        qtys = [int(tp.get("qty") or 0) for tp in tps]
+        if tps and sum(qtys) > 0:
+            for tp, qty in zip(tps, _split_qty(qtys, new)):
+                tp["qty"] = qty
+        changed.append(tr.get("tsym") or tr.get("id") or "")
+    return changed
 
 
 def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct: float = RISK_PCT,

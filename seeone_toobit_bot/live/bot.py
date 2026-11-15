@@ -928,15 +928,16 @@ class Bot:
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):
             self.note_skip(sig, f"現價 {price} 已貼近/穿越止損 {stop}")
             return False
-        risk_pct = max(S.MIN_RISK_PCT, self.learner.p["risk_pct"])
-        margin_cap = S.NORMAL_MARGIN_CAP_PCT
+        limits = self._book_limits()
+        risk_pct = max(limits["risk"], self.learner.p["risk_pct"])
+        margin_cap = limits["margin"]
         high_open = sum(1 for t in self.st["trades"].values() if t.get("tier") == "HIGH")
         tier = "HIGH" if ev.get("tier") == "HIGH" and high_open < S.MAX_HIGH_POSITIONS else "NORMAL"
         if tier == "HIGH" and not self.learner.p.get("high_size_ok"):
             ev["reasons"] = ev["reasons"] + ["高機率評估的實測先到 TP1 比例未優於一般評估，高信心單以一般風險開倉"]
         elif tier == "HIGH":
-            risk_pct = S.HIGH_RISK_PCT
-            margin_cap = S.HIGH_MARGIN_CAP_PCT
+            risk_pct = limits["high_risk"]
+            margin_cap = limits["high_margin"]
         b24 = getattr(self, "btc24h", None)
         ev_floor = float(self.learner.p.get("self_short_ev_floor") or S.SELF_SHORT_FULL_RISK_EV)
         if (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
@@ -951,8 +952,8 @@ class Bot:
                 ev["reasons"] = ev["reasons"] + [f"自選空單逆強勢 ({'、'.join(weak)})，維持一般風險 {risk_pct:.0%}："
                                                  "驗算 52% 勝、+0.71R，對比其餘 74%、+1.44R"]
             else:
-                risk_pct = max(risk_pct, S.SELF_SHORT_RISK_PCT)
-                margin_cap = max(margin_cap, S.SELF_SHORT_MARGIN_CAP_PCT)
+                risk_pct = max(risk_pct, limits["short_risk"])
+                margin_cap = max(margin_cap, limits["short_margin"])
                 ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌、非逆強勢) 風險 {risk_pct:.0%}："
                                                  "驗算 74% 勝、+1.44R"]
         elif (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
@@ -966,9 +967,9 @@ class Bot:
                 if bear else
                 f"期望值 {ev_r:+.2f}R 未達實盤 +{ev_floor:.2f}R，以一般風險開倉，記入實盤樣本"]
         room_pct = getattr(self, "day_room", equity * risk_pct) / equity
-        if not probe and room_pct < S.MIN_RISK_PCT:
+        if not probe and room_pct < limits["risk"]:
             self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
-                                f"已計入持倉到止損的風險)，不足 {S.MIN_RISK_PCT:.0%} 最低風險")
+                                f"已計入持倉到止損的風險)，不足 {limits['risk']:.0%} 最低風險")
             return False
         if not probe and room_pct < risk_pct:
             ev["reasons"] = ev["reasons"] + [f"風險 {risk_pct:.0%} 受每日止損剩餘額度限制為 {room_pct:.1%}"]
@@ -978,10 +979,10 @@ class Bot:
             self.note_skip(sig, f"無法以至少 {S.MIN_RISK_PCT:.0%} 風險建立部位 (槓桿/保證金上限或最小下單量)，不開小倉")
             return False
         used = sum(t.get("margin") or 0 for t in self._risk_trades())
-        room = equity * S.MAX_TOTAL_MARGIN_PCT - used
+        room = equity * limits["total_margin"] - used
         if not probe and sz["margin"] > room:
             self.note_skip(sig, f"這筆保證金 {sz['margin']:.0f}u、{sz['leverage']}x，"
-                                f"剩餘保證金額度 {max(0, room):.0f}u，總上限 {S.MAX_TOTAL_MARGIN_PCT:.0%}，再開不下")
+                                f"剩餘保證金額度 {max(0, room):.0f}u，總上限 {limits['total_margin']:.0%}，再開不下")
             return False
         plan = S.tp_plan(sig, sz["contracts"], spec["min_contracts"])
         entry_info = dict(signal_id=sig["id"], source=source, symbol=sym, side=side, price=price,
@@ -1484,9 +1485,12 @@ class Bot:
         out["SL"] = round(-sum(tp["qty"] for tp in plan) * mult * abs(price - float(sig["stop_price"])), 2)
         return out
 
+    def _book_limits(self) -> dict:
+        return S.book_limits(getattr(self.tb, "name", ""))
+
     def _margin_full(self, equity: float) -> bool:
         used = sum(t.get("margin") or 0 for t in self._risk_trades())
-        return used >= equity * S.MAX_TOTAL_MARGIN_PCT - 1
+        return used >= equity * self._book_limits()["total_margin"] - 1
 
     def open_risk(self) -> float:
         specs = self.tb.specs()
@@ -2190,6 +2194,13 @@ class Bot:
         except Exception:
             tradable = None
         self.st["tradable_contracts"] = tradable
+        if getattr(self.tb, "name", "") == "gate" and self.st.get("paper_scale") != S.GATE_PAPER_SCALE:
+            names = S.scale_open_paper(self.st["trades"], S.GATE_PAPER_SCALE)
+            self.st["paper_scale"] = S.GATE_PAPER_SCALE
+            save_state(self.st)
+            log_event("GATE_SIZE", scale=S.GATE_PAPER_SCALE, positions=names,
+                      risk=S.GATE_RISK_PCT, short_risk=S.GATE_SELF_SHORT_RISK_PCT,
+                      note="Gate 模擬倉按 1.6 倍放大，之後新單一般 8%、合格空單 12%")
         log_event("START", dry_run=self.dry, paper=self.paper, exchange=self.tb.name, tradable_contracts=tradable,
                   quiet_long_paper=S.QUIET_LONG_PAPER, quiet_longs_live=S.QUIET_LONGS,
                   ignition_paper=S.IGNITION_PAPER, ignition_1m=S.IGNITION_1M,
