@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 
 from live import bot as botmod
-from live.bot import Bot, position_gone, tp_fill_verdict, tp_still_ahead
+from live.bot import Bot, filled_margin, position_gone, tp_fill_verdict, tp_still_ahead
+from live.gate import Gate, GateError, price_order_view
 from live.toobit import ToobitError
 
 
@@ -56,6 +57,12 @@ class FakeBook:
     def positions(self, symbol):
         return list(self.rows)
 
+    def history_positions(self, symbol, limit=5):
+        return list(getattr(self, "history", []))
+
+    def user_trades(self, symbol, limit=100):
+        return []
+
     def set_position_stop(self, symbol, side, stop):
         if not any(p.get("side") == side for p in self.rows):
             raise ToobitError("{'code': -3145, 'msg': 'No position'}")
@@ -79,6 +86,7 @@ def bot(book):
     b.tb = book
     b.st = {"trades": {}, "closed": [], "day_lock_hit": False}
     b._protect_lock = threading.Lock()
+    b.paper = False
     b.htf = None
     return b
 
@@ -133,6 +141,80 @@ class Manage(unittest.TestCase):
         self.assertFalse(all(tp.get("filled") for tp in tr["tps"]))
         b.manage({("CGPT-SWAP-USDT", "SHORT"): book.rows[0]}, {})
         self.assertEqual([oid for oid, _ in book.placed], ["new1"])
+
+    def test_a_live_name_is_not_kept_when_the_venue_is_flat(self):
+        b = bot(FakeBook())
+        live = trade()
+        paper = trade()
+        paper.update(id="2", tsym="LDO-SWAP-USDT", paper=True)
+        b.st["trades"] = {"1": live, "2": paper}
+        self.assertEqual(list(b._with_paper({})), [("LDO-SWAP-USDT", "SHORT")])
+
+    def test_a_flat_live_book_is_recorded_from_the_fill(self):
+        book = FakeBook()
+        book.history = [{"side": "SHORT", "closeTime": 1_700_000_000_000, "realizedPnL": 1.07, "closeAvgPrice": 0.99}]
+        b = bot(book)
+        tr = trade()
+        tr["opened_ts"] = 1_700_000_000
+        tr["tps"] = []
+        b.st["trades"] = {"1": tr}
+        b.learner = type("L", (), {"on_close": staticmethod(lambda *a, **k: None)})()
+        saved = botmod.save_state
+        botmod.save_state = lambda st: None
+        try:
+            b.manage({}, {})
+        finally:
+            botmod.save_state = saved
+        self.assertNotIn("1", b.st["trades"])
+        self.assertEqual(b.st["closed"][-1]["r_result"], 0.134)
+        self.assertEqual(book.closed, [])
+
+    def test_a_missed_snapshot_does_not_close_a_live_position(self):
+        book = FakeBook()
+        book.rows = [{"side": "SHORT", "position": "100"}]
+        b = bot(book)
+        tr = trade()
+        tr["exchange_flat"] = True
+        b.st["trades"] = {"1": tr}
+        b.manage({}, {})
+        self.assertIn("1", b.st["trades"])
+        self.assertFalse(tr.get("exchange_flat"))
+
+    def test_partial_fill_keeps_its_share_of_margin(self):
+        self.assertEqual(filled_margin(353265, 32791, 80.0), round(80.0 * 32791 / 353265, 4))
+        self.assertEqual(filled_margin(100, 100, 8.0), 8.0)
+
+    def test_a_gate_trigger_counts_when_it_fired(self):
+        self.assertEqual(price_order_view({"id": "9", "status": "finished", "finish_as": "succeeded",
+                                            "initial": {"size": -30}})["status"], "FILLED")
+        self.assertEqual(price_order_view({"id": "9", "status": "finished", "finish_as": "cancelled",
+                                            "initial": {"size": -30}})["status"], "CANCELED")
+        self.assertEqual(price_order_view({"id": "9", "status": "open", "initial": {"size": 30}})["status"], "NEW")
+
+    def test_a_rejected_stop_puts_the_previous_one_back(self):
+        g = Gate.__new__(Gate)
+        g._hedge = False
+        seen = []
+
+        def open_orders(symbol, kind="STOP"):
+            return [{"orderId": "old", "orderType": "STOP_SHORT_LOSS", "stopPrice": "1.02"}]
+
+        def cancel_order(oid, kind="STOP"):
+            seen.append(("cancel", oid))
+
+        def _request(method, path, params=None, body=None):
+            price = body["trigger"]["price"]
+            seen.append(("post", price))
+            if price == "1.01":
+                raise GateError("POST /futures/usdt/price_orders -> 400 rejected")
+            return {"id": "new"}
+
+        g.open_orders = open_orders
+        g.cancel_order = cancel_order
+        g._request = _request
+        with self.assertRaises(GateError):
+            g.set_position_stop("X-SWAP-USDT", "SHORT", "1.01")
+        self.assertEqual(seen, [("cancel", "old"), ("post", "1.01"), ("post", "1.02")])
 
     def test_flat_book_does_not_invent_a_loss(self):
         book = FakeBook()

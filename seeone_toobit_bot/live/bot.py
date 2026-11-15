@@ -156,6 +156,13 @@ def position_gone(err: BaseException) -> bool:
     return "noposition" in text or "no_short_position" in text or "no_long_position" in text
 
 
+def filled_margin(planned: int, filled: int, margin: float) -> float:
+    """A partial fill keeps the same fraction of the planned margin."""
+    if planned and filled != planned:
+        return round(float(margin) * filled / planned, 4)
+    return float(margin)
+
+
 def tp_still_ahead(side: str, price: float, target: float) -> bool:
     """The take-profit is still on the profitable side of the latest price."""
     sgn = 1 if side == "LONG" else -1
@@ -245,8 +252,6 @@ class Bot:
         """True when the venue still shows this position. A read error does not block a real exit."""
         if tr.get("paper"):
             return True
-        if tr.get("exchange_flat"):
-            return False
         try:
             rows = self.tb.positions(tr["tsym"])
         except ToobitError as e:
@@ -291,6 +296,11 @@ class Bot:
             sym, side = tr["tsym"], tr["side"]
             pos = positions.get((sym, side))
             if pos is None:
+                # The snapshot can miss a position that is still there. A second read decides.
+                # A live name is not filled in from the bot's own state, or a real close never reaches here.
+                if not (self.paper or tr.get("paper")) and self._still_open(tr):
+                    tr.pop("exchange_flat", None)
+                    continue
                 self.finish(tid, tr)
                 continue
             # A "no position" reply can be a lag. If the venue still shows the position, keep trailing it.
@@ -544,6 +554,9 @@ class Bot:
         for tr in self.st["trades"].values():
             if tr.get("exit_reason"):
                 continue
+            # A live trade stays only while the venue reports it. Keeping one here hides the close.
+            if not (self.paper or tr.get("paper")):
+                continue
             out[(tr["tsym"], tr["side"])] = {
                 "symbol": tr["tsym"], "side": tr["side"], "position": tr["contracts"],
                 "avgPrice": tr["entry"], "leverage": tr.get("leverage"), "margin": tr.get("margin"),
@@ -621,7 +634,7 @@ class Bot:
         filled = [tp["label"] for tp in tr["tps"] if tp["filled"]]
         if tr.get("exit_reason"):
             reason = tr["exit_reason"]
-        elif len(filled) == len(tr["tps"]):
+        elif tr.get("tps") and len(filled) == len(tr["tps"]):
             reason = f"全部止盈完成 ({', '.join(filled)})"
         elif tr.get("lock_r") is not None:
             reason = (f"最高浮盈 {tr.get('mfe_r', 0):+.2f}R 後鎖利止損 {tr['stop']} 觸發 (鎖 +{tr['lock_r']}R)"
@@ -950,11 +963,14 @@ class Bot:
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
         spec = self.tb.specs()[sym]
         entry = float(pos.get("avgPrice") or p["price"])
-        contracts = fill["filled"] or sz["contracts"]
+        planned = int(sz["contracts"] or 0)
+        contracts = int(fill["filled"] or planned)
         plan = S.tp_plan(sig, contracts, spec["min_contracts"])
         paper = bool(self.paper or sig.get("paper_only"))
         tps = self.place_tps(sym, side, p.get("tp_ref", entry), plan, paper=paper)
-        sz = {**sz, "contracts": contracts}
+        # ALGO kept 32,791 of 353,265 contracts and the full margin still counted against the book.
+        margin = filled_margin(planned, contracts, float(sz.get("margin") or 0))
+        sz = {**sz, "contracts": contracts, "margin": margin}
         entry_fee = S.MAKER_FEE if fill["maker"] >= fill["taker"] else S.TAKER_FEE
         tid = f"{sym}:{side}:{int(time.time())}"
         mult = float(spec["multiplier"])
@@ -990,7 +1006,12 @@ class Bot:
         if time.time() - getattr(self, "last_reconcile", 0) < RECONCILE_S:
             return
         self.last_reconcile = time.time()
-        tracked = {(t["tsym"], t["side"]): t for t in self.st["trades"].values()}
+        tracked = {}
+        for t in self.st["trades"].values():
+            # A paper probe is not the live position. Treating it as one writes the paper stop onto the real book.
+            if t.get("paper"):
+                continue
+            tracked[(t["tsym"], t["side"])] = t
         for (sym, side), pos in positions.items():
             tr = tracked.get((sym, side))
             try:
