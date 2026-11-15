@@ -1632,7 +1632,9 @@ class Bot:
             aligned = None if btc1h is None else btc1h * sgn
             btc_min = S.SELF_BTC1H_MIN if src == SELF_SOURCE else S.BTC1H_MIN_DEFAULT
             # Bounce longs held 56-76% TP1-first in every BTC 1h bucket, so neither BTC bound applies to them.
-            if aligned is not None and aligned < btc_min and not bounce and not quiet_short:
+            downtrend = (src == SELF_SOURCE and sig["side"] == "SHORT" and not bounce
+                          and btc24h is not None and btc24h < S.SELF_SHORT_BTC24H_TREND)
+            if aligned is not None and aligned < btc_min and not bounce and not quiet_short and not downtrend:
                 self.note_skip(sig, f"BTC 近 1 小時 {btc1h:+.2f}%，與{'做多' if sgn > 0 else '做空'}方向不同步 "
                                     f"(順方向 {aligned:+.2f}% < {btc_min:+.2f}%)，等大盤同向再進")
                 continue
@@ -1640,10 +1642,10 @@ class Bot:
                 self.note_skip(sig, f"BTC 近 1 小時已順{'做多' if sgn > 0 else '做空'}方向走 {aligned:+.2f}% "
                                     f"(≥ {S.BTC1H_CHASE_MAX:+.1f}%)，自選單追在大盤急走之後，驗算只有 48% 先到 TP1")
                 continue
-            if (src == SELF_SOURCE and not bounce and sig["side"] == "SHORT"
-                    and btc24h is not None and btc24h < S.SELF_SHORT_BTC24H_MIN):
-                self.note_skip(sig, f"BTC 近 24 小時 {btc24h:+.2f}% 已在跌，自選空單偏晚：驗算 +0.03~+0.26R、"
-                                    f"11/10-11 轉負，BTC 24h 不跌時 +0.88R")
+            if (src == SELF_SOURCE and not bounce and sig["side"] == "SHORT" and btc24h is not None
+                    and S.SELF_SHORT_BTC24H_TREND <= btc24h < S.SELF_SHORT_BTC24H_MIN):
+                self.note_skip(sig, f"BTC 近 24 小時 {btc24h:+.2f}% 落在 -1% 到 0%，自選空單不接這段盤整："
+                                    f"止損 < 1%、機率 ≥ 52.5% 的驗算 115 筆、21.7%、-0.58R，前後半都是負的")
                 continue
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in moves:

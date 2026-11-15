@@ -191,11 +191,13 @@ SELF_BTC1H_MIN = -0.3
 # fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
 # Breakout entries take it too: 6 live breakouts past it won once, -1.88R (EVAA, HOT, ENA among them).
 BTC1H_CHASE_MAX = 0.3
-# Self-scan shorts need BTC flat or up over the last 24h. Inside the current gates, the 5m exit replay
-# averaged +0.88R (128; +0.97R / +0.79R by half) with BTC 24h >= 0, against +0.26R (148) below -1% and
-# +0.03R (142) at -1..0%, both negative on Nov 10-11 (Nov 10 alone: +0.41R vs -0.27R / -0.09R).
-# Live self-scan shorts agreed: Gate -0.35R (14) vs -0.02R (3), Toobit -0.17R (21) vs +0.06R (9).
+# BTC's own 24h move, joined onto the stop<1% / probability>=52.5% short replay.
+# Flat-to-down, -1% to 0%, was 21.7% win and -0.58R (115; -0.33R / -0.83R by half). That band stays out.
+# Already down more than 1%, and the last hour not already extended +0.3% with the short, was 69.7%
+# and +0.71R (178; -0.02R / +1.44R). That downtrend opens at the normal risk. The 8% size still
+# requires BTC 24h >= 0. The replay's deepest 24h print was -5.8%.
 SELF_SHORT_BTC24H_MIN = 0.0
+SELF_SHORT_BTC24H_TREND = -1.0
 # Self-scan shorts that clear every gate above (stop < 1%, BTC 24h >= 0) are the one setup with a
 # measured edge: 5m exit replay +1.23R (335; +0.97R / +1.50R by half, positive on every day), live
 # +1.11R (5, +53.6 USDT). Every other live slice sits near or below 0R. With winners halved, Kelly is
