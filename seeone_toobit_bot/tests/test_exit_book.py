@@ -15,6 +15,17 @@ class FullLive(unittest.TestCase):
     def test_measured_short_stays_live(self):
         self.assertTrue(S.self_short_full_live("SHORT", 0.4, 0.008, 0.62, 1.0, 0.05))
 
+    def test_three_losses_raise_the_live_bar(self):
+        losses = [{"ev": 0.44}, {"ev": 0.44}, {"ev": 0.50}]
+        self.assertEqual(S.roll_ev_floor(0.50, losses), 0.51)
+        self.assertEqual(S.roll_ev_floor(0.50, [{"ev": 0.32}, {"ev": 0.27}, {"ev": 0.37}]), 0.50)
+        self.assertFalse(S.self_short_full_live("SHORT", 0.4, 0.008, 0.50, 1.0, 0.05, 0.51))
+        self.assertTrue(S.self_short_full_live("SHORT", 0.4, 0.008, 0.73, 1.0, 0.05, 0.51))
+
+    def test_a_win_steps_the_bar_back(self):
+        self.assertEqual(S.ease_ev_floor(0.51, 0.50), 0.50)
+        self.assertEqual(S.ease_ev_floor(0.62, 0.50), 0.57)
+
     def test_other_slices_paper(self):
         self.assertFalse(S.self_short_full_live("LONG", 0.4, 0.008, 0.62, 1.0, 0.05))
         self.assertFalse(S.self_short_full_live("SHORT", -0.4, 0.008, 0.62, 1.0, 0.05))

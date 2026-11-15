@@ -217,6 +217,11 @@ SELF_SHORT_RISK_PCT = 0.08
 # stops there. Quality under 60 has no settled sample and stays out. The flush
 # long is the other half of this tape: it waits until the 15m score has turned up.
 SELF_SHORT_FULL_RISK_EV = 0.50
+# Three live self-scan short losses roll this bar up. The next live short has to
+# clear the highest expected value among those three, so the same print is not
+# sent again. A later win steps it back toward the line above. See learner.py.
+LOSS_REVIEW_N = 3
+LOSS_REVIEW_R = -0.30
 SELF_SHORT_SAMPLE_EV = 0.20
 SELF_SHORT_BEAR_EV = 0.15
 SELF_SHORT_MARGIN_CAP_PCT = 0.33
@@ -229,8 +234,36 @@ SELF_SHORT_WEAK_RET24H = 3.0
 SELF_SHORT_WEAK_EMA_GAP = 0.14
 
 
+def roll_ev_floor(base: float, losses: list) -> float:
+    """Live expected-value bar after the latest three losses.
+
+    The next live short has to clear the highest expected value in that trio.
+    An identical print does not get another live order. The bar does not fall
+    below ``base``.
+    """
+    last = list(losses)[-LOSS_REVIEW_N:]
+    if len(last) < LOSS_REVIEW_N:
+        return base
+    evs = []
+    for item in last:
+        ev = item.get("ev") if isinstance(item, dict) else item
+        if ev is not None:
+            evs.append(float(ev))
+    if not evs:
+        return base
+    return round(max(base, max(evs) + 0.01), 2)
+
+
+def ease_ev_floor(current: float, base: float, step: float = 0.05) -> float:
+    """One live win steps a raised bar back toward the measured line."""
+    if current <= base:
+        return base
+    return round(max(base, current - step), 2)
+
+
 def self_short_full_live(side: str, btc24h: float | None, sl_pct: float, ev_r: float | None,
-                         ret24h: float | None, ema_gap: float | None) -> bool:
+                         ret24h: float | None, ema_gap: float | None,
+                         ev_floor: float | None = None) -> bool:
     """The one self-scan slice with a measured live edge stays a real order.
 
     Stop under 1%, BTC 24h at or above 0, expected value at least +0.50R, and the
@@ -244,7 +277,8 @@ def self_short_full_live(side: str, btc24h: float | None, sl_pct: float, ev_r: f
         return False
     if sl_pct >= SELF_MAX_SL_PCT:
         return False
-    if (ev_r or 0) < SELF_SHORT_FULL_RISK_EV:
+    need = SELF_SHORT_FULL_RISK_EV if ev_floor is None else ev_floor
+    if (ev_r or 0) < need:
         return False
     if ret24h is not None and ret24h > SELF_SHORT_WEAK_RET24H:
         return False

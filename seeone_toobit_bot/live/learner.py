@@ -23,6 +23,8 @@ DEFAULTS = {
     "factor_stats": {},
     "symbol_cooldown": {},
     "consec_losses": 0,
+    "self_short_ev_floor": S.SELF_SHORT_FULL_RISK_EV,
+    "short_loss_evs": [],
     "chased_losses": 0,
     "shadow_adj": {},
     "calibrated_min_score": None,
@@ -30,6 +32,12 @@ DEFAULTS = {
     "tp_split": None,
     "trades": 0, "wins": 0, "losses": 0, "sum_r": 0.0, "sum_pnl": 0.0,
 }
+
+
+def _loss_label(item: dict) -> str:
+    name = (item.get("symbol") or "").replace("-SWAP-USDT", "")
+    ev = item.get("ev")
+    return f"{name} 無" if ev is None else f"{name} {ev:+.2f}R"
 
 
 def _aligned(tr: dict, factors: dict) -> bool:
@@ -310,9 +318,8 @@ class Learner:
             p["symbol_cooldown"][sym] = time.time() + LOSS_COOLDOWN_H * 3600
             changes.append(f"{sym} 冷卻 {LOSS_COOLDOWN_H} 小時")
             if p["consec_losses"] >= STREAK_PAUSE_LOSSES:
-                # JCT's order-book long was fresh at 12:23 Taipei on Nov 8, while a
-                # six-hour book pause was about to start. Cool the losing name only.
-                changes.append(f"連續虧損 {p['consec_losses']} 筆，只冷卻該幣，其他新倉繼續")
+                changes.append(f"連續虧損 {p['consec_losses']} 筆，檢視這幾筆並上調實盤門檻")
+            self._roll_short_floor(tr, r, reason, changes)
             if entry_r > CHASE_R and p["chased_losses"] >= 2 and p["entry_r_window"][1] > 0.2:
                 old_hi = p["entry_r_window"][1]
                 p["entry_r_window"][1] = round(max(0.2, old_hi - 0.1), 2)
@@ -323,6 +330,7 @@ class Learner:
         elif win:
             p["wins"] += 1
             p["consec_losses"] = 0
+            self._roll_short_floor(tr, r, reason, changes)
             old = p["min_score"]
             p["min_score"] = max(MIN_SCORE_FLOOR, old - WIN_SCORE_STEP)
             if p["min_score"] != old:
@@ -349,6 +357,37 @@ class Learner:
         p["last_update"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self._insight(rec)
         self.save()
+
+    def _roll_short_floor(self, tr: dict, r: float, reason: str, changes: list):
+        """Every three live self-scan short losses, raise the live bar to just above their best EV.
+
+        A scratch or a dust close does not count. One live win clears the trio and
+        steps a raised bar back toward +0.50R.
+        """
+        if tr.get("paper") or tr.get("path") != "SELF ANALYSIS" or tr.get("side") != "SHORT":
+            return
+        if "小倉" in (reason or ""):
+            return
+        p = self.p
+        base = S.SELF_SHORT_FULL_RISK_EV
+        if r <= S.LOSS_REVIEW_R:
+            ev = (tr.get("analysis") or {}).get("ev_r")
+            evs = p.setdefault("short_loss_evs", [])
+            evs.append({"symbol": tr.get("tsym"), "ev": None if ev is None else round(float(ev), 4), "r": r})
+            del evs[:-S.LOSS_REVIEW_N]
+            new = S.roll_ev_floor(base, evs)
+            old = float(p.get("self_short_ev_floor") or base)
+            if new > old + 1e-9:
+                p["self_short_ev_floor"] = new
+                shown = ", ".join(_loss_label(item) for item in evs)
+                changes.append(f"最近 {S.LOSS_REVIEW_N} 筆自選空單虧損（{shown}），實盤門檻 {old:.2f}R → {new:.2f}R")
+        elif r > FLAT_R:
+            p["short_loss_evs"] = []
+            old = float(p.get("self_short_ev_floor") or base)
+            new = S.ease_ev_floor(old, base)
+            if new + 1e-9 < old:
+                p["self_short_ev_floor"] = new
+                changes.append(f"自選空單獲利，實盤門檻 {old:.2f}R → {new:.2f}R")
 
     def summary(self) -> dict:
         p = self.p

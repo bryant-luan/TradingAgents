@@ -938,10 +938,11 @@ class Bot:
             risk_pct = S.HIGH_RISK_PCT
             margin_cap = S.HIGH_MARGIN_CAP_PCT
         b24 = getattr(self, "btc24h", None)
+        ev_floor = float(self.learner.p.get("self_short_ev_floor") or S.SELF_SHORT_FULL_RISK_EV)
         if (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
                 and b24 is not None and b24 >= S.SELF_SHORT_BTC24H_MIN
                 and abs(price - stop) / price < S.SELF_MAX_SL_PCT
-                and ((ev.get("analysis") or {}).get("ev_r") or 0) >= S.SELF_SHORT_FULL_RISK_EV):
+                and ((ev.get("analysis") or {}).get("ev_r") or 0) >= ev_floor):
             r24, gap = short_strength(sym)
             weak = [w for w in (r24 is not None and r24 > S.SELF_SHORT_WEAK_RET24H and f"幣 24h 已漲 {r24:+.1f}%",
                                 gap is not None and gap > S.SELF_SHORT_WEAK_EMA_GAP and f"15m EMA20 高於 EMA50 {gap:.2f}%")
@@ -957,13 +958,13 @@ class Bot:
         elif (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
               and (S.SELF_SHORT_BEAR_EV if getattr(self, "htf", None) is not None and self.htf < 0
                    else S.SELF_SHORT_SAMPLE_EV)
-              <= ((ev.get("analysis") or {}).get("ev_r") or 0) < S.SELF_SHORT_FULL_RISK_EV):
+              <= ((ev.get("analysis") or {}).get("ev_r") or 0) < ev_floor):
             ev_r = (ev.get("analysis") or {}).get("ev_r") or 0
             bear = ev_r < S.SELF_SHORT_SAMPLE_EV
             ev["reasons"] = ev["reasons"] + [
-                f"大盤偏空，期望值 {ev_r:+.2f}R 未達滿倉 +{S.SELF_SHORT_FULL_RISK_EV:.2f}R，以一般風險開倉，記入實盤樣本"
+                f"大盤偏空，期望值 {ev_r:+.2f}R 未達實盤 +{ev_floor:.2f}R，以一般風險開倉，記入實盤樣本"
                 if bear else
-                f"期望值 {ev_r:+.2f}R 未達滿倉 +{S.SELF_SHORT_FULL_RISK_EV:.2f}R，以一般風險開倉，記入實盤樣本"]
+                f"期望值 {ev_r:+.2f}R 未達實盤 +{ev_floor:.2f}R，以一般風險開倉，記入實盤樣本"]
         room_pct = getattr(self, "day_room", equity * risk_pct) / equity
         if not probe and room_pct < S.MIN_RISK_PCT:
             self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
@@ -1951,9 +1952,10 @@ class Bot:
                     r24, gap = short_strength(S.to_toobit(sig["symbol"]))
                 except Exception:
                     r24, gap = None, None
+                ev_floor = float(self.learner.p.get("self_short_ev_floor") or S.SELF_SHORT_FULL_RISK_EV)
                 full_live = S.self_short_full_live(
                     sig["side"], getattr(self, "btc24h", None), sl_pct,
-                    (ev.get("analysis") or {}).get("ev_r"), r24, gap)
+                    (ev.get("analysis") or {}).get("ev_r"), r24, gap, ev_floor)
             self_paper = (S.SELF_ANALYSIS_PAPER and src == SELF_SOURCE and not bounce
                           and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long")
                           and not full_live)
