@@ -1938,6 +1938,12 @@ class Bot:
                 except Exception:
                     moves[tsym] = None
             mv = moves[tsym]
+            if (src == SELF_SOURCE and sig["side"] == "SHORT" and not bounce
+                    and not sig.get("quiet_strong_short")):
+                chased = S.self_short_chased(sig["side"], mv["r"] * sgn if mv else None)
+                if chased:
+                    self.note_skip(sig, chased)
+                    continue
             if mv and mv["r"] * sgn >= S.MAX_EXT_R:
                 self.note_skip(sig, f"{sig['symbol']} 近 2 小時已{'漲' if mv['pct'] > 0 else '跌'} "
                                     f"{abs(mv['pct']):.1f}% ({mv['r'] * sgn:+.1f}R ≥ {S.MAX_EXT_R}R)，"
