@@ -103,6 +103,12 @@ class FullLive(unittest.TestCase):
         self.assertFalse(S.paper_for_stopped_live(rules, "SELF FLUSH LONG", "LONG", True))
         self.assertFalse(S.flush_live("toobit"))
         self.assertTrue(S.flush_live("gate"))
+        self.assertIsNone(S.gate_measured_loss("toobit", "SELF ANALYSIS", "SHORT", False))
+        self.assertIsNone(S.gate_measured_loss("gate", "SELF ANALYSIS", "SHORT", True))
+        self.assertIsNone(S.gate_measured_loss("gate", "QUIET SHORT", "SHORT", False))
+        self.assertIsNone(S.gate_measured_loss("gate", "SELF FLUSH LONG", "LONG", False))
+        self.assertIn("不再開", S.gate_measured_loss("gate", "SELF ANALYSIS", "SHORT", False))
+        self.assertIn("不再開", S.gate_measured_loss("gate", "SELF ANALYSIS", "LONG", False))
 
     def test_other_slices_paper(self):
         self.assertFalse(S.self_short_full_live("LONG", 0.4, 0.008, 0.62, 1.0, 0.05))

@@ -1211,6 +1211,26 @@ def flush_live(exchange: str) -> bool:
     return exchange == "gate"
 
 
+def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_live: bool) -> str | None:
+    """Gate books that are already negative in both halves do not open again.
+
+    A self-scan short under +0.60R has 40 live closes, every band negative in
+    both halves, about -90 USDT, plus 16 paper closes at 19% and -0.43R, both
+    halves negative, -36 USDT. That sample is finished. A short that clears the
+    live line still opens. Self-scan longs are 2 live losses and 6 paper closes
+    at -0.36R. Quiet shorts, flush longs, and the ignition papers are not this
+    function.
+    """
+    if exchange != "gate":
+        return None
+    if path == "SELF ANALYSIS" and side == "SHORT" and not full_live:
+        return ("Gate 自選空單未達實盤 +0.60R 不再開。實盤 40 筆三段期望都是負的，"
+                "約 -90 USDT；模擬 16 筆勝率 19%、-0.43R，前後半都是負的，-36 USDT")
+    if path == "SELF ANALYSIS" and side == "LONG":
+        return "Gate 自選多單不再開。實盤 2 筆全虧，模擬 6 筆勝率 17%、-0.36R，後半更差"
+    return None
+
+
 def ignition_setup(rows: list, interval: str, now_ms: float | None = None) -> dict | None:
     """The just-closed bar breaks a tight base on a volume multiple. None when it does not.
 
