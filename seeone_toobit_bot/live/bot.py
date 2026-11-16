@@ -907,9 +907,13 @@ class Bot:
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
         paper = bool(self.paper or sig.get("paper_only"))
-        key = S.rule_key(sig.get("signal_path"), side, paper)
-        if not S.rule_open(self.learner.p.get("rule_streaks"), key):
-            self.note_skip(sig, f"{key} 連續 {S.LOSS_REVIEW_N} 筆虧損後已停止新開倉")
+        if S.paper_for_stopped_live(self.learner.p.get("rule_streaks"), sig.get("signal_path"), side, paper):
+            sig = {**sig, "paper_only": True}
+            paper = True
+            ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                f"{S.rule_key(sig.get('signal_path'), side, False)} 實盤已暫停，改模擬直到正期望"]}
+        if not paper and not S.rule_open(self.learner.p.get("rule_streaks"), S.rule_key(sig.get("signal_path"), side, False)):
+            self.note_skip(sig, f"{S.rule_key(sig.get('signal_path'), side, False)} 連續 {S.LOSS_REVIEW_N} 筆虧損後已停止新開倉")
             return False
         probe = bool(sig.get("paper_only")) and not self.paper
         if S.SKIP_GATE_ONLY and getattr(self.tb, "name", "") == "gate" and listing(sym) == "only":
@@ -950,7 +954,8 @@ class Bot:
                 margin_cap = max(margin_cap, limits["short_margin"])
                 ev["reasons"] = ev["reasons"] + [f"自選空單 (止損 < 1%、BTC 24h 不跌、非逆強勢) 風險 {risk_pct:.0%}："
                                                  "驗算 74% 勝、+1.44R"]
-        elif (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
+        elif (not sig.get("paper_only") and source == SELF_SOURCE and side == "SHORT"
+              and sig.get("signal_path") != S.BOUNCE_PATH
               and (S.SELF_SHORT_BEAR_EV if getattr(self, "htf", None) is not None and self.htf < 0
                    else S.SELF_SHORT_SAMPLE_EV)
               <= ((ev.get("analysis") or {}).get("ev_r") or 0) < ev_floor):
@@ -1780,12 +1785,14 @@ class Bot:
                 continue
             if sig.get("recipe_spike"):
                 if sig["side"] == "LONG" and not S.ORDERBOOK_LONGS:
-                    self.note_skip(sig, "訂單簿爆漲多單停用：實盤 8 筆 -0.35R、-20u")
-                    continue
-                same = self._same_side(sig["side"])
-                if len(same) >= S.MAX_SAME_SIDE:
-                    self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
-                    continue
+                    sig = {**sig, "paper_only": True}
+                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                        "訂單簿爆漲多單實盤 8 筆 -0.35R、-20 USDT，暫停實盤，改模擬直到正期望"]}
+                if not sig.get("paper_only"):
+                    same = self._same_side(sig["side"])
+                    if len(same) >= S.MAX_SAME_SIDE:
+                        self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
+                        continue
                 try:
                     self.open_trade(sig, ev, src, reg, size_eq)
                 except ToobitError as e:
@@ -1793,13 +1800,9 @@ class Bot:
                     log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
                 continue
             if sig.get("breakout"):
-                same = self._same_side(sig["side"])
-                if len(same) >= S.MAX_SAME_SIDE:
-                    self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
-                    continue
-                if sig["side"] == "LONG" and not sig.get("after_red"):
-                    self.note_skip(sig, "突破做多先停。BMT 平在 -0.18R、ERA 平在 -0.55R，之後價格還在跌")
-                    continue
+                sig = {**sig, "paper_only": True}
+                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                    "突破單實盤期望不為正，暫停實盤，改模擬直到正期望"]}
                 if not sig.get("after_red") and htf is not None and htf * sgn < htf_min:
                     self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                         f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
@@ -1959,18 +1962,13 @@ class Bot:
                           and not full_live)
             if self_paper and S.self_short_sample_live(sl_pct):
                 self_paper = False
-            if self_paper and not S.SELF_ANALYSIS_PAPER_OPEN:
-                # Under +0.60R the live book lost in both halves (0.35–0.60R:
-                # 54 closes, -0.35R, -239 USDT). Paper under that line was already
-                # off. Open positions keep their stops.
-                shown = (ev.get("analysis") or {}).get("ev_r")
-                ev_txt = "未知" if shown is None else f"{float(shown):+.2f}R"
-                self.note_skip(sig, f"自選空單期望值 {ev_txt} 未達實盤 +{ev_floor:.2f}R。"
-                                    "0.35–0.60R 共 54 筆、前後半都是負的，不再開新倉")
-                continue
-            if self_paper:
-                # A live self-scan book of 116 closes won 37% and averaged -0.18R (-269 USDT).
-                # Flush longs, quiet shorts, and the full-risk short stay live. The rest paper.
+            if bounce and not S.flush_live(getattr(self.tb, "name", "") or ""):
+                sig = {**sig, "paper_only": True}
+                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                    "洗盤多單這本書實盤期望不為正，暫停實盤，改模擬直到正期望"]}
+            if self_paper or sig.get("paper_only"):
+                # Under the live line the short is paper. A stopped live flush is paper too.
+                # Quiet shorts and a short that clears the live line stay live.
                 sig = {**sig, "paper_only": True}
                 open_n = sum(1 for t in self.st["trades"].values()
                              if t.get("paper_probe") and not t.get("exit_reason")

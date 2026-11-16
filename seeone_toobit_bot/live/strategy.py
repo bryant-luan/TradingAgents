@@ -321,6 +321,17 @@ def rule_open(rules: dict | None, key: str) -> bool:
     return row.get("open", True) is not False
 
 
+def paper_for_stopped_live(rules: dict | None, path: str | None, side: str | None, paper: bool) -> bool:
+    """A live rule that has stopped opens on paper until its expectancy is positive.
+
+    The paper book is not blocked by its own streak. That is the sample that
+    has to turn positive before the rule is live again.
+    """
+    if paper:
+        return False
+    return not rule_open(rules, rule_key(path, side, False))
+
+
 def replay_rule_streaks(closes: list[dict]) -> dict:
     """Current streak of every rule except the live self-scan short.
 
@@ -533,11 +544,11 @@ SELF_SHORT_MAX_SAME_SIDE = 3
 SELF_ANALYSIS_PAPER = True
 # The live book stays at 3. Open paper positions keep their stops.
 SELF_ANALYSIS_PAPER_MAX = 6
-# Below-floor self-scan shorts. 17 paper closes, 6% win, -0.53R,
-# halves -0.58R / -0.49R, -31.8 USDT. Expected value on those closes
-# ran from +0.18R to +0.49R, under the live line, and no band of them won.
-# New ones stay off. A short that clears self_short_full_live is still live.
-SELF_ANALYSIS_PAPER_OPEN = False
+# A self-scan short under the live line is paper, not a stopped rule.
+# Live 0.35–0.60R was 54 closes, -0.35R, both halves negative, -239 USDT.
+# The paper book keeps going until that sample is positive. A short that
+# clears self_short_full_live stays live.
+SELF_ANALYSIS_PAPER_OPEN = True
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
 QUIET_MAX_SAME_SIDE = 3
@@ -568,14 +579,13 @@ QUIET_LONG_READY_R = 0.30
 # 15m (8-bar base <= 6%, volume >= 3x, close within 8%), ~15 days,
 # 1026 trades, 42%, -0.08R, both halves negative.
 # Wider and tighter cuts lost too. Paper only, same promotion bar as quiet longs.
-# The 1m paper book then closed 100 times, last close 2026-11-16 03:22 Taipei,
-# and stays off. 15m through 11:50 Taipei the same day: Toobit 14 closes, 36%
-# win, -0.18R, halves -0.05 / -0.32, -19 USDT. Gate 8 closes, 75% win, +0.46R,
-# halves +0.43 / +0.50, +41 USDT. New 15m papers open on Gate only. Open Toobit
-# papers keep their stops.
+# Both ignition books stay paper. 1m is negative (100 closes) and 15m on
+# Toobit is negative (14 closes, -0.18R, both halves). Gate 15m is positive
+# (8 closes, +0.46R, both halves) but short of the 20-close bar, so it is
+# not a live order yet. Open papers keep their stops.
 IGNITION_PAPER = True
-IGNITION_1M = False
-IGNITION_15M_VENUES = ("gate",)
+IGNITION_1M = True
+IGNITION_15M_VENUES = ("gate", "toobit")
 IGNITION_PAPER_MAX = 8
 IGNITION_QUOTE_MIN = 5_000_000
 IGNITION_RULES = {
@@ -584,8 +594,10 @@ IGNITION_RULES = {
     "15m": {"base_bars": 8, "base_max": 0.06, "vol_min": 3.0, "break_max": 0.08,
             "stop_min": 0.01, "stop_max": 0.12},
 }
-# 15m breakout entries. Live shorts averaged about 0R with swings from +37 USDT to -32.
-BREAKOUT_ENTRIES = False
+# 15m breakouts scan again, as paper. Live shorts were +0.05R and the later
+# half was negative; live longs were 3 closes, all losses. They return to
+# live only after the paper sample clears the promotion bar.
+BREAKOUT_ENTRIES = True
 # Same-side entries are no longer spaced 30 minutes apart. Closed pairs opened
 # within 30 minutes were 5 both green, 6 both red, and 4 split, and the wait did
 # not separate ICNT from PONS or BMT from ERA. One side is still capped at MAX_SAME_SIDE.
@@ -1190,8 +1202,13 @@ def quiet_long_sample(rows: list) -> dict:
 
 
 def ignition_15m_open(exchange: str) -> bool:
-    """15m ignition paper. Toobit's closed sample lost in both halves; Gate's won."""
+    """15m ignition stays paper on both books until the sample is positive and large enough."""
     return exchange in IGNITION_15M_VENUES
+
+
+def flush_live(exchange: str) -> bool:
+    """Gate flush longs averaged +0.37R. Toobit's four live closes averaged -0.47R."""
+    return exchange == "gate"
 
 
 def ignition_setup(rows: list, interval: str, now_ms: float | None = None) -> dict | None:

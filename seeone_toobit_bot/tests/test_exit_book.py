@@ -91,11 +91,18 @@ class FullLive(unittest.TestCase):
         self.assertEqual(S.live_ev_floor(0.74), 0.74)
         self.assertFalse(S.self_short_full_live("SHORT", 0.4, 0.008, 0.55, 1.0, 0.05))
         self.assertTrue(S.self_short_full_live("SHORT", 0.4, 0.008, 0.62, 1.0, 0.05))
-        self.assertFalse(S.ignition_15m_open("toobit"))
+        self.assertTrue(S.ignition_15m_open("toobit"))
         self.assertTrue(S.ignition_15m_open("gate"))
+        self.assertTrue(S.IGNITION_1M)
+        self.assertTrue(S.BREAKOUT_ENTRIES)
 
-    def test_a_below_floor_short_is_not_opened_as_paper(self):
-        self.assertFalse(S.SELF_ANALYSIS_PAPER_OPEN)
+    def test_a_below_floor_short_papers_until_it_is_positive(self):
+        self.assertTrue(S.SELF_ANALYSIS_PAPER_OPEN)
+        rules = {S.rule_key("SELF FLUSH LONG", "LONG", False): {"open": False, "streak": 3, "last": []}}
+        self.assertTrue(S.paper_for_stopped_live(rules, "SELF FLUSH LONG", "LONG", False))
+        self.assertFalse(S.paper_for_stopped_live(rules, "SELF FLUSH LONG", "LONG", True))
+        self.assertFalse(S.flush_live("toobit"))
+        self.assertTrue(S.flush_live("gate"))
 
     def test_other_slices_paper(self):
         self.assertFalse(S.self_short_full_live("LONG", 0.4, 0.008, 0.62, 1.0, 0.05))
