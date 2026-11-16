@@ -84,9 +84,15 @@ class FullLive(unittest.TestCase):
         self.assertEqual(trades["b"]["contracts"], 100)
         self.assertEqual(S.scale_open_paper(trades, 1.0), [])
 
-    def test_a_narrow_stop_below_the_floor_is_still_a_live_order(self):
-        self.assertTrue(S.self_short_sample_live(0.008))
+    def test_a_narrow_stop_below_the_floor_is_not_a_live_order(self):
+        self.assertFalse(S.self_short_sample_live(0.008))
         self.assertFalse(S.self_short_sample_live(0.012))
+        self.assertEqual(S.live_ev_floor(0.55), S.SELF_SHORT_FULL_RISK_EV)
+        self.assertEqual(S.live_ev_floor(0.74), 0.74)
+        self.assertFalse(S.self_short_full_live("SHORT", 0.4, 0.008, 0.55, 1.0, 0.05))
+        self.assertTrue(S.self_short_full_live("SHORT", 0.4, 0.008, 0.62, 1.0, 0.05))
+        self.assertFalse(S.ignition_15m_open("toobit"))
+        self.assertTrue(S.ignition_15m_open("gate"))
 
     def test_a_below_floor_short_is_not_opened_as_paper(self):
         self.assertFalse(S.SELF_ANALYSIS_PAPER_OPEN)

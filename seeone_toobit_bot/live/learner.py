@@ -446,7 +446,7 @@ class Learner:
         """Every three live self-scan short losses, raise the live bar to just above their best EV.
 
         A scratch or a dust close does not count. One live win clears the trio and
-        steps a raised bar back toward +0.50R.
+        steps a raised bar back toward the measured line.
         """
         if tr.get("paper") or tr.get("path") != "SELF ANALYSIS" or tr.get("side") != "SHORT":
             return

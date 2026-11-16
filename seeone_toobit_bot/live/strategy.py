@@ -221,15 +221,16 @@ GATE_HIGH_MARGIN_CAP_PCT = 0.55
 GATE_SELF_SHORT_MARGIN_CAP_PCT = 0.55
 GATE_MAX_TOTAL_MARGIN_PCT = 0.98
 GATE_PAPER_SCALE = 1.6
-# The live +1.11R came from reviews at +0.50R EV or more. Those keep the 8% size.
-# From +0.20R up to that line the short still opens, at the normal risk.
-# While the 1h/4h score is still negative, quality of at least 60 and a de-biased
-# probability of 52.5% to 60% still paid in the +0.10R to +0.20R band: 139 resolved
-# shorts, stop under 1%, 65.5% hit TP1 first, +0.31R, halves +0.30R / +0.31R.
-# Below +0.15R that quality band's later half was only +0.04R, so the bear floor
-# stops there. Quality under 60 has no settled sample and stays out. The flush
-# long is the other half of this tape: it waits until the 15m score has turned up.
-SELF_SHORT_FULL_RISK_EV = 0.50
+# Closed live self-scan shorts, both books, joined to the entry expected value
+# (109 closes through 2026-11-16 11:50 Taipei):
+#   0.35–0.50R  35 closes, 23% win, -0.39R, halves -0.51 / -0.27, -210 USDT
+#   0.50–0.60R  19 closes, 37% win, -0.28R, halves -0.35 / -0.21, -29 USDT
+#   0.60–0.74R  13 closes, 46% win, +0.15R, halves -0.17 / +0.42
+#   0.74R+       3 closes, 67% win, +0.95R
+# The bar is the first line that is not negative in both halves. A short under it
+# is not opened, on the live book or on paper. Quiet shorts are the other live
+# short: 6 closes, all winners, +1.41R, +90 USDT, both halves positive.
+SELF_SHORT_FULL_RISK_EV = 0.60
 # Three straight losses review the rule, on the live book and on paper.
 # A self-scan short raises the expected-value bar. If those three were already
 # under the bar, the bar still steps up, so the same print is not sent again.
@@ -353,15 +354,24 @@ def ease_ev_floor(current: float, base: float, step: float = 0.05) -> float:
     return round(max(base, current - step), 2)
 
 
+def live_ev_floor(stored: float | None) -> float:
+    """The live bar never sits under the measured line, even if a saved floor does."""
+    base = SELF_SHORT_FULL_RISK_EV
+    if stored is None:
+        return base
+    return round(max(base, float(stored)), 2)
+
+
 def self_short_full_live(side: str, btc24h: float | None, sl_pct: float, ev_r: float | None,
                          ret24h: float | None, ema_gap: float | None,
                          ev_floor: float | None = None) -> bool:
     """The one self-scan slice with a measured live edge stays a real order.
 
-    Stop under 1%, BTC 24h at or above 0, expected value at least +0.50R, and the
-    coin not already extended. Replay +1.23R (335; both halves, every day) and the
-    live book +1.11R (5, +53.6 USDT). A coin already up 3% or with EMA20 above EMA50
-    was only +0.71R, and every other live slice was near or under 0R, so those paper.
+    Stop under 1%, BTC 24h at or above 0, expected value at least +0.60R, and the
+    coin not already extended. The live book under +0.60R was negative in both
+    halves (0.35–0.50R: 35 closes, -0.39R; 0.50–0.60R: 19 closes, -0.28R). A coin
+    already up 3% or with EMA20 above EMA50 was only +0.71R on the replay, so that
+    short keeps the normal risk.
     """
     if side != "SHORT":
         return False
@@ -380,11 +390,14 @@ def self_short_full_live(side: str, btc24h: float | None, sl_pct: float, ev_r: f
 
 
 def self_short_sample_live(sl_pct: float) -> bool:
-    """A reviewed short with a stop under 1% is a live order at the normal risk.
+    """A short under the expected-value bar is not a live order.
 
-    Full size still needs self_short_full_live. A wider stop stays out.
+    The narrow-stop sample (stop under 1%, expected value under the live line)
+    was the losing book: 0.20–0.50R, 71 closes, -0.28R, -234 USDT. Paper is
+    already off. A wider stop stays out too. Full size still needs
+    self_short_full_live.
     """
-    return sl_pct < SELF_MAX_SL_PCT
+    return False
 # Self-scan shorts use a wider 1h/4h window than the -0.5..1.5 core. On the 5m exit replay
 # (stop < 1%, probability >= 52.5%, 30-minute dedupe): -2.5..-1.5 was 89% win, +1.33R
 # (116; +1.21R / +1.44R by half) and 1.5..2.5 was 68%, +0.50R (80; +0.48R / +0.52R).
@@ -555,10 +568,14 @@ QUIET_LONG_READY_R = 0.30
 # 15m (8-bar base <= 6%, volume >= 3x, close within 8%), ~15 days,
 # 1026 trades, 42%, -0.08R, both halves negative.
 # Wider and tighter cuts lost too. Paper only, same promotion bar as quiet longs.
-# The 1m paper book then closed 97 times, 33% win, -0.28R, -206 USDT. New 1m
-# ignition longs stay off. 15m (15 closes, 47%, -0.12R) keeps collecting.
+# The 1m paper book then closed 100 times, last close 2026-11-16 03:22 Taipei,
+# and stays off. 15m through 11:50 Taipei the same day: Toobit 14 closes, 36%
+# win, -0.18R, halves -0.05 / -0.32, -19 USDT. Gate 8 closes, 75% win, +0.46R,
+# halves +0.43 / +0.50, +41 USDT. New 15m papers open on Gate only. Open Toobit
+# papers keep their stops.
 IGNITION_PAPER = True
 IGNITION_1M = False
+IGNITION_15M_VENUES = ("gate",)
 IGNITION_PAPER_MAX = 8
 IGNITION_QUOTE_MIN = 5_000_000
 IGNITION_RULES = {
@@ -1170,6 +1187,11 @@ def quiet_long_sample(rows: list) -> dict:
         and out["mean_r"] is not None and out["mean_r"] >= QUIET_LONG_READY_R
         and (out["h1_r"] or 0) > 0 and (out["h2_r"] or 0) > 0)
     return out
+
+
+def ignition_15m_open(exchange: str) -> bool:
+    """15m ignition paper. Toobit's closed sample lost in both halves; Gate's won."""
+    return exchange in IGNITION_15M_VENUES
 
 
 def ignition_setup(rows: list, interval: str, now_ms: float | None = None) -> dict | None:

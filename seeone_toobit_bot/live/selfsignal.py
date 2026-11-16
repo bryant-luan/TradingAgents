@@ -19,6 +19,7 @@ import requests
 
 from . import flowlog
 from . import strategy as S
+from .exchange import exchange_name
 from .market import klines, listing, quote_volumes
 from .localreview import LocalReview
 
@@ -1113,7 +1114,7 @@ class SelfScanner:
         intervals = []
         if S.IGNITION_1M:
             intervals.append("1m")
-        if do_15:
+        if do_15 and S.ignition_15m_open(exchange_name()):
             intervals.append("15m")
         if not intervals:
             return []

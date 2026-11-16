@@ -933,7 +933,7 @@ class Bot:
             risk_pct = limits["high_risk"]
             margin_cap = limits["high_margin"]
         b24 = getattr(self, "btc24h", None)
-        ev_floor = float(self.learner.p.get("self_short_ev_floor") or S.SELF_SHORT_FULL_RISK_EV)
+        ev_floor = S.live_ev_floor(self.learner.p.get("self_short_ev_floor"))
         if (source == SELF_SOURCE and side == "SHORT" and sig.get("signal_path") != S.BOUNCE_PATH
                 and b24 is not None and b24 >= S.SELF_SHORT_BTC24H_MIN
                 and abs(price - stop) / price < S.SELF_MAX_SL_PCT
@@ -1950,7 +1950,7 @@ class Bot:
                     r24, gap = short_strength(S.to_toobit(sig["symbol"]))
                 except Exception:
                     r24, gap = None, None
-                ev_floor = float(self.learner.p.get("self_short_ev_floor") or S.SELF_SHORT_FULL_RISK_EV)
+                ev_floor = S.live_ev_floor(self.learner.p.get("self_short_ev_floor"))
                 full_live = S.self_short_full_live(
                     sig["side"], getattr(self, "btc24h", None), sl_pct,
                     (ev.get("analysis") or {}).get("ev_r"), r24, gap, ev_floor)
@@ -1958,13 +1958,15 @@ class Bot:
                           and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long")
                           and not full_live)
             if self_paper and S.self_short_sample_live(sl_pct):
-                # The review already cleared. A stop under 1% goes live at normal
-                # risk. The expected-value floor only decides the larger size.
                 self_paper = False
             if self_paper and not S.SELF_ANALYSIS_PAPER_OPEN:
-                # 17 paper closes, 6% win, -0.53R, both halves negative. The open
-                # paper shorts stay. A new one under the live line is not opened.
-                self.note_skip(sig, "自選空單未達實盤門檻。模擬 17 筆、勝率 6%、平均 -0.53R，前後半都是負的，不再開新模擬倉")
+                # Under +0.60R the live book lost in both halves (0.35–0.60R:
+                # 54 closes, -0.35R, -239 USDT). Paper under that line was already
+                # off. Open positions keep their stops.
+                shown = (ev.get("analysis") or {}).get("ev_r")
+                ev_txt = "未知" if shown is None else f"{float(shown):+.2f}R"
+                self.note_skip(sig, f"自選空單期望值 {ev_txt} 未達實盤 +{ev_floor:.2f}R。"
+                                    "0.35–0.60R 共 54 筆、前後半都是負的，不再開新倉")
                 continue
             if self_paper:
                 # A live self-scan book of 116 closes won 37% and averaged -0.18R (-269 USDT).
