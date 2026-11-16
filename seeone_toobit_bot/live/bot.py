@@ -920,24 +920,40 @@ class Bot:
             log_event("ERROR", where="trend_paper", symbol=sig["symbol"], error=str(e))
 
     def _open_ignition_paper(self, sig, ev, src, reg, equity):
-        if not sig.get("ignition") or not sig.get("paper_only"):
+        if not sig.get("ignition"):
             return
         venue = getattr(self.tb, "name", "") or ""
+        interval = "15m" if sig.get("signal_path") == "IGNITION 15m" else "1m"
+        live = S.ignition_live(venue, interval)
+        if live:
+            sig = {**sig, "paper_only": False}
+        elif not sig.get("paper_only"):
+            return
         blocked = (S.gate_measured_loss(venue, sig.get("signal_path"), sig.get("side"), False)
                    or S.toobit_measured_loss(venue, sig.get("signal_path"), sig.get("side"), None, False))
         if blocked:
             self.note_skip(sig, blocked)
             return
-        open_n = S.ignition_open_slots(self.st["trades"].values(), sig.get("signal_path"))
-        if open_n >= S.IGNITION_PAPER_MAX:
-            if time.time() - self._ign_full_log > 900:
-                self._ign_full_log = time.time()
-                log_event("IGNITION_FULL", open=open_n, max=S.IGNITION_PAPER_MAX, symbol=sig["symbol"],
-                          reason=f"起漲模擬已有 {open_n} 筆，上限 {S.IGNITION_PAPER_MAX}")
-            return
+        if not live:
+            open_n = S.ignition_open_slots(self.st["trades"].values(), sig.get("signal_path"))
+            if open_n >= S.IGNITION_PAPER_MAX:
+                if time.time() - self._ign_full_log > 900:
+                    self._ign_full_log = time.time()
+                    log_event("IGNITION_FULL", open=open_n, max=S.IGNITION_PAPER_MAX, symbol=sig["symbol"],
+                              reason=f"起漲模擬已有 {open_n} 筆，上限 {S.IGNITION_PAPER_MAX}")
+                return
+        else:
+            why = self._ignition_live_room(equity)
+            if why:
+                self.note_skip(sig, why)
+                return
+            sig, why = self._ignition_live_fill(sig)
+            if why:
+                self.note_skip(sig, why)
+                return
         tsym = S.to_toobit(sig["symbol"])
         if any(t["tsym"] == tsym and not t.get("exit_reason") for t in self.st["trades"].values()):
-            self.note_skip(sig, "這個幣已有倉位，起漲模擬不疊加")
+            self.note_skip(sig, "這個幣已有倉位，起漲不疊加")
             return
         if sig["id"] in self.st["traded_ids"]:
             return
@@ -946,6 +962,50 @@ class Bot:
         except ToobitError as e:
             self.st["traded_ids"].append(sig["id"])
             log_event("ERROR", where="ignition_paper", symbol=sig["symbol"], error=str(e))
+
+    def _ignition_live_room(self, equity: float) -> str | None:
+        """The live book limits. An open paper on another name does not take a slot."""
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self.st.get("halted") or self.st.get("day_target_hit") or self.st.get("combo_done") == day:
+            return "今日已停止開新倉，15 分鐘起漲這筆不送"
+        if self._margin_full(equity):
+            return "保證金已滿，15 分鐘起漲這筆不送"
+        live = [t for t in self._risk_trades() if not t.get("exit_reason")]
+        if len(live) >= S.MAX_POSITIONS:
+            return f"實盤已有 {len(live)} 筆，上限 {S.MAX_POSITIONS}，15 分鐘起漲這筆不送"
+        same = self._same_side("LONG")
+        if len(same) >= S.MAX_SAME_SIDE:
+            return f"同方向已有 {len(same)} 筆實盤，上限 {S.MAX_SAME_SIDE}，15 分鐘起漲這筆不送"
+        return None
+
+    def _ignition_live_fill(self, sig: dict) -> tuple[dict, str | None]:
+        """Enter at the live price. The stop stays under the base.
+
+        A price that has already run one stop past the signal close is a different
+        trade, and a stop wider than the book maximum is not sent.
+        """
+        tsym = S.to_toobit(sig["symbol"])
+        try:
+            px = self.tb.price(tsym)
+            close, stop = float(sig["entry_price"]), float(sig["stop_price"])
+        except (ToobitError, TypeError, ValueError) as e:
+            return sig, f"讀不到現價，15 分鐘起漲不送 ({e})"
+        dist = close - stop
+        if dist <= 0 or px <= stop:
+            return sig, f"現價 {px} 已經穿越止損 {stop}"
+        if px - close > dist:
+            return sig, f"收盤 {close} 到現價 {px} 已經走出一個止損，這筆不追"
+        stop_pct = (px - stop) / px
+        if stop_pct > S.MAX_STOP_PCT:
+            return sig, f"止損距離 {stop_pct:.0%} 過寬 (>{S.MAX_STOP_PCT:.0%})，15 分鐘起漲不送"
+        levels = []
+        for lvl in sig.get("levels") or []:
+            try:
+                r = float(lvl.get("r_multiple") or 0)
+            except (TypeError, ValueError):
+                continue
+            levels.append({**lvl, "price": px + (px - stop) * r})
+        return {**sig, "entry_price": px, "current_price": px, "levels": levels, "paper_only": False}, None
 
     def _start_ignition(self, positions: dict):
         if not S.IGNITION_PAPER and not S.TREND_PAPER:
@@ -2324,6 +2384,7 @@ class Bot:
         log_event("START", dry_run=self.dry, paper=self.paper, exchange=self.tb.name, tradable_contracts=tradable,
                   quiet_long_paper=S.QUIET_LONG_PAPER, quiet_longs_live=S.QUIET_LONGS,
                   ignition_paper=S.IGNITION_PAPER, ignition_1m=S.IGNITION_1M,
+                  ignition_15m_live=S.ignition_live(getattr(self.tb, "name", "") or "", "15m"),
                   ignition_max=S.IGNITION_PAPER_MAX, trend_paper=S.TREND_PAPER,
                   trend_max=S.TREND_PAPER_MAX, self_analysis_paper=S.SELF_ANALYSIS_PAPER,
                   sim_until=os.environ.get("GATE_SIM_UNTIL"),

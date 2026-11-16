@@ -1092,9 +1092,10 @@ class SelfScanner:
         return [{"sig": sig, "ev": ev, "source": "突破"}]
 
     def fresh_ignitions(self, held: set, specs: dict) -> list:
-        """15m when that bar has had time to close. 1m stays off. Paper signals only.
+        """15m when that bar has had time to close. 1m stays off.
 
-        The replay of both rules lost in each half, so nothing here is a live order.
+        Gate's 15-minute signal is a live order. Toobit's 15-minute signal is
+        still built, and the measured-loss rule drops it before an order.
         Names under the quote-volume floor are skipped: that is the universe the replay used.
         """
         if not S.IGNITION_PAPER:
@@ -1163,17 +1164,20 @@ class SelfScanner:
                    "price": tps[i], "hit": False} for i in range(len(TP_R))]
         label = "1 分鐘" if interval == "1m" else "15 分鐘"
         path = f"IGNITION {interval}"
+        live = S.ignition_live(exchange_name(), interval)
         sig = {"id": f"ign:{sym}:{interval}:{hit['bar_open']}", "symbol": sym, "side": "LONG",
                "status": "ACTIVE", "timeframe": interval, "entry_price": px, "stop_price": hit["stop"],
                "current_price": px, "entry_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                "levels": levels, "signal_path": path, "path_subtype": None, "broken": hit["broken"],
-               "ignition": True, "paper_only": True}
+               "ignition": True, "paper_only": not live}
+        if live:
+            book_note = "Gate 15 分鐘起漲送實盤。模擬 11 筆、勝率 73%、平均 +0.38R，前後半都是正的"
+        else:
+            book_note = "只記模擬倉。1 分鐘兩邊都已停；Toobit 15 分鐘已停"
         reasons = [
             f"{label}起漲：收盤 {px:.6g} 漲破前段高點 {hit['broken']:.6g}，這一段量是中位數的 {hit['vol_mult']:.1f} 倍",
             f"底座振幅 {hit['base_pct']:.1%}，突破 {hit['break_pct']:.1%}，止損放在底座 {hit['stop']:.6g}（{hit['stop_pct']:.1%}）",
-            "只記模擬倉。1 分鐘重放 484 筆、42%、-0.17R；15 分鐘 1026 筆、42%、-0.08R，前後半都是負的",
-            f"模擬滿 {S.QUIET_LONG_READY_N} 筆、勝率至少 {S.QUIET_LONG_READY_WIN:.0%}、"
-            f"平均 R 至少 {S.QUIET_LONG_READY_R:+.2f} 且前後半都為正，才考慮實盤",
+            book_note,
         ]
         ev = {"ok": True, "score": 90.0, "tier": "NORMAL", "reasons": reasons,
               "factors": {f"source:{path}": 0.0, "side:LONG": 0.0},
@@ -1182,7 +1186,7 @@ class SelfScanner:
         self.log("IGNITION", symbol=sym, side="LONG", timeframe=interval, price=px, stop=hit["stop"],
                  vol_mult=round(hit["vol_mult"], 2), base_pct=round(hit["base_pct"] * 100, 2),
                  break_pct=round(hit["break_pct"] * 100, 2),
-                 note="模擬，不送真單")
+                 note="實盤" if live else "模擬，不送真單")
         return {"sig": sig, "ev": ev, "source": path}
 
     def fresh_trends(self, held: set, specs: dict) -> list:

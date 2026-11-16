@@ -93,6 +93,10 @@ class FullLive(unittest.TestCase):
         self.assertTrue(S.self_short_full_live("SHORT", 0.4, 0.008, 0.62, 1.0, 0.05))
         self.assertTrue(S.ignition_15m_open("toobit"))
         self.assertTrue(S.ignition_15m_open("gate"))
+        self.assertTrue(S.ignition_live("gate", "15m"))
+        self.assertFalse(S.ignition_live("gate", "1m"))
+        self.assertFalse(S.ignition_live("toobit", "15m"))
+        self.assertFalse(S.ignition_live("toobit", "1m"))
         self.assertTrue(S.IGNITION_1M)
         self.assertTrue(S.BREAKOUT_ENTRIES)
 
@@ -481,6 +485,25 @@ class Manage(unittest.TestCase):
         self.assertIsNone(tr.get("exit_reason"))
         self.assertTrue(tr.get("exchange_flat"))
         self.assertEqual(book.closed, [])
+
+    def test_a_live_ignition_keeps_the_base_stop_and_does_not_chase(self):
+        book = FakeBook()
+        b = bot(book)
+        sig = {"symbol": "AAAUSDT", "entry_price": 1.0, "stop_price": 0.90,
+               "levels": [{"label": "TP1", "r_multiple": 1.0, "price": 1.1}]}
+        book.px = 1.05
+        filled, why = b._ignition_live_fill(sig)
+        self.assertIsNone(why)
+        self.assertEqual(filled["entry_price"], 1.05)
+        self.assertEqual(filled["stop_price"], 0.90)
+        self.assertAlmostEqual(filled["levels"][0]["price"], 1.05 + 0.15)
+        self.assertFalse(filled["paper_only"])
+        book.px = 1.20
+        filled, why = b._ignition_live_fill(sig)
+        self.assertIn("不追", why)
+        book.px = 0.89
+        filled, why = b._ignition_live_fill(sig)
+        self.assertIn("穿越止損", why)
 
     def test_a_daily_trend_paper_keeps_its_volatility_stop(self):
         book = FakeBook()
