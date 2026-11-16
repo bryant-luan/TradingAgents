@@ -79,6 +79,31 @@ def _order_side(row: dict) -> str:
     return "SELL_CLOSE" if closing else "SELL_OPEN"
 
 
+def price_order_view(row: dict) -> dict:
+    """A Gate trigger has no filled size of its own. Succeeded means the close order was sent."""
+    initial = row.get("initial") or {}
+    try:
+        size = abs(int(float(initial.get("size") or 0)))
+    except (TypeError, ValueError):
+        size = 0
+    status = str(row.get("status") or "")
+    finish = str(row.get("finish_as") or "")
+    if status == "open":
+        verdict, executed = "NEW", 0
+    elif finish == "succeeded":
+        verdict, executed = "FILLED", size
+    elif finish in ("cancelled", "canceled", "failed", "expired"):
+        verdict, executed = "CANCELED", 0
+    else:
+        verdict, executed = "NEW", 0
+    return {"orderId": _oid(row), "status": verdict, "executedQty": executed}
+
+
+def _missing_order(err: BaseException) -> bool:
+    text = str(err)
+    return "ORDER_NOT_FOUND" in text or "-> 404 " in text or "-> HTTP 404" in text
+
+
 def _norm_order(row: dict) -> dict:
     size = abs(int(float(row.get("size") or 0)))
     left = abs(int(float(row.get("left") or 0)))
@@ -355,8 +380,11 @@ class Gate:
             if when < 10_000_000_000:
                 when *= 1000
             close_px = row.get("short_price") if side == "LONG" else row.get("long_price")
-            out.append({"side": side, "closeTime": int(when), "realizedPnL": row.get("pnl") or 0,
-                        "closeAvgPrice": close_px})
+            opened = float(row.get("first_open_time") or 0)
+            if opened and opened < 10_000_000_000:
+                opened *= 1000
+            out.append({"side": side, "closeTime": int(when), "openTime": int(opened),
+                        "realizedPnL": row.get("pnl") or 0, "closeAvgPrice": close_px})
         return out
 
     def set_isolated(self, symbol: str):
@@ -421,10 +449,7 @@ class Gate:
         row = self._request("POST", "/futures/usdt/price_orders", body=body)
         return {"orderId": _oid(row)}
 
-    def set_position_stop(self, symbol: str, direction: str, stop_loss: str):
-        for order in self.open_orders(symbol, "STOP_PROFIT_LOSS"):
-            if order.get("orderType") == f"STOP_{direction}_LOSS":
-                self.cancel_order(order["orderId"], "STOP_PROFIT_LOSS")
+    def _post_stop(self, symbol: str, direction: str, stop_loss: str):
         hedge = self._hedged()
         if direction == "LONG":
             order_type, rule, auto_size = "close-long-position", 2, "close_long"
@@ -453,6 +478,27 @@ class Gate:
             "order_type": order_type,
         }
         return self._request("POST", "/futures/usdt/price_orders", body=body)
+
+    def set_position_stop(self, symbol: str, direction: str, stop_loss: str):
+        # Gate allows one full-position stop. The old one has to come off before the new one goes on.
+        # If the new one is rejected, the old price goes back, so the book is not left without a stop.
+        existing = [o for o in self.open_orders(symbol, "STOP_PROFIT_LOSS")
+                    if o.get("orderType") == f"STOP_{direction}_LOSS"]
+        previous = [str(o["stopPrice"]) for o in existing if o.get("stopPrice") is not None]
+        for order in existing:
+            self.cancel_order(order["orderId"], "STOP_PROFIT_LOSS")
+        try:
+            return self._post_stop(symbol, direction, stop_loss)
+        except GateError:
+            for old in reversed(previous):
+                if old == str(stop_loss):
+                    continue
+                try:
+                    self._post_stop(symbol, direction, old)
+                    break
+                except GateError:
+                    continue
+            raise
 
     def open_orders(self, symbol: str, kind: str = "STOP") -> list:
         contract = to_gate(symbol)
@@ -494,7 +540,13 @@ class Gate:
         return self._request("DELETE", f"{path}/{order_id}")
 
     def order(self, order_id: str) -> dict:
-        return _norm_order(self._request("GET", f"/futures/usdt/orders/{order_id}"))
+        try:
+            return _norm_order(self._request("GET", f"/futures/usdt/orders/{order_id}"))
+        except GateError as e:
+            if not _missing_order(e):
+                raise
+        # A take-profit that could not rest as a limit is a price order. Its id is not on the order book.
+        return price_order_view(self._request("GET", f"/futures/usdt/price_orders/{order_id}"))
 
     def user_trades(self, symbol: str, limit: int = 100) -> list:
         rows = self._request("GET", "/futures/usdt/my_trades",

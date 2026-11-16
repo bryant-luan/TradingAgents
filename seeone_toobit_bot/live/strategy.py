@@ -35,6 +35,10 @@ class SeeOneLimited(Exception):
         super().__init__(f"分析驗算限流中，{wait_s:.0f} 秒內不再打")
 
 
+class SeeOneNoData(Exception):
+    """This symbol has no market data. See One itself answered, so the scan keeps going."""
+
+
 # Minimum space between analysis-review posts, and how long to stay silent after a 429
 # when See One does not send Retry-After. A burst at 11:52 Taipei on Nov 6 started the
 # penalty; probing every 5 or 15 minutes kept it alive. One quiet hour matches the gap
@@ -191,19 +195,52 @@ SELF_BTC1H_MIN = -0.3
 # fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
 # Breakout entries take it too: 6 live breakouts past it won once, -1.88R (EVAA, HOT, ENA among them).
 BTC1H_CHASE_MAX = 0.3
-# Self-scan shorts need BTC flat or up over the last 24h. Inside the current gates, the 5m exit replay
-# averaged +0.88R (128; +0.97R / +0.79R by half) with BTC 24h >= 0, against +0.26R (148) below -1% and
-# +0.03R (142) at -1..0%, both negative on Nov 10-11 (Nov 10 alone: +0.41R vs -0.27R / -0.09R).
-# Live self-scan shorts agreed: Gate -0.35R (14) vs -0.02R (3), Toobit -0.17R (21) vs +0.06R (9).
+# BTC's own 24h move, joined onto the stop<1% / probability>=52.5% short replay.
+# Flat-to-down, -1% to 0%, was 21.7% win and -0.58R (115; -0.33R / -0.83R by half). That band stays out.
+# Already down more than 1%, and the last hour not already extended +0.3% with the short, was 69.7%
+# and +0.71R (178; -0.02R / +1.44R). That downtrend opens at the normal risk. The 8% size still
+# requires BTC 24h >= 0. The replay's deepest 24h print was -5.8%.
 SELF_SHORT_BTC24H_MIN = 0.0
+SELF_SHORT_BTC24H_TREND = -1.0
 # Self-scan shorts that clear every gate above (stop < 1%, BTC 24h >= 0) are the one setup with a
 # measured edge: 5m exit replay +1.23R (335; +0.97R / +1.50R by half, positive on every day), live
 # +1.11R (5, +53.6 USDT). Every other live slice sits near or below 0R. With winners halved, Kelly is
 # still ~0.4, so 8% is about a fifth of it; sequential max drawdown on that haircut replay was 27%.
 # 8% at a 1% stop and 25x needs a 32% margin slot.
 SELF_SHORT_RISK_PCT = 0.08
-# The live +1.11R came from reviews at +0.50R EV or more; below that the setup opens at the normal risk.
-SELF_SHORT_FULL_RISK_EV = 0.50
+# Gate only, from 2026-11-16. The user asked for a larger book. Toobit stays
+# at 5% / 8%. Gate steps the same two lines to 8% and 12%. A 1% stop at 25x
+# needs 32% and 48% of equity as margin; the caps sit just above that so the
+# size is not clipped back to 5%. Open paper positions sized at 5% are scaled
+# once by 8/5. Live exchange positions are left alone.
+GATE_RISK_PCT = 0.08
+GATE_HIGH_RISK_PCT = 0.12
+GATE_SELF_SHORT_RISK_PCT = 0.12
+GATE_NORMAL_MARGIN_CAP_PCT = 0.42
+GATE_HIGH_MARGIN_CAP_PCT = 0.55
+GATE_SELF_SHORT_MARGIN_CAP_PCT = 0.55
+GATE_MAX_TOTAL_MARGIN_PCT = 0.98
+GATE_PAPER_SCALE = 1.6
+# Closed live self-scan shorts, both books, joined to the entry expected value
+# (109 closes through 2026-11-16 11:50 Taipei):
+#   0.35–0.50R  35 closes, 23% win, -0.39R, halves -0.51 / -0.27, -210 USDT
+#   0.50–0.60R  19 closes, 37% win, -0.28R, halves -0.35 / -0.21, -29 USDT
+#   0.60–0.74R  13 closes, 46% win, +0.15R, halves -0.17 / +0.42
+#   0.74R+       3 closes, 67% win, +0.95R
+# The bar is the first line that is not negative in both halves. A short under it
+# is not opened, on the live book or on paper. Quiet shorts are the other live
+# short: 6 closes, all winners, +1.41R, +90 USDT, both halves positive.
+SELF_SHORT_FULL_RISK_EV = 0.60
+# Three straight losses review the rule, on the live book and on paper.
+# A self-scan short raises the expected-value bar. If those three were already
+# under the bar, the bar still steps up, so the same print is not sent again.
+# Every other rule stops opening. A win clears a streak that has not stopped
+# the rule. A stopped rule stays stopped. See learner.py.
+LOSS_REVIEW_N = 3
+LOSS_REVIEW_R = -0.30
+RULE_FLAT_R = 0.05
+SELF_SHORT_SAMPLE_EV = 0.20
+SELF_SHORT_BEAR_EV = 0.15
 SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # Of 21 indicators replayed on those 335 shorts, only two split them the same way in both halves:
 # the coin already up 3%+ over 24h, or 15m EMA20 more than 0.14% above EMA50. Either one: 52% win,
@@ -212,11 +249,186 @@ SELF_SHORT_MARGIN_CAP_PCT = 0.33
 # ATR %, stop/ATR, hour and Bollinger width split well in the first half and flipped in the second.
 SELF_SHORT_WEAK_RET24H = 3.0
 SELF_SHORT_WEAK_EMA_GAP = 0.14
-# Self-scan shorts may open with the market's 1h/4h up to 1.5 against them instead of 0.5. Inside the
-# stop < 1%, BTC 24h >= 0 and 52.5% gates, -1.5..-0.5 replayed 68% win, +1.02R (98; +1.28R / +0.92R by
-# half), each 0.25-0.5 sub-band positive in both halves; below -1.5 was 44%, +0.38R (9). The 1h/4h
-# trend-gone exit uses the same floor for them, or it would close these at once.
-SELF_SHORT_HTF_MIN = -1.5
+
+
+def roll_ev_floor(base: float, losses: list, current: float | None = None) -> float:
+    """Expected-value bar after the latest three losses.
+
+    The next short has to clear the highest expected value in that trio.
+    When every value in the trio was already under the bar, the bar still
+    steps up by 0.05R. It does not fall below ``base``.
+    """
+    floor = base if current is None else float(current)
+    last = list(losses)[-LOSS_REVIEW_N:]
+    if len(last) < LOSS_REVIEW_N:
+        return round(floor, 2)
+    evs = []
+    for item in last:
+        ev = item.get("ev") if isinstance(item, dict) else item
+        if ev is not None:
+            evs.append(float(ev))
+    if not evs:
+        return round(max(base, floor + 0.05), 2)
+    cleared = max(evs) + 0.01
+    if cleared > floor + 1e-9:
+        return round(max(base, cleared), 2)
+    return round(max(base, floor + 0.05), 2)
+
+
+def stuck_floor_step(base: float, losses: list, current: float) -> float | None:
+    """One step when three losses left the bar sitting on its measured line."""
+    if current > base + 1e-9:
+        return None
+    new = roll_ev_floor(base, losses, current)
+    if new > current + 1e-9:
+        return new
+    return None
+
+
+def rule_key(path: str | None, side: str | None, paper: bool) -> str:
+    return f"{'模擬' if paper else '實盤'}|{path or '?'}|{side or '?'}"
+
+
+def roll_rule(rules: dict, key: str, r: float, symbol: str | None = None) -> str | None:
+    """Three straight losses stop new entries of this rule.
+
+    A win clears the streak. A rule that has already stopped stays stopped,
+    including when a position that was already open later wins.
+    """
+    row = rules.setdefault(key, {"streak": 0, "open": True, "last": []})
+    if row.get("open", True) is False:
+        return None
+    if r <= LOSS_REVIEW_R:
+        row["streak"] = int(row.get("streak") or 0) + 1
+        last = row.setdefault("last", [])
+        last.append({"symbol": symbol, "r": round(float(r), 3)})
+        del last[:-LOSS_REVIEW_N]
+        if row["streak"] >= LOSS_REVIEW_N:
+            row["open"] = False
+            shown = ", ".join(
+                f"{(item.get('symbol') or '').replace('-SWAP-USDT', '')} {item['r']:+.2f}R"
+                for item in last)
+            return f"{key} 連續 {LOSS_REVIEW_N} 筆虧損（{shown}），停止新開倉"
+        return None
+    if r > RULE_FLAT_R:
+        row["streak"] = 0
+        row["last"] = []
+    return None
+
+
+def rule_open(rules: dict | None, key: str) -> bool:
+    row = (rules or {}).get(key) or {}
+    return row.get("open", True) is not False
+
+
+def paper_for_stopped_live(rules: dict | None, path: str | None, side: str | None, paper: bool) -> bool:
+    """A live rule that has stopped opens on paper until its expectancy is positive.
+
+    The paper book is not blocked by its own streak. That is the sample that
+    has to turn positive before the rule is live again.
+    """
+    if paper:
+        return False
+    return not rule_open(rules, rule_key(path, side, False))
+
+
+def replay_rule_streaks(closes: list[dict]) -> dict:
+    """Current streak of every rule except the live self-scan short.
+
+    That short raises its expected-value bar instead of stopping. A win later
+    in the history clears an older trio, so only a streak that is still open
+    at the last close stops the rule.
+    """
+    rules: dict = {}
+    for row in closes:
+        paper = bool(row.get("paper"))
+        path, side = row.get("path"), row.get("side")
+        if not paper and path == "SELF ANALYSIS" and side == "SHORT":
+            continue
+        if row.get("r") is None:
+            continue
+        r = float(row["r"])
+        key = rule_key(path, side, paper)
+        held = rules.get(key)
+        if held and held.get("open") is False and r > RULE_FLAT_R:
+            held["open"] = True
+            held["streak"] = 0
+            held["last"] = []
+        roll_rule(rules, key, r, row.get("symbol"))
+    return rules
+
+
+def ease_ev_floor(current: float, base: float, step: float = 0.05) -> float:
+    """One live win steps a raised bar back toward the measured line."""
+    if current <= base:
+        return base
+    return round(max(base, current - step), 2)
+
+
+def live_ev_floor(stored: float | None) -> float:
+    """The live bar never sits under the measured line, even if a saved floor does."""
+    base = SELF_SHORT_FULL_RISK_EV
+    if stored is None:
+        return base
+    return round(max(base, float(stored)), 2)
+
+
+def self_short_full_live(side: str, btc24h: float | None, sl_pct: float, ev_r: float | None,
+                         ret24h: float | None, ema_gap: float | None,
+                         ev_floor: float | None = None) -> bool:
+    """The one self-scan slice with a measured live edge stays a real order.
+
+    Stop under 1%, BTC 24h at or above 0, expected value at least +0.60R, and the
+    coin not already extended. The live book under +0.60R was negative in both
+    halves (0.35–0.50R: 35 closes, -0.39R; 0.50–0.60R: 19 closes, -0.28R). A coin
+    already up 3% or with EMA20 above EMA50 was only +0.71R on the replay, so that
+    short keeps the normal risk.
+    """
+    if side != "SHORT":
+        return False
+    if btc24h is None or btc24h < SELF_SHORT_BTC24H_MIN:
+        return False
+    if sl_pct >= SELF_MAX_SL_PCT:
+        return False
+    need = SELF_SHORT_FULL_RISK_EV if ev_floor is None else ev_floor
+    if (ev_r or 0) < need:
+        return False
+    if ret24h is not None and ret24h > SELF_SHORT_WEAK_RET24H:
+        return False
+    if ema_gap is not None and ema_gap > SELF_SHORT_WEAK_EMA_GAP:
+        return False
+    return True
+
+
+def self_short_sample_live(sl_pct: float) -> bool:
+    """A short under the expected-value bar is not a live order.
+
+    The narrow-stop sample (stop under 1%, expected value under the live line)
+    was the losing book: 0.20–0.50R, 71 closes, -0.28R, -234 USDT. Paper is
+    already off. A wider stop stays out too. Full size still needs
+    self_short_full_live.
+    """
+    return False
+# Self-scan shorts use a wider 1h/4h window than the -0.5..1.5 core. On the 5m exit replay
+# (stop < 1%, probability >= 52.5%, 30-minute dedupe): -2.5..-1.5 was 89% win, +1.33R
+# (116; +1.21R / +1.44R by half) and 1.5..2.5 was 68%, +0.50R (80; +0.48R / +0.52R).
+# Together, -2.5..2.5 was 62%, +0.49R (918; +0.84R / +0.15R) against 57%, +0.36R
+# (722; +0.69R / +0.03R) inside -1.5..1.5. At or above +2.5 the later half was -0.18R (21).
+# That cap was sitting the book out once 1h/4h reached about -4.3 (short-aligned +4.3).
+# Shorts keep opening through that bear until the aligned score reaches +6, but only
+# while BTC's last hour is not bouncing against the short. JST on Nov 15 entered at
+# aligned +3.9 with BTC +1.70% over the last hour and closed -0.55R in 32 minutes.
+# Longs and other paths keep HTF_MAX_DEFAULT. The trend-gone exit uses the floor below,
+# so a short opened in this bear is not closed for being too bearish.
+SELF_SHORT_HTF_MIN = -2.5
+SELF_SHORT_HTF_MAX = 6.0
+# The +2.5 line is the replay's late half. Past it, a 24h downtrend no longer excuses
+# a BTC bounce. A short inside the line can still use that waiver.
+SELF_SHORT_LATE_HTF = 2.5
+# A 15m score of -2.5 is aligned +2.5 for a short, which the shared 2.5 cap treats as
+# already late. Shorts may still open until the 15m score is aligned +3. A 15m of -3.5
+# (aligned +3.5) stays a skip, the same late-chase case as Nov 4.
+SELF_SHORT_M15_MAX = 3.0
 # A self-scan maker entry is not worked once price has run this far toward the target from the reviewed
 # price. Self-scan fills 0.1R+ past it won 2 of 13 (avg -0.37R) against -0.13R for 47 near it; breakouts
 # showed no such gap, so they keep the learned window.
@@ -250,6 +462,10 @@ FLUSH_VOL_RATIO_MIN = 1.56
 # flush that had already bounced further did better, not worse.
 FLUSH_RET2H_MIN = 0.0
 FLUSH_BOUNCE_MIN_R = 1.5
+# A coin already in the front half of its own 3h range is not a wash entry.
+# The flush stays eligible behind a stronger short instead of taking the first slot.
+FLUSH_FRONT_RPOS = 0.55
+FLUSH_MOOD_SCORE = 62.0
 # Two may be open at once. Replayed with a 2-4h hold, a cap of 2 took 26-31 flushes for +31.6R to +40.2R
 # (both halves positive) against 16-19 and +19.7R to +28.0R at 1, max drawdown 2.1-3.2R against 2.1R.
 # Flushes that came while another was open still averaged +0.98R (48). Gate skipped 7 on Nov 12 at 1.
@@ -258,6 +474,51 @@ BOUNCE_STOP_AFTER_LOSSES = 2
 # A scratch exit is not a wrong call: BR on Nov 10 was closed at -0.10R one second after entry by the
 # 1h/4h trend-gone exit, which bounce longs no longer take.
 BOUNCE_LOSS_R = -0.3
+
+
+def mood_rank(htf: float | None, m15: float | None, rpos: float | None,
+             flush_ready: bool, short_prob: float | None,
+             short_ok: bool = False) -> tuple[str | None, float, str]:
+    """Which side the market mood and this coin's mood agree on.
+
+    Market mood is the 1h/4h score, with the 15m score as the short-term turn.
+    Coin mood is its place in the last 3h: near 0 is washed out, near 1 is the front.
+    While that higher timeframe is still heavy and the 15m score has not turned up,
+    the trade is the short. A flush long waits for the bounce: the 15m score has to
+    be positive, and the coin has to be off its low, before it can rank ahead.
+    A short whose own read is stronger stays ahead of that flush.
+    """
+    at_front = rpos is not None and rpos >= FLUSH_FRONT_RPOS
+    market_heavy = htf is not None and htf < 0
+    turned = m15 is not None and m15 > 0
+    wash = bool(flush_ready and not at_front and market_heavy and turned)
+    short_score = None if short_prob is None else float(short_prob)
+    has_short = short_ok or short_score is not None
+    where = "未知" if rpos is None else f"{rpos:.2f}"
+    m15_txt = "未知" if m15 is None else f"{m15:+.2f}"
+    htf_txt = "未知" if htf is None else f"{htf:+.2f}"
+    if wash and (short_score is None or FLUSH_MOOD_SCORE >= short_score):
+        return ("LONG", FLUSH_MOOD_SCORE,
+                f"大盤 1h/4h {htf_txt} 仍重、15m {m15_txt} 已轉正，幣的區間位置 {where} 不在前段，這一輪選洗盤多單")
+    if has_short and at_front and flush_ready:
+        shown = "" if short_score is None else f"，空單讀數 {short_score:.0f}"
+        return ("SHORT", 0.0 if short_score is None else short_score,
+                f"幣的區間位置 {where} 已在前段，不追洗盤多單{shown}")
+    if has_short:
+        why = "空單" if short_score is None else f"空單讀數 {short_score:.0f}"
+        if flush_ready and not turned:
+            why += f"，15m 情緒 {m15_txt} 還沒轉正，洗盤多單不排前面"
+        elif flush_ready and not market_heavy:
+            why += f"，大盤 1h/4h {htf_txt} 不是偏重，洗盤多單不排前面"
+        elif flush_ready and short_score is not None and short_score > FLUSH_MOOD_SCORE:
+            why += "，高於洗盤多單，洗盤多單不排最前"
+        return ("SHORT", 0.0 if short_score is None else short_score, why)
+    if wash:
+        return ("LONG", FLUSH_MOOD_SCORE,
+                f"大盤 1h/4h {htf_txt} 仍重、15m {m15_txt} 已轉正，幣的區間位置 {where} 不在前段，這一輪選洗盤多單")
+    if flush_ready and at_front:
+        return (None, -1.0, f"幣的區間位置 {where} 已在前段，洗盤多單不追最前面")
+    return (None, -1.0, "市場情緒和幣種情緒沒有同時對上")
 
 
 def bounce_ok(flush: tuple[float, float, float, float] | None, sl_pct: float, price: float) -> bool:
@@ -271,16 +532,72 @@ REVERSAL_ROUNDTRIP_R = 1.0
 REVERSAL_DRIFT_PCT = 0.003
 REVERSAL_BACK_PCT = 0.002
 MAX_SAME_SIDE = 2               # open positions on one side
+# A bear tape can hold three self-scan shorts. Each one still clears the same
+# 52.5% probability and +0.50R expected value, so the extra slot does not change
+# the win rate or the R of the trades that open. The book cap stays at 3.
+SELF_SHORT_MAX_SAME_SIDE = 3
+# Self-scan entries other than the flush long, the quiet short, and the full-risk
+# short in self_short_full_live. The whole path was 116 live closes, 37% win,
+# -0.18R, -269 USDT. Those others paper at this cap. Existing live positions stay
+# on the exchange stop. Promotion is the quiet-long bar, recorded by the close
+# note, and it does not turn the path back on by itself.
+SELF_ANALYSIS_PAPER = True
+# The live book stays at 3. Open paper positions keep their stops.
+SELF_ANALYSIS_PAPER_MAX = 6
+# A self-scan short under the live line is paper, not a stopped rule.
+# Live 0.35–0.60R was 54 closes, -0.35R, both halves negative, -239 USDT.
+# The paper book keeps going until that sample is positive. A short that
+# clears self_short_full_live stays live.
+SELF_ANALYSIS_PAPER_OPEN = True
 # Quiet-period shorts may fill the whole book. The live sample was still a handful of
 # trades after XAG and XAU; three concurrent names is the cap the account already allows.
 QUIET_MAX_SAME_SIDE = 3
-# ELSA window (HTF -0.5 to 1.5, BTC 1h aligned, 15m under 2.5, after a See One review)
-# is +0.64R on 211 resolved rows, both halves positive. Quiet shorts in the 1.5–2.5
-# band are +0.38R on 33 rows. Quiet longs in that band are -0.99R on 14 rows.
-# New entries stay on the higher-expectancy ELSA path.
-QUIET_ENTRIES = False
-# 15m breakout entries. Live shorts averaged about 0R with swings from +37 USDT to -32.
-BREAKOUT_ENTRIES = False
+# Quiet shorts are an entry alongside the self-scan short. Liquid names with the
+# 1h/4h already aligned in [1.5, 2.5) were +0.76R on 37 reviews. The four live
+# closes (XAG, XAU, XRP, SOXL) all won, mean +1.01R. The same band on the long
+# side was -0.99R on 14 rows, both halves negative, so quiet longs stay off the
+# live book. They paper-trade until a fresh sample clears the bar below.
+QUIET_HTF_MIN = 1.5
+QUIET_HTF_MAX = 2.5
+QUIET_ENTRIES = True
+QUIET_LONGS = False
+QUIET_LONG_PAPER = True
+QUIET_LONG_PAPER_MAX = 2
+# Promotion is recorded, not automatic. 20 closes, win rate at least 55%,
+# mean R at least +0.30, and both halves above zero. Until then no live order.
+QUIET_LONG_READY_N = 20
+QUIET_LONG_READY_WIN = 0.55
+QUIET_LONG_READY_R = 0.30
+# Ignition longs. A closed bar breaks the prior base on volume.
+# AKE on Nov 13, 13:22 Taipei: 1m base 1.8% wide, volume 17x the prior 20 minutes,
+# close 3.3% through that high, stop under the base about 5%.
+# The 13:15 15m bar was the same shape: base 3.1% wide, volume 15x, close 7.5% through.
+# Replay on Toobit names with 24h quote volume >= $5M, entry at the signal close,
+# stop at the base low, stop-first, 1R target:
+# 1m (base <= 2.5%, volume >= 8x, close within 6% of the base), ~4 days,
+# 484 trades, 42% hit 1R, -0.17R, both halves negative.
+# 15m (8-bar base <= 6%, volume >= 3x, close within 8%), ~15 days,
+# 1026 trades, 42%, -0.08R, both halves negative.
+# Wider and tighter cuts lost too. Paper only, same promotion bar as quiet longs.
+# Both ignition books stay paper. 1m is negative (100 closes) and 15m on
+# Toobit is negative (14 closes, -0.18R, both halves). Gate 15m is positive
+# (8 closes, +0.46R, both halves) but short of the 20-close bar, so it is
+# not a live order yet. Open papers keep their stops.
+IGNITION_PAPER = True
+IGNITION_1M = True
+IGNITION_15M_VENUES = ("gate", "toobit")
+IGNITION_PAPER_MAX = 8
+IGNITION_QUOTE_MIN = 5_000_000
+IGNITION_RULES = {
+    "1m": {"base_bars": 20, "base_max": 0.025, "vol_min": 8.0, "break_max": 0.06,
+           "stop_min": 0.008, "stop_max": 0.12},
+    "15m": {"base_bars": 8, "base_max": 0.06, "vol_min": 3.0, "break_max": 0.08,
+            "stop_min": 0.01, "stop_max": 0.12},
+}
+# 15m breakouts scan again, as paper. Live shorts were +0.05R and the later
+# half was negative; live longs were 3 closes, all losses. They return to
+# live only after the paper sample clears the promotion bar.
+BREAKOUT_ENTRIES = True
 # Same-side entries are no longer spaced 30 minutes apart. Closed pairs opened
 # within 30 minutes were 5 both green, 6 both red, and 4 split, and the wait did
 # not separate ICNT from PONS or BMT from ERA. One side is still capped at MAX_SAME_SIDE.
@@ -299,6 +616,15 @@ MAX_FEE_R = 0.10                # skip if maker entry + taker stop costs more th
 # at +2R was worse (+1.241R on the shorts). After +3R the stop now stays 1R behind the high,
 # stepped by 0.25R, and the floor at +3R is +2R: +3.02R locks +2.00R, +4.00R locks +3.00R.
 LOCK_LADDER = ((2.0, 0.0), (3.0, 2.0))
+# Live and paper positions lock the open profit once it has reached +1R.
+# The stop sits 0.5R behind the best price, stepped by 0.25R: +1.00R locks +0.50R,
+# +1.50R locks +1.00R, +2.00R locks +1.50R. The ladder above stays for the day's
+# profit lock, which can move a stop to break-even from +0.3R.
+PAPER_PEAK_ARM_R = 1.0
+PAPER_PEAK_GAP_R = 0.5
+# Gate live, 2026-11-14 12:06-12:41 Taipei. BANANAS31 flush long filled at 0.004077,
+# initial stop 0.004010. TP1 through TP4 filled. Best open profit +4.80R. The stop
+# moved to break-even at +2.17R, then trailed to +3.5R at 0.004317. Exit +3.4R, +17.65 USDT.
 
 
 def reversal_view(side: str, entry: float, break_level, mfe_r, o: float, h: float, l: float, c: float,
@@ -431,11 +757,37 @@ def direc_window(direc: float | None, side: str, htf_min: float | None = None,
     return None
 
 
+def self_direc_window(direc: float | None, side: str) -> str | None:
+    """Entry window. Self-scan shorts use their own wider 1h/4h band."""
+    if side == "SHORT":
+        return direc_window(direc, side, SELF_SHORT_HTF_MIN, SELF_SHORT_HTF_MAX)
+    return direc_window(direc, side)
+
+
+def self_short_late_bounce(htf: float | None, btc1h: float | None) -> bool:
+    """A short whose 1h/4h move is already finished, while BTC's last hour is bouncing.
+
+    `htf` is the raw 1h/4h score (negative in a bear). `btc1h` is BTC's last-hour
+    return in percent. Both have to be present. A missing quote does not block.
+    """
+    if htf is None or btc1h is None:
+        return False
+    return htf * -1 >= SELF_SHORT_LATE_HTF and btc1h * -1 < SELF_BTC1H_MIN
+
+
 def btc_dir_ok(aligned_pct: float | None, side: str) -> bool:
     """`aligned_pct` is BTC's last-hour return already signed in the trade's direction."""
     if aligned_pct is None:
         return True
     return aligned_pct >= BTC1H_MIN_DEFAULT
+
+
+def paper_peak_lock_r(mfe_r: float) -> float | None:
+    """R locked once the best price has reached +1R. None before that."""
+    if mfe_r < PAPER_PEAK_ARM_R:
+        return None
+    locked = math.floor((mfe_r - PAPER_PEAK_GAP_R) / TRAIL_STEP_R) * TRAIL_STEP_R
+    return round(max(0.0, locked), 2)
 
 
 def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:
@@ -452,6 +804,16 @@ def lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float 
         trail = math.floor((mfe_r - TRAIL_GAP_R) / TRAIL_STEP_R) * TRAIL_STEP_R
         best = max(best, round(trail, 2))
     return best
+
+
+def held_lock_r(mfe_r: float, high: bool = False, day_locked: bool = False) -> float | None:
+    """R locked on a live or paper position. The peak trail wins, except the day's profit lock can go to break-even from +0.3R."""
+    peak = paper_peak_lock_r(mfe_r)
+    if day_locked:
+        early = lock_r(mfe_r, high, True)
+        if early is not None and (peak is None or early > peak):
+            return early
+    return peak
 
 
 class SeeOne:
@@ -558,6 +920,17 @@ class SeeOne:
                     raise SeeOneLimited(pause)
                 if r.status_code == 429:
                     raise requests.HTTPError(f"429 {path}", response=r)
+                if is_review and r.status_code == 503:
+                    detail = ""
+                    try:
+                        body = r.json()
+                        detail = str(body.get("detail") or "") if isinstance(body, dict) else ""
+                    except ValueError:
+                        detail = ""
+                    # AUS200 and the other index names answer this while BTC and ETH review normally.
+                    # It is one symbol missing data, not an outage, and must not open the breaker.
+                    if "行情資料暫時無法取得" in detail:
+                        raise SeeOneNoData(detail or "行情資料暫時無法取得")
                 if r.status_code >= 500:
                     raise requests.HTTPError(f"{r.status_code} {path}")
                 r.raise_for_status()
@@ -795,6 +1168,127 @@ def recipe_hits(recipes: list) -> dict:
     return out
 
 
+def quiet_long_sample(rows: list) -> dict:
+    """Closed quiet-long paper trades. The same symbol in the same hour counts once."""
+    seen: dict[tuple, dict] = {}
+    for c in rows:
+        if c.get("path") != "QUIET LONG" or not c.get("paper") or c.get("r_result") is None:
+            continue
+        parts = str(c.get("id") or "").split(":")
+        ts = int(parts[-1]) if parts and parts[-1].isdigit() else 0
+        key = (c.get("symbol") or "", ts // 3600)
+        prev = seen.get(key)
+        if prev is None or (c.get("closed_at") or "") < (prev.get("closed_at") or ""):
+            seen[key] = c
+    xs = sorted(seen.values(), key=lambda c: c.get("closed_at") or "")
+    if not xs:
+        return {"n": 0, "wins": 0, "win": None, "mean_r": None, "h1_r": None, "h2_r": None, "ready": False}
+
+    def mean(part: list) -> float:
+        return round(sum(float(x["r_result"]) for x in part) / len(part), 3)
+
+    mid = len(xs) // 2
+    wins = sum(1 for x in xs if float(x["r_result"]) > 0)
+    h1, h2 = (xs[:mid], xs[mid:]) if mid else (xs, [])
+    out = {
+        "n": len(xs), "wins": wins, "win": round(wins / len(xs), 3), "mean_r": mean(xs),
+        "h1_r": mean(h1) if h1 else None, "h2_r": mean(h2) if h2 else None,
+    }
+    out["ready"] = bool(
+        out["n"] >= QUIET_LONG_READY_N and out["win"] >= QUIET_LONG_READY_WIN
+        and out["mean_r"] is not None and out["mean_r"] >= QUIET_LONG_READY_R
+        and (out["h1_r"] or 0) > 0 and (out["h2_r"] or 0) > 0)
+    return out
+
+
+def ignition_15m_open(exchange: str) -> bool:
+    """15m ignition stays paper on both books until the sample is positive and large enough."""
+    return exchange in IGNITION_15M_VENUES
+
+
+def flush_live(exchange: str) -> bool:
+    """Gate flush longs averaged +0.37R. Toobit's four live closes averaged -0.47R."""
+    return exchange == "gate"
+
+
+def ignition_setup(rows: list, interval: str, now_ms: float | None = None) -> dict | None:
+    """The just-closed bar breaks a tight base on a volume multiple. None when it does not.
+
+    Entry is that close. The stop is the base low. The prior bar is inside the base,
+    so a close through the base high is the first close through it.
+    """
+    rule = IGNITION_RULES.get(interval)
+    if not rule or not isinstance(rows, list) or not rows:
+        return None
+    span = 60_000 if interval == "1m" else 900_000
+    now_ms = time.time() * 1000 if now_ms is None else now_ms
+    closed = rows
+    try:
+        if int(rows[-1][0]) >= now_ms - span:
+            closed = rows[:-1]
+    except (TypeError, ValueError, IndexError):
+        return None
+    n = rule["base_bars"]
+    if len(closed) < n + 1:
+        return None
+    bar, base = closed[-1], closed[-(n + 1):-1]
+    try:
+        close, vol = float(bar[4]), float(bar[5])
+        hi = max(float(x[2]) for x in base)
+        lo = min(float(x[3]) for x in base)
+        vols = sorted(float(x[5]) for x in base)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if hi <= 0 or lo <= 0 or close <= hi:
+        return None
+    med = vols[len(vols) // 2]
+    if med <= 0:
+        return None
+    base_pct = (hi - lo) / ((hi + lo) / 2)
+    vol_mult = vol / med
+    break_pct = (close - hi) / hi
+    stop_pct = (close - lo) / close
+    if base_pct > rule["base_max"] or vol_mult < rule["vol_min"] or break_pct > rule["break_max"]:
+        return None
+    if not (rule["stop_min"] <= stop_pct <= rule["stop_max"]):
+        return None
+    return {"entry": close, "stop": lo, "broken": hi, "bar_open": int(bar[0]),
+            "base_pct": base_pct, "vol_mult": vol_mult, "break_pct": break_pct, "stop_pct": stop_pct}
+
+
+def ignition_sample(rows: list, path: str) -> dict:
+    """Closed ignition paper trades for one timeframe. The same symbol in the same hour counts once."""
+    seen: dict[tuple, dict] = {}
+    for c in rows:
+        if c.get("path") != path or not c.get("paper") or c.get("r_result") is None:
+            continue
+        parts = str(c.get("id") or "").split(":")
+        ts = int(parts[-1]) if parts and parts[-1].isdigit() else 0
+        key = (c.get("symbol") or "", ts // 3600)
+        prev = seen.get(key)
+        if prev is None or (c.get("closed_at") or "") < (prev.get("closed_at") or ""):
+            seen[key] = c
+    xs = sorted(seen.values(), key=lambda c: c.get("closed_at") or "")
+    if not xs:
+        return {"n": 0, "wins": 0, "win": None, "mean_r": None, "h1_r": None, "h2_r": None, "ready": False}
+
+    def mean(part: list) -> float:
+        return round(sum(float(x["r_result"]) for x in part) / len(part), 3)
+
+    mid = len(xs) // 2
+    wins = sum(1 for x in xs if float(x["r_result"]) > 0)
+    h1, h2 = (xs[:mid], xs[mid:]) if mid else (xs, [])
+    out = {
+        "n": len(xs), "wins": wins, "win": round(wins / len(xs), 3), "mean_r": mean(xs),
+        "h1_r": mean(h1) if h1 else None, "h2_r": mean(h2) if h2 else None,
+    }
+    out["ready"] = bool(
+        out["n"] >= QUIET_LONG_READY_N and out["win"] >= QUIET_LONG_READY_WIN
+        and out["mean_r"] is not None and out["mean_r"] >= QUIET_LONG_READY_R
+        and (out["h1_r"] or 0) > 0 and (out["h2_r"] or 0) > 0)
+    return out
+
+
 def path_expectancy(signals: list, own_trades: list) -> dict:
     """Mean realized R per signal_path, from See One's closed signals and our own closed trades."""
     stats: dict[str, list] = {}
@@ -802,9 +1296,9 @@ def path_expectancy(signals: list, own_trades: list) -> dict:
         if s.get("status") == "CLOSED" and s.get("realized_r") is not None:
             stats.setdefault(s.get("signal_path") or "?", []).append(float(s["realized_r"]))
     own: dict[str, list] = {}
-    for t in own_trades[-30:]:
-        if t.get("r_result") is not None:
-            own.setdefault(t.get("path") or "?", []).append(float(t["r_result"]))
+    live_own = [t for t in own_trades if not t.get("paper") and t.get("r_result") is not None]
+    for t in live_own[-30:]:
+        own.setdefault(t.get("path") or "?", []).append(float(t["r_result"]))
     return {
         "seeone": {k: (round(sum(v) / len(v), 3), len(v)) for k, v in stats.items()},
         "own": {k: (round(sum(v) / len(v), 3), len(v)) for k, v in own.items()},
@@ -928,6 +1422,69 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         skip = f"綜合分數 {score} < {min_score}"
     return {"ok": skip is None, "score": score, "reasons": reasons, "factors": factors,
             "skip": skip, "cur_r": round(cur_r, 3)}
+
+
+def book_limits(exchange: str) -> dict:
+    """Risk and margin caps for one book. Gate is the larger of the two."""
+    if exchange == "gate":
+        return {
+            "risk": GATE_RISK_PCT,
+            "high_risk": GATE_HIGH_RISK_PCT,
+            "short_risk": GATE_SELF_SHORT_RISK_PCT,
+            "margin": GATE_NORMAL_MARGIN_CAP_PCT,
+            "high_margin": GATE_HIGH_MARGIN_CAP_PCT,
+            "short_margin": GATE_SELF_SHORT_MARGIN_CAP_PCT,
+            "total_margin": GATE_MAX_TOTAL_MARGIN_PCT,
+        }
+    return {
+        "risk": MIN_RISK_PCT,
+        "high_risk": HIGH_RISK_PCT,
+        "short_risk": SELF_SHORT_RISK_PCT,
+        "margin": NORMAL_MARGIN_CAP_PCT,
+        "high_margin": HIGH_MARGIN_CAP_PCT,
+        "short_margin": SELF_SHORT_MARGIN_CAP_PCT,
+        "total_margin": MAX_TOTAL_MARGIN_PCT,
+    }
+
+
+def _split_qty(qtys: list[int], new_total: int) -> list[int]:
+    old = sum(qtys)
+    if old <= 0 or not qtys:
+        return qtys
+    raw = [q * new_total / old for q in qtys]
+    floors = [int(x) for x in raw]
+    left = new_total - sum(floors)
+    order = sorted(range(len(raw)), key=lambda i: (raw[i] - floors[i], i), reverse=True)
+    for i in order[:max(0, left)]:
+        floors[i] += 1
+    return floors
+
+
+def scale_open_paper(trades: dict, scale: float) -> list[str]:
+    """Enlarge open paper positions. R is unchanged because risk scales with size."""
+    changed = []
+    for tr in trades.values():
+        if tr.get("exit_reason") or not (tr.get("paper") or tr.get("paper_probe")):
+            continue
+        old = int(tr.get("contracts") or 0)
+        if old <= 0:
+            continue
+        new = max(old, int(round(old * scale)))
+        if new == old:
+            continue
+        ratio = new / old
+        tr["contracts"] = new
+        if tr.get("risk_usdt"):
+            tr["risk_usdt"] = round(float(tr["risk_usdt"]) * ratio, 4)
+        if tr.get("margin"):
+            tr["margin"] = round(float(tr["margin"]) * ratio, 2)
+        tps = tr.get("tps") or []
+        qtys = [int(tp.get("qty") or 0) for tp in tps]
+        if tps and sum(qtys) > 0:
+            for tp, qty in zip(tps, _split_qty(qtys, new)):
+                tp["qty"] = qty
+        changed.append(tr.get("tsym") or tr.get("id") or "")
+    return changed
 
 
 def size_position(equity: float, price: float, stop: float, spec: dict, risk_pct: float = RISK_PCT,

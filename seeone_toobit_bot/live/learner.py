@@ -23,6 +23,8 @@ DEFAULTS = {
     "factor_stats": {},
     "symbol_cooldown": {},
     "consec_losses": 0,
+    "self_short_ev_floor": S.SELF_SHORT_FULL_RISK_EV,
+    "short_loss_evs": [],
     "chased_losses": 0,
     "shadow_adj": {},
     "calibrated_min_score": None,
@@ -30,6 +32,12 @@ DEFAULTS = {
     "tp_split": None,
     "trades": 0, "wins": 0, "losses": 0, "sum_r": 0.0, "sum_pnl": 0.0,
 }
+
+
+def _loss_label(item: dict) -> str:
+    name = (item.get("symbol") or "").replace("-SWAP-USDT", "")
+    ev = item.get("ev")
+    return f"{name} 無" if ev is None else f"{name} {ev:+.2f}R"
 
 
 def _aligned(tr: dict, factors: dict) -> bool:
@@ -40,9 +48,150 @@ def _aligned(tr: dict, factors: dict) -> bool:
 class Learner:
     def __init__(self, path: Path, insight_log: Path, log_event):
         self.path, self.insight_log, self.log = path, insight_log, log_event
+        self._close_mtime: dict[str, float] = {}
+        self._close_stats: dict[str, dict] | None = None
+        self._close_rows: list[dict] | None = None
+        self._sample_stamp: dict[str, float] | None = None
         self.p = {**json.loads(json.dumps(DEFAULTS))}
         if path.exists():
             self.p.update(json.loads(path.read_text()))
+        self.absorb_peers()
+        self._arm_loss_review()
+
+    def book_roots(self) -> list[Path]:
+        parent = self.path.parent
+        root = parent.parent if parent.name == "gate" else parent
+        return [root, root / "gate"]
+
+    def _trade_logs(self) -> tuple[list[Path], dict[str, float]]:
+        logs = [base / "trades" / "live_trades.jsonl" for base in self.book_roots()]
+        logs = [p for p in logs if p.exists()]
+        stamp = {}
+        for path in logs:
+            try:
+                stamp[str(path)] = path.stat().st_mtime
+            except OSError:
+                continue
+        return logs, stamp
+
+    def _live_closes(self) -> list[dict]:
+        """Real fills only. Paper trades and adopted positions are not optimization samples."""
+        logs, stamp = self._trade_logs()
+        if self._close_rows is not None and stamp == self._close_mtime:
+            return self._close_rows
+        entries: dict[str, tuple[str, dict]] = {}
+        exits: list[tuple[str, dict]] = []
+        for path in logs:
+            venue = "gate" if path.parent.parent.name == "gate" else "toobit"
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                if '"event": "ENTRY"' not in line and '"event": "EXIT"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                event, tid = row.get("event"), row.get("trade_id")
+                if not tid or row.get("paper"):
+                    continue
+                if event == "ENTRY":
+                    entries[tid] = (venue, row)
+                elif event == "EXIT" and row.get("r_result") is not None:
+                    exits.append((venue, row))
+        rows: list[dict] = []
+        seen: set[str] = set()
+        for venue, row in exits:
+            tid = row["trade_id"]
+            if tid in seen:
+                continue
+            seen.add(tid)
+            opened_venue, opened = entries.get(tid, (venue, {}))
+            if opened.get("paper") or opened.get("source") == "接管持倉":
+                continue
+            rows.append({
+                "venue": opened_venue,
+                "trade_id": tid,
+                "ts": row.get("ts"),
+                "symbol": opened.get("symbol") or row.get("symbol"),
+                "side": opened.get("side") or row.get("side"),
+                "path": opened.get("path") or row.get("path"),
+                "source": opened.get("source") or row.get("source"),
+                "score": opened.get("score"),
+                "r": float(row["r_result"]),
+                "pnl": row.get("realized_pnl_usdt"),
+                "factors": opened.get("factors") or {},
+            })
+        merged: dict[str, dict] = {}
+        for row in rows:
+            win = row["r"] > FLAT_R
+            for tag in row["factors"]:
+                slot = merged.setdefault(tag, {"n": 0, "wins": 0, "sum_r": 0.0})
+                slot["n"] += 1
+                slot["wins"] += int(win)
+                slot["sum_r"] = round(slot["sum_r"] + row["r"], 4)
+        self._close_mtime = stamp
+        self._close_rows = rows
+        self._close_stats = merged
+        return rows
+
+    def _shared_stats(self) -> dict:
+        """Factor results from each book's real fills. The seeded copy is not added twice."""
+        self._live_closes()
+        return self._close_stats or {}
+
+    def reference_summary(self) -> dict:
+        rows = self._live_closes()
+
+        def pack(xs: list[dict]) -> dict:
+            n = len(xs)
+            wins = sum(1 for r in xs if r["r"] > FLAT_R)
+            mean = None if n == 0 else round(sum(r["r"] for r in xs) / n, 3)
+            return {"n": n, "wins": wins, "win_rate": None if n == 0 else round(wins / n, 3), "mean_r": mean}
+
+        by: dict[str, list] = {}
+        for row in rows:
+            by.setdefault(row.get("path") or "?", []).append(row)
+        return {"books": ["toobit", "gate"], **pack(rows),
+                "by_path": {k: pack(v) for k, v in sorted(by.items())}}
+
+    def _publish_samples(self, rows: list[dict]):
+        """Write the real-fill ledger once per change, for the optimizer to read back."""
+        if self._close_mtime == self._sample_stamp:
+            return
+        dest = self.book_roots()[0] / "live_samples.json"
+        summary = self.reference_summary()
+        payload = {"updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **summary, "samples": rows}
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False))
+        tmp.replace(dest)
+        self._sample_stamp = dict(self._close_mtime)
+        self.log("LIVE_REFERENCE", **summary)
+
+    def absorb_peers(self) -> list[str]:
+        """Set score weights from both books' real fills. Cooldowns and the score floor stay local."""
+        rows = self._live_closes()
+        self._publish_samples(rows)
+        changes = []
+        adj = self.p.setdefault("factor_adj", {})
+        for tag, st in (self._close_stats or {}).items():
+            if st["n"] < FACTOR_MIN_N:
+                continue
+            new = round(max(FACTOR_ADJ_MIN, min(FACTOR_ADJ_MAX, st["sum_r"] / st["n"] * FACTOR_GAIN)), 1)
+            old = adj.get(tag, 0.0)
+            if abs(new - old) >= 0.5:
+                adj[tag] = new
+                changes.append(
+                    f"因子 [{tag}] 權重 {old:+.1f} → {new:+.1f} "
+                    f"(實盤合計 n={st['n']}, 勝率 {st['wins'] / st['n']:.0%}, 平均 {st['sum_r'] / st['n']:+.2f}R)"
+                )
+        if changes:
+            self.save()
+            self.log("LEARN_POOL", books=["toobit", "gate"], changes=changes)
+        return changes
 
     def refresh_effective(self):
         cal = self.p.get("calibrated_min_score")
@@ -81,19 +230,12 @@ class Learner:
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
 
     def _update_factors(self, factors: dict, r: float, win: bool) -> list:
-        changes = []
         for tag in factors:
             st = self.p["factor_stats"].setdefault(tag, {"n": 0, "wins": 0, "sum_r": 0.0})
             st["n"] += 1
             st["wins"] += int(win)
             st["sum_r"] = round(st["sum_r"] + r, 4)
-            if st["n"] >= FACTOR_MIN_N:
-                new = round(max(FACTOR_ADJ_MIN, min(FACTOR_ADJ_MAX, st["sum_r"] / st["n"] * FACTOR_GAIN)), 1)
-                old = self.p["factor_adj"].get(tag, 0.0)
-                if abs(new - old) >= 0.5:
-                    self.p["factor_adj"][tag] = new
-                    changes.append(f"因子 [{tag}] 權重 {old:+.1f} → {new:+.1f} (n={st['n']}, 勝率 {st['wins'] / st['n']:.0%}, 平均 {st['sum_r'] / st['n']:+.2f}R)")
-        return changes
+        return []
 
     def on_close(self, tr: dict, r: float | None, pnl: float | None, reason: str, tps_filled: list, held_min: float):
         if r is None:
@@ -106,7 +248,8 @@ class Learner:
         p["trades"] += 1
         p["sum_r"] = round(p["sum_r"] + r, 4)
         p["sum_pnl"] = round(p["sum_pnl"] + (pnl or 0), 4)
-        changes = self._update_factors(factors, r, win)
+        self._update_factors(factors, r, win)
+        changes = self.absorb_peers()
         base = dict(trade_id=tr["id"], symbol=tr["tsym"], side=tr["side"], r_result=r, pnl_usdt=pnl,
                     path=tr.get("path"), source=tr.get("source"), score=tr.get("score"),
                     regime_at_entry=tr.get("regime"), entry_at_r=entry_r, tps_filled=tps_filled,
@@ -176,9 +319,8 @@ class Learner:
             p["symbol_cooldown"][sym] = time.time() + LOSS_COOLDOWN_H * 3600
             changes.append(f"{sym} 冷卻 {LOSS_COOLDOWN_H} 小時")
             if p["consec_losses"] >= STREAK_PAUSE_LOSSES:
-                # JCT's order-book long was fresh at 12:23 Taipei on Nov 8, while a
-                # six-hour book pause was about to start. Cool the losing name only.
-                changes.append(f"連續虧損 {p['consec_losses']} 筆，只冷卻該幣，其他新倉繼續")
+                changes.append(f"連續虧損 {p['consec_losses']} 筆，檢視這幾筆並上調實盤門檻")
+            self._roll_short_floor(tr, r, reason, changes)
             if entry_r > CHASE_R and p["chased_losses"] >= 2 and p["entry_r_window"][1] > 0.2:
                 old_hi = p["entry_r_window"][1]
                 p["entry_r_window"][1] = round(max(0.2, old_hi - 0.1), 2)
@@ -189,6 +331,7 @@ class Learner:
         elif win:
             p["wins"] += 1
             p["consec_losses"] = 0
+            self._roll_short_floor(tr, r, reason, changes)
             old = p["min_score"]
             p["min_score"] = max(MIN_SCORE_FLOOR, old - WIN_SCORE_STEP)
             if p["min_score"] != old:
@@ -211,10 +354,124 @@ class Learner:
             rec = {**base, "type": "FLAT", "note": "接近保本出場 (多為 TP1 後保本止損)", "changes": changes}
             self.log("FLAT", **rec)
 
+        self.note_rule(tr, r, reason, save=False)
         self.refresh_effective()
         p["last_update"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self._insight(rec)
         self.save()
+
+    def note_rule(self, tr: dict, r: float | None, reason: str, save: bool = True):
+        """Three straight losses stop this rule. Paper and live both count.
+
+        The live self-scan short is the exception: its three losses raise the
+        expected-value bar in ``_roll_short_floor``.
+        """
+        if r is None or "小倉" in (reason or ""):
+            return
+        paper = bool(tr.get("paper") or tr.get("paper_probe"))
+        path, side = tr.get("path"), tr.get("side")
+        if not paper and path == "SELF ANALYSIS" and side == "SHORT":
+            return
+        rules = self.p.setdefault("rule_streaks", {})
+        note = S.roll_rule(rules, S.rule_key(path, side, paper), float(r), tr.get("tsym"))
+        if note:
+            self.log("RULE_STOP", reason=note, path=path, side=side, paper=paper)
+        if save:
+            self.save()
+
+    def _arm_loss_review(self):
+        changed = False
+        base = S.SELF_SHORT_FULL_RISK_EV
+        if self.p.get("loss_review_v") != 1:
+            self.p["loss_review_v"] = 1
+            changed = True
+            current = float(self.p.get("self_short_ev_floor") or base)
+            stepped = S.stuck_floor_step(base, self.p.get("short_loss_evs") or [], current)
+            if stepped is not None:
+                self.p["self_short_ev_floor"] = stepped
+                self.log("RULE_TIGHTEN",
+                         reason=f"最近 {S.LOSS_REVIEW_N} 筆自選空單虧損的期望值都低於 {current:.2f}R，實盤門檻 → {stepped:.2f}R")
+        if "rule_streaks" not in self.p:
+            self.p["rule_streaks"] = S.replay_rule_streaks(self._rule_closes())
+            changed = True
+            stopped = [key for key, row in self.p["rule_streaks"].items() if row.get("open") is False]
+            if stopped:
+                self.log("RULE_STOP", rules=stopped, reason="連續 3 筆虧損，這些規則停止新開倉")
+        if changed:
+            self.save()
+
+    def _rule_closes(self) -> list[dict]:
+        """This book's closes, paper included, oldest first."""
+        path = self.path.parent / "trades" / "live_trades.jsonl"
+        if not path.exists():
+            return []
+        entries: dict[str, dict] = {}
+        exits: list[dict] = []
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return []
+        for line in lines:
+            if '"event": "ENTRY"' not in line and '"event": "EXIT"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            event, tid = row.get("event"), row.get("trade_id")
+            if not tid:
+                continue
+            if event == "ENTRY":
+                entries[tid] = row
+            elif event == "EXIT" and row.get("r_result") is not None:
+                exits.append(row)
+        out: list[dict] = []
+        seen: set[str] = set()
+        for row in exits:
+            tid = row["trade_id"]
+            if tid in seen:
+                continue
+            seen.add(tid)
+            opened = entries.get(tid) or {}
+            out.append({
+                "paper": bool(row.get("paper") or row.get("paper_probe") or opened.get("paper")),
+                "path": opened.get("path") or row.get("path"),
+                "side": opened.get("side") or row.get("side"),
+                "symbol": opened.get("symbol") or row.get("symbol"),
+                "r": float(row["r_result"]),
+            })
+        return out
+
+    def _roll_short_floor(self, tr: dict, r: float, reason: str, changes: list):
+        """Every three live self-scan short losses, raise the live bar to just above their best EV.
+
+        A scratch or a dust close does not count. One live win clears the trio and
+        steps a raised bar back toward the measured line.
+        """
+        if tr.get("paper") or tr.get("path") != "SELF ANALYSIS" or tr.get("side") != "SHORT":
+            return
+        if "小倉" in (reason or ""):
+            return
+        p = self.p
+        base = S.SELF_SHORT_FULL_RISK_EV
+        if r <= S.LOSS_REVIEW_R:
+            ev = (tr.get("analysis") or {}).get("ev_r")
+            evs = p.setdefault("short_loss_evs", [])
+            evs.append({"symbol": tr.get("tsym"), "ev": None if ev is None else round(float(ev), 4), "r": r})
+            del evs[:-S.LOSS_REVIEW_N]
+            old = float(p.get("self_short_ev_floor") or base)
+            new = S.roll_ev_floor(base, evs, old)
+            if new > old + 1e-9:
+                p["self_short_ev_floor"] = new
+                shown = ", ".join(_loss_label(item) for item in evs)
+                changes.append(f"最近 {S.LOSS_REVIEW_N} 筆自選空單虧損（{shown}），實盤門檻 {old:.2f}R → {new:.2f}R")
+        elif r > FLAT_R:
+            p["short_loss_evs"] = []
+            old = float(p.get("self_short_ev_floor") or base)
+            new = S.ease_ev_floor(old, base)
+            if new + 1e-9 < old:
+                p["self_short_ev_floor"] = new
+                changes.append(f"自選空單獲利，實盤門檻 {old:.2f}R → {new:.2f}R")
 
     def summary(self) -> dict:
         p = self.p
