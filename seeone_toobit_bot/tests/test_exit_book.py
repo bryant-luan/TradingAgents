@@ -109,6 +109,16 @@ class FullLive(unittest.TestCase):
         self.assertIsNone(S.gate_measured_loss("gate", "SELF FLUSH LONG", "LONG", False))
         self.assertIn("不再開", S.gate_measured_loss("gate", "SELF ANALYSIS", "SHORT", False))
         self.assertIn("不再開", S.gate_measured_loss("gate", "SELF ANALYSIS", "LONG", False))
+        self.assertIn("不再開", S.toobit_measured_loss("toobit", "SELF ANALYSIS", "SHORT", 0.40, False))
+        self.assertIsNone(S.toobit_measured_loss("toobit", "SELF ANALYSIS", "SHORT", 0.55, False))
+        self.assertIsNone(S.toobit_measured_loss("toobit", "SELF ANALYSIS", "SHORT", 0.40, True))
+        self.assertIsNone(S.toobit_measured_loss("toobit", "QUIET SHORT", "SHORT", 0.2, False))
+        self.assertIn("不再開", S.toobit_measured_loss("toobit", "IGNITION 1m", "LONG", None, False))
+        self.assertIn("不再開", S.toobit_measured_loss("toobit", "IGNITION 15m", "LONG", None, False))
+        self.assertIn("不再開", S.toobit_measured_loss("toobit", "SELF FLUSH LONG", "LONG", None, False))
+        self.assertIn("不再開", S.toobit_measured_loss("toobit", "BREAKOUT", "LONG", None, False))
+        self.assertIsNone(S.toobit_measured_loss("toobit", "BREAKOUT", "SHORT", None, False))
+        self.assertIsNone(S.toobit_measured_loss("gate", "IGNITION 1m", "LONG", None, False))
 
     def test_other_slices_paper(self):
         self.assertFalse(S.self_short_full_live("LONG", 0.4, 0.008, 0.62, 1.0, 0.05))

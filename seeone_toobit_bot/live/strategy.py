@@ -1231,6 +1231,41 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
     return None
 
 
+TOOBIT_SHORT_KEEP_PAPER_EV = 0.50
+
+
+def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
+                         ev_r: float | None, full_live: bool) -> str | None:
+    """Toobit books that are already negative do not open again.
+
+    A short under +0.50R is finished: the 0.35–0.50R live band was -156 USDT,
+    and the paper closes under +0.50R were negative in both halves. The paper
+    band from +0.50R up to the live line was +0.50R on 8 closes, so that band
+    still papers. 1-minute ignition was -0.42R on 57 closes, both halves
+    negative, including the latest 15. 15-minute ignition's later half was
+    -0.65R. Flush longs were -0.47R on 4 live closes, both halves negative.
+    Breakout longs were 3 losses. Quiet shorts and a short that clears the
+    live line stay live. Breakout shorts stay paper.
+    """
+    if exchange != "toobit":
+        return None
+    if path == "SELF ANALYSIS" and side == "SHORT" and not full_live and (ev_r or 0) < TOOBIT_SHORT_KEEP_PAPER_EV:
+        return ("Toobit 自選空單期望值未達 +0.50R 不再開。"
+                "0.35–0.50R 實盤 18 筆平均 -0.39R、-156 USDT；"
+                "模擬未達 +0.50R 的 10 筆前後半都是負的，約 -44 USDT。"
+                "+0.50R 到實盤線的模擬仍開")
+    if path == "IGNITION 1m":
+        return ("Toobit 1 分啟動不再開。57 筆勝率 30%、平均 -0.42R，"
+                "前後半都是負的，-187 USDT。最近 15 筆仍是 -0.23R")
+    if path == "IGNITION 15m":
+        return "Toobit 15 分啟動不再開。17 筆勝率 35%、平均 -0.33R，後半 -0.65R，-39 USDT"
+    if path == "SELF FLUSH LONG":
+        return "Toobit 洗盤多單不再開。實盤 4 筆勝率 25%、平均 -0.47R，前後半都是負的，-15 USDT"
+    if path == "BREAKOUT" and side == "LONG":
+        return "Toobit 突破做多不再開。實盤 3 筆全虧，平均 -0.54R，-26 USDT"
+    return None
+
+
 def ignition_setup(rows: list, interval: str, now_ms: float | None = None) -> dict | None:
     """The just-closed bar breaks a tight base on a volume multiple. None when it does not.
 
