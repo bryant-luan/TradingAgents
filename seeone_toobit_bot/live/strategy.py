@@ -608,6 +608,24 @@ IGNITION_1M = True
 IGNITION_15M_VENUES = ("gate", "toobit")
 IGNITION_PAPER_MAX = 8
 IGNITION_QUOTE_MIN = 5_000_000
+# Daily trend, paper only. The 10-day and 20-day returns have to agree.
+# The stop is two daily standard deviations, and the usual risk budget is
+# divided by that distance, so a noisier coin is a smaller position. When
+# BTC's own 20-day return is positive, a short also has to be at least one
+# 20-day standard deviation below where it was. Funding is not an entry.
+# The same 20-close bar as the other paper books applies, and clearing it
+# does not send a live order by itself.
+TREND_PAPER = True
+TREND_PATH = "DAILY TREND"
+TREND_FAST = 10
+TREND_SLOW = 20
+TREND_BARS = 30
+TREND_STOP_SIGMA = 2.0
+TREND_STOP_MIN = 0.02
+TREND_STOP_MAX = 0.15
+TREND_PAPER_MAX = 4
+TREND_SCAN_S = 3600
+_DAY_MS = 86_400_000
 
 
 def ignition_open_slots(trades, path: str | None) -> int:
@@ -1357,6 +1375,105 @@ def ignition_setup(rows: list, interval: str, now_ms: float | None = None) -> di
         return None
     return {"entry": close, "stop": lo, "broken": hi, "bar_open": int(bar[0]),
             "base_pct": base_pct, "vol_mult": vol_mult, "break_pct": break_pct, "stop_pct": stop_pct}
+
+
+def closed_daily(rows, now_ms: float | None = None) -> list | None:
+    """Daily bars with the still-forming bar removed. None when the rows are unusable."""
+    if not isinstance(rows, list) or not rows:
+        return None
+    now_ms = time.time() * 1000 if now_ms is None else now_ms
+    closed = rows
+    try:
+        if int(rows[-1][0]) >= now_ms - _DAY_MS:
+            closed = rows[:-1]
+    except (TypeError, ValueError, IndexError):
+        return None
+    return closed
+
+
+def daily_lookback_return(rows, now_ms: float | None, lookback: int) -> float | None:
+    """Close-to-close return over `lookback` closed daily bars."""
+    closed = closed_daily(rows, now_ms)
+    if not closed or len(closed) < lookback + 1:
+        return None
+    try:
+        last = float(closed[-1][4])
+        prev = float(closed[-1 - lookback][4])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if last <= 0 or prev <= 0:
+        return None
+    return last / prev - 1
+
+
+def daily_trend_setup(rows, now_ms: float | None, btc_ret20: float | None) -> dict | None:
+    """Long when both horizons are up. Short when both are down.
+
+    A short while BTC's 20-day return is positive, or while that return is
+    missing, also has to clear one 20-day standard deviation. The stop is two
+    daily standard deviations, clamped to 2%–15%.
+    """
+    closed = closed_daily(rows, now_ms)
+    need = TREND_SLOW + 1
+    if not closed or len(closed) < need:
+        return None
+    window = closed[-need:]
+    try:
+        closes = [float(bar[4]) for bar in window]
+        bar_open = int(window[-1][0])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if any(price <= 0 for price in closes):
+        return None
+    ret10 = closes[-1] / closes[-1 - TREND_FAST] - 1
+    ret20 = closes[-1] / closes[0] - 1
+    rets = [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
+    mean = sum(rets) / len(rets)
+    var = sum((ret - mean) ** 2 for ret in rets) / (len(rets) - 1)
+    if var <= 0:
+        return None
+    vol = math.sqrt(var)
+    if ret10 > 0 and ret20 > 0:
+        side = "LONG"
+    elif ret10 < 0 and ret20 < 0:
+        side = "SHORT"
+    else:
+        return None
+    sigma20 = vol * math.sqrt(TREND_SLOW)
+    btc_up = btc_ret20 is not None and btc_ret20 > 0
+    if side == "SHORT" and (btc_ret20 is None or btc_up) and ret20 > -sigma20:
+        return None
+    entry = closes[-1]
+    stop_pct = min(TREND_STOP_MAX, max(TREND_STOP_MIN, TREND_STOP_SIGMA * vol))
+    dist = entry * stop_pct
+    stop = entry - dist if side == "LONG" else entry + dist
+    return {"side": side, "entry": entry, "stop": stop, "bar_open": bar_open,
+            "ret10": ret10, "ret20": ret20, "vol": vol, "stop_pct": stop_pct, "btc_up": btc_up}
+
+
+def daily_trend_holds(rows, now_ms: float | None, side: str) -> bool | None:
+    """Whether the two horizons still agree with the open side.
+
+    None when the bars cannot be read, so a missing candle does not close the paper.
+    The stricter short filter is an entry rule. The exit is the sign change.
+    """
+    closed = closed_daily(rows, now_ms)
+    if not closed or len(closed) < TREND_SLOW + 1:
+        return None
+    window = closed[-(TREND_SLOW + 1):]
+    try:
+        closes = [float(bar[4]) for bar in window]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if any(price <= 0 for price in closes):
+        return None
+    ret10 = closes[-1] / closes[-1 - TREND_FAST] - 1
+    ret20 = closes[-1] / closes[0] - 1
+    if side == "LONG":
+        return ret10 > 0 and ret20 > 0
+    if side == "SHORT":
+        return ret10 < 0 and ret20 < 0
+    return None
 
 
 def ignition_sample(rows: list, path: str) -> dict:
