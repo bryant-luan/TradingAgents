@@ -843,9 +843,7 @@ class Bot:
         if blocked:
             self.note_skip(sig, blocked)
             return
-        open_n = sum(1 for t in self.st["trades"].values()
-                     if t.get("paper_probe") and not t.get("exit_reason")
-                     and str(t.get("path") or "").startswith("IGNITION"))
+        open_n = S.ignition_open_slots(self.st["trades"].values(), sig.get("signal_path"))
         if open_n >= S.IGNITION_PAPER_MAX:
             if time.time() - self._ign_full_log > 900:
                 self._ign_full_log = time.time()

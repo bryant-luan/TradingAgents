@@ -608,6 +608,18 @@ IGNITION_1M = True
 IGNITION_15M_VENUES = ("gate", "toobit")
 IGNITION_PAPER_MAX = 8
 IGNITION_QUOTE_MIN = 5_000_000
+
+
+def ignition_open_slots(trades, path: str | None) -> int:
+    """Open paper ignitions of this path only.
+
+    The cap is per path. Gate's 15-minute book is the one that is positive in
+    both halves, and a shared cap of 8 was full because stopped 1-minute
+    papers were still open. Those do not take a 15-minute slot.
+    """
+    return sum(1 for t in trades
+               if isinstance(t, dict) and t.get("paper_probe") and not t.get("exit_reason")
+               and t.get("path") == path)
 IGNITION_RULES = {
     "1m": {"base_bars": 20, "base_max": 0.025, "vol_min": 8.0, "break_max": 0.06,
            "stop_min": 0.008, "stop_max": 0.12},
