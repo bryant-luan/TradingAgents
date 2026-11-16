@@ -1962,6 +1962,11 @@ class Bot:
                           and not full_live)
             if self_paper and S.self_short_sample_live(sl_pct):
                 self_paper = False
+            measured = S.gate_measured_loss(
+                getattr(self.tb, "name", "") or "", sig.get("signal_path"), sig["side"], full_live)
+            if measured:
+                self.note_skip(sig, measured)
+                continue
             if bounce and not S.flush_live(getattr(self.tb, "name", "") or ""):
                 sig = {**sig, "paper_only": True}
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
