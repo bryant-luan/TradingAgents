@@ -263,9 +263,12 @@ def report_venue(name: str, hours: float | None, now: datetime, book: set[str], 
             continue
         h1 = "—" if ign["h1_r"] is None else f"{ign['h1_r']:+.2f}R"
         h2 = "—" if ign["h2_r"] is None else f"{ign['h2_r']:+.2f}R"
+        tail = "，已達標但仍不送真單" if ign["ready"] else "，未達標"
+        if path == "IGNITION 15m" and name == "gate":
+            tail = "。這段是改實盤前的模擬，新訊號送真單"
         ign_bits.append(f"{label} {ign['n']} 筆，勝率 {ign['win']:.0%}，平均 {ign['mean_r']:+.2f}R，"
-                        f"前半 {h1}，後半 {h2}" + ("，已達標但仍不送真單" if ign["ready"] else "，未達標"))
-    print("  起漲模擬（不送真單）: " + "；".join(ign_bits))
+                        f"前半 {h1}，後半 {h2}" + tail)
+    print("  起漲: " + "；".join(ign_bits))
     trend = S.ignition_sample(st.get("closed") or [], S.TREND_PATH)
     if not trend["n"]:
         print("  日線趨勢模擬（不送真單）: 0 筆")

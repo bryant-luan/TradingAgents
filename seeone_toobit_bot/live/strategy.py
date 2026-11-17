@@ -598,11 +598,10 @@ QUIET_LONG_READY_R = 0.30
 # 484 trades, 42% hit 1R, -0.17R, both halves negative.
 # 15m (8-bar base <= 6%, volume >= 3x, close within 8%), ~15 days,
 # 1026 trades, 42%, -0.08R, both halves negative.
-# Wider and tighter cuts lost too. Paper only, same promotion bar as quiet longs.
-# Both ignition books stay paper. 1m is negative (100 closes) and 15m on
-# Toobit is negative (14 closes, -0.18R, both halves). Gate 15m is positive
-# (8 closes, +0.46R, both halves) but short of the 20-close bar, so it is
-# not a live order yet. Open papers keep their stops.
+# Wider and tighter cuts lost too. 1m stays off on both books. Toobit 15m
+# stays off. Gate 15m is a live order: 11 closes, 73% wins, +0.38R, both
+# halves positive, +42 USDT. The user sent it live short of the 20-close bar.
+# Open papers keep their stops. A new Gate 15m signal does not stack on one.
 IGNITION_PAPER = True
 IGNITION_1M = True
 IGNITION_15M_VENUES = ("gate", "toobit")
@@ -1252,8 +1251,13 @@ def quiet_long_sample(rows: list) -> dict:
 
 
 def ignition_15m_open(exchange: str) -> bool:
-    """15m ignition stays paper on both books until the sample is positive and large enough."""
+    """15m ignition is scanned on both books. Only Gate sends the order live."""
     return exchange in IGNITION_15M_VENUES
+
+
+def ignition_live(exchange: str, interval: str) -> bool:
+    """Gate 15-minute ignition is a live order. Toobit 15m and both 1m books are not."""
+    return exchange == "gate" and interval == "15m"
 
 
 def flush_live(exchange: str) -> bool:
@@ -1270,7 +1274,7 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
     live line still opens. Self-scan longs are 2 live losses and 6 paper closes
     at -0.36R. 1-minute ignition is 66 paper closes at 32% and -0.24R, both
     halves negative, -119 USDT, and the latest 15 are still -0.40R. 15-minute
-    ignition stays paper. Quiet shorts and flush longs are not this function.
+    ignition is a live order. Quiet shorts and flush longs are not this function.
     """
     if exchange != "gate":
         return None
