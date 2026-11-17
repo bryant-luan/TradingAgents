@@ -837,8 +837,9 @@ class Bot:
     def _open_ignition_paper(self, sig, ev, src, reg, equity):
         if not sig.get("ignition") or not sig.get("paper_only"):
             return
-        blocked = S.toobit_measured_loss(
-            getattr(self.tb, "name", "") or "", sig.get("signal_path"), sig.get("side"), None, False)
+        venue = getattr(self.tb, "name", "") or ""
+        blocked = (S.gate_measured_loss(venue, sig.get("signal_path"), sig.get("side"), False)
+                   or S.toobit_measured_loss(venue, sig.get("signal_path"), sig.get("side"), None, False))
         if blocked:
             self.note_skip(sig, blocked)
             return

@@ -1218,8 +1218,9 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
     both halves, about -90 USDT, plus 16 paper closes at 19% and -0.43R, both
     halves negative, -36 USDT. That sample is finished. A short that clears the
     live line still opens. Self-scan longs are 2 live losses and 6 paper closes
-    at -0.36R. Quiet shorts, flush longs, and the ignition papers are not this
-    function.
+    at -0.36R. 1-minute ignition is 66 paper closes at 32% and -0.24R, both
+    halves negative, -119 USDT, and the latest 15 are still -0.40R. 15-minute
+    ignition stays paper. Quiet shorts and flush longs are not this function.
     """
     if exchange != "gate":
         return None
@@ -1228,6 +1229,9 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
                 "約 -90 USDT；模擬 16 筆勝率 19%、-0.43R，前後半都是負的，-36 USDT")
     if path == "SELF ANALYSIS" and side == "LONG":
         return "Gate 自選多單不再開。實盤 2 筆全虧，模擬 6 筆勝率 17%、-0.36R，後半更差"
+    if path == "IGNITION 1m":
+        return ("Gate 1 分啟動不再開。模擬 66 筆勝率 32%、平均 -0.24R，"
+                "前後半都是負的，-119 USDT。最近 15 筆仍是 -0.40R")
     return None
 
 
@@ -1240,12 +1244,15 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
 
     A short under +0.50R is finished: the 0.35–0.50R live band was -156 USDT,
     and the paper closes under +0.50R were negative in both halves. The paper
-    band from +0.50R up to the live line was +0.50R on 8 closes, so that band
-    still papers. 1-minute ignition was -0.42R on 57 closes, both halves
-    negative, including the latest 15. 15-minute ignition's later half was
-    -0.65R. Flush longs were -0.47R on 4 live closes, both halves negative.
-    Breakout longs were 3 losses. Quiet shorts and a short that clears the
-    live line stay live. Breakout shorts stay paper.
+    band from +0.50R up to the live line is still the one that papers. A short
+    at or above the live line that misses the other live gates is finished too:
+    15 paper closes, 20% wins, -0.55R, both halves negative, about -50 USDT.
+    The live book at or above +0.60R is still positive in both halves, so a
+    short that clears every live gate still opens. 1-minute ignition was
+    -0.42R on 57 closes, both halves negative, including the latest 15.
+    15-minute ignition's later half was -0.65R. Flush longs were -0.47R on 4
+    live closes, both halves negative. Breakout longs were 3 losses. Quiet
+    shorts stay live. Breakout shorts stay paper.
     """
     if exchange != "toobit":
         return None
@@ -1254,6 +1261,11 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
                 "0.35–0.50R 實盤 18 筆平均 -0.39R、-156 USDT；"
                 "模擬未達 +0.50R 的 10 筆前後半都是負的，約 -44 USDT。"
                 "+0.50R 到實盤線的模擬仍開")
+    if (path == "SELF ANALYSIS" and side == "SHORT" and not full_live
+            and (ev_r or 0) >= SELF_SHORT_FULL_RISK_EV):
+        return ("Toobit 自選空單期望已過實盤線、但沒過其他實盤條件，不再開。"
+                "模擬 15 筆勝率 20%、平均 -0.55R，前後半都是負的，約 -50 USDT。"
+                "過了全部實盤條件的空單仍開")
     if path == "IGNITION 1m":
         return ("Toobit 1 分啟動不再開。57 筆勝率 30%、平均 -0.42R，"
                 "前後半都是負的，-187 USDT。最近 15 筆仍是 -0.23R")
