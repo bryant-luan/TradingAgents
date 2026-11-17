@@ -668,9 +668,12 @@ class Bot:
         self.st["closed"].append({"id": tid, "symbol": sym, "side": side, "path": tr.get("path"),
                                   "pnl": round(pnl, 4), "r_result": r_result, "closed_at": now_iso(),
                                   "reason": reason, "paper": True, "paper_probe": bool(tr.get("paper_probe")),
+                                  "stock": bool(tr.get("stock")),
                                   "listing": tr.get("listing")})
         self.st["trades"].pop(tid, None)
         self.learner.note_rule(tr, r_result, reason)
+        if tr.get("stock"):
+            return
         if tr.get("paper_probe") and tr.get("path") == "QUIET LONG":
             self._note_quiet_long()
         elif tr.get("paper_probe") and str(tr.get("path") or "").startswith("IGNITION"):
@@ -816,9 +819,18 @@ class Bot:
     def _open_quiet_long_paper(self, sig, ev, src, reg, equity):
         if not sig.get("paper_only"):
             return
-        open_n = sum(1 for t in self.st["trades"].values()
-                     if t.get("paper_probe") and not t.get("exit_reason") and t.get("path") == "QUIET LONG")
-        if open_n >= S.QUIET_LONG_PAPER_MAX:
+        tsym = S.to_toobit(sig["symbol"])
+        if S.STOCK_PAPER and (sig.get("stock") or S.is_stock_contract(tsym)):
+            sig = {**sig, "paper_only": True, "stock": True}
+            open_n = S.stock_open_slots(self.st["trades"].values())
+            if open_n >= S.STOCK_PAPER_MAX:
+                self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+                return
+        else:
+            open_n = sum(1 for t in self.st["trades"].values()
+                         if t.get("paper_probe") and not t.get("exit_reason") and not t.get("stock")
+                         and t.get("path") == "QUIET LONG")
+        if not sig.get("stock") and open_n >= S.QUIET_LONG_PAPER_MAX:
             self.note_skip(sig, f"安靜多單模擬已有 {open_n} 筆，上限 {S.QUIET_LONG_PAPER_MAX}")
             return
         tsym = S.to_toobit(sig["symbol"])
@@ -884,8 +896,17 @@ class Bot:
     def _open_trend_paper(self, sig, ev, src, reg, equity):
         if not sig.get("trend") or not sig.get("paper_only"):
             return
-        open_n = S.ignition_open_slots(self.st["trades"].values(), S.TREND_PATH)
-        if open_n >= S.TREND_PAPER_MAX:
+        tsym = S.to_toobit(sig["symbol"])
+        if S.STOCK_PAPER and S.is_stock_contract(tsym):
+            sig = {**sig, "paper_only": True, "stock": True}
+            ev = {**ev, "reasons": list(ev.get("reasons") or []) + [S.STOCK_PAPER_NOTE]}
+            open_n = S.stock_open_slots(self.st["trades"].values())
+            if open_n >= S.STOCK_PAPER_MAX:
+                self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+                return
+        else:
+            open_n = S.ignition_open_slots(self.st["trades"].values(), S.TREND_PATH)
+        if not sig.get("stock") and open_n >= S.TREND_PAPER_MAX:
             if time.time() - self._trend_full_log > 900:
                 self._trend_full_log = time.time()
                 log_event("TREND_FULL", open=open_n, max=S.TREND_PAPER_MAX, symbol=sig["symbol"],
@@ -922,19 +943,30 @@ class Bot:
     def _open_ignition_paper(self, sig, ev, src, reg, equity):
         if not sig.get("ignition"):
             return
+        tsym = S.to_toobit(sig["symbol"])
+        stock = S.STOCK_PAPER and S.is_stock_contract(tsym)
+        if stock:
+            sig = {**sig, "paper_only": True, "stock": True}
+            ev = {**ev, "reasons": list(ev.get("reasons") or []) + [S.STOCK_PAPER_NOTE]}
         venue = getattr(self.tb, "name", "") or ""
         interval = "15m" if sig.get("signal_path") == "IGNITION 15m" else "1m"
-        live = S.ignition_live(venue, interval)
+        live = (not stock) and S.ignition_live(venue, interval)
         if live:
             sig = {**sig, "paper_only": False}
         elif not sig.get("paper_only"):
             return
-        blocked = (S.gate_measured_loss(venue, sig.get("signal_path"), sig.get("side"), False)
-                   or S.toobit_measured_loss(venue, sig.get("signal_path"), sig.get("side"), None, False))
+        blocked = (not stock) and (
+            S.gate_measured_loss(venue, sig.get("signal_path"), sig.get("side"), False)
+            or S.toobit_measured_loss(venue, sig.get("signal_path"), sig.get("side"), None, False))
         if blocked:
             self.note_skip(sig, blocked)
             return
-        if not live:
+        if stock:
+            open_n = S.stock_open_slots(self.st["trades"].values())
+            if open_n >= S.STOCK_PAPER_MAX:
+                self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+                return
+        elif not live:
             open_n = S.ignition_open_slots(self.st["trades"].values(), sig.get("signal_path"))
             if open_n >= S.IGNITION_PAPER_MAX:
                 if time.time() - self._ign_full_log > 900:
@@ -1063,6 +1095,16 @@ class Bot:
 
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
+        if S.STOCK_PAPER and S.is_stock_contract(sym):
+            sig = {**sig, "paper_only": True, "stock": True}
+            reasons = list(ev.get("reasons") or [])
+            if S.STOCK_PAPER_NOTE not in reasons:
+                reasons.append(S.STOCK_PAPER_NOTE)
+            ev = {**ev, "reasons": reasons}
+            open_n = S.stock_open_slots(self.st["trades"].values())
+            if open_n >= S.STOCK_PAPER_MAX:
+                self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+                return False
         paper = bool(self.paper or sig.get("paper_only"))
         if S.paper_for_stopped_live(self.learner.p.get("rule_streaks"), sig.get("signal_path"), side, paper):
             sig = {**sig, "paper_only": True}
@@ -1248,6 +1290,7 @@ class Bot:
             "listing": listing(sym),
             "paper": paper,
             "paper_probe": bool(sig.get("paper_only")),
+            "stock": bool(sig.get("stock")),
         }
         log_event("ENTRY", trade_id=tid, entry_avg=entry, order_id=fill.get("order_ids"),
                   listing=self.st["trades"][tid]["listing"], paper=paper,
@@ -1942,10 +1985,20 @@ class Bot:
         moves = {}
         paper_later = []
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
-            if sig.get("paper_only"):
+            stock = S.STOCK_PAPER and S.is_stock_contract(S.to_toobit(sig["symbol"]))
+            if stock:
+                sig = {**sig, "paper_only": True, "stock": True}
+                reasons = list(ev.get("reasons") or [])
+                if S.STOCK_PAPER_NOTE not in reasons:
+                    reasons.append(S.STOCK_PAPER_NOTE)
+                ev = {**ev, "reasons": reasons}
+                if sig.get("quiet_strong_long"):
+                    paper_later.append((sig, ev, src))
+                    continue
+            elif sig.get("paper_only"):
                 paper_later.append((sig, ev, src))
                 continue
-            if not live_open or self._margin_full(size_eq):
+            if not stock and (not live_open or self._margin_full(size_eq)):
                 continue
             sgn = 1 if sig["side"] == "LONG" else -1
             cd = self.learner.p.get("symbol_cooldown", {}).get(sig["symbol"], 0)
@@ -2152,8 +2205,9 @@ class Bot:
                 self_paper = False
             shown_ev = (ev.get("analysis") or {}).get("ev_r")
             venue = getattr(self.tb, "name", "") or ""
-            measured = (S.gate_measured_loss(venue, sig.get("signal_path"), sig["side"], full_live)
-                        or S.toobit_measured_loss(venue, sig.get("signal_path"), sig["side"], shown_ev, full_live))
+            measured = None if sig.get("stock") else (
+                S.gate_measured_loss(venue, sig.get("signal_path"), sig["side"], full_live)
+                or S.toobit_measured_loss(venue, sig.get("signal_path"), sig["side"], shown_ev, full_live))
             if measured:
                 self.note_skip(sig, measured)
                 continue
@@ -2164,13 +2218,20 @@ class Bot:
             if self_paper or sig.get("paper_only"):
                 # Under the live line the short is paper. A stopped live flush is paper too.
                 # Quiet shorts and a short that clears the live line stay live.
+                # A stock contract uses its own paper cap and does not take a crypto slot.
                 sig = {**sig, "paper_only": True}
-                open_n = sum(1 for t in self.st["trades"].values()
-                             if t.get("paper_probe") and not t.get("exit_reason")
-                             and t.get("path") == "SELF ANALYSIS")
-                if open_n >= S.SELF_ANALYSIS_PAPER_MAX:
-                    self.note_skip(sig, f"自選驗算模擬已有 {open_n} 筆，上限 {S.SELF_ANALYSIS_PAPER_MAX}")
-                    continue
+                if sig.get("stock"):
+                    open_n = S.stock_open_slots(self.st["trades"].values())
+                    if open_n >= S.STOCK_PAPER_MAX:
+                        self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+                        continue
+                else:
+                    open_n = sum(1 for t in self.st["trades"].values()
+                                 if t.get("paper_probe") and not t.get("exit_reason")
+                                 and not t.get("stock") and t.get("path") == "SELF ANALYSIS")
+                    if open_n >= S.SELF_ANALYSIS_PAPER_MAX:
+                        self.note_skip(sig, f"自選驗算模擬已有 {open_n} 筆，上限 {S.SELF_ANALYSIS_PAPER_MAX}")
+                        continue
                 if any(t["tsym"] == tsym and not t.get("exit_reason") for t in self.st["trades"].values()):
                     self.note_skip(sig, "這個幣已有倉位，自選驗算模擬不疊加")
                     continue

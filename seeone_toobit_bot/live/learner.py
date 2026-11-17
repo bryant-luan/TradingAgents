@@ -368,6 +368,9 @@ class Learner:
         """
         if r is None or "小倉" in (reason or ""):
             return
+        # A stock close stays on the stock book. It does not stop a crypto rule.
+        if tr.get("stock") or S.is_stock_contract(tr.get("tsym") or ""):
+            return
         paper = bool(tr.get("paper") or tr.get("paper_probe"))
         path, side = tr.get("path"), tr.get("side")
         if not paper and path == "SELF ANALYSIS" and side == "SHORT":

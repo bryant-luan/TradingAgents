@@ -232,6 +232,12 @@ GATE_PAPER_SCALE = 1.6
 # the cash print, and a perpetual more than this far from it is not that market.
 STOCK_CATS = frozenset({"stocks", "gstocks", "ondo-stocks", "xstocks"})
 STOCK_PX_GAP = 0.01
+# Stock contracts are a separate book. Crypto loss rules and slot caps do not
+# apply, and a new stock order is paper until that book has its own positive
+# sample. Clearing the usual 20-close bar does not send a live order by itself.
+STOCK_PAPER = True
+STOCK_PAPER_MAX = 4
+STOCK_PAPER_NOTE = "股票合約先走模擬，和加密貨幣分開計，直到這本書自己的期望為正"
 _STOCK_BASES = {"at": 0.0, "names": frozenset()}
 _STOCK_LOCK = threading.Lock()
 # Closed live self-scan shorts, both books, joined to the entry expected value
@@ -640,11 +646,19 @@ def ignition_open_slots(trades, path: str | None) -> int:
 
     The cap is per path. Gate's 15-minute book is the one that is positive in
     both halves, and a shared cap of 8 was full because stopped 1-minute
-    papers were still open. Those do not take a 15-minute slot.
+    papers were still open. Those do not take a 15-minute slot. A stock
+    contract is its own book and does not take one either.
     """
     return sum(1 for t in trades
                if isinstance(t, dict) and t.get("paper_probe") and not t.get("exit_reason")
-               and t.get("path") == path)
+               and not t.get("stock") and t.get("path") == path)
+
+
+def stock_open_slots(trades) -> int:
+    """Open stock-contract papers. They do not share the crypto paper caps."""
+    return sum(1 for t in trades
+               if isinstance(t, dict) and t.get("paper_probe") and not t.get("exit_reason")
+               and t.get("stock"))
 IGNITION_RULES = {
     "1m": {"base_bars": 20, "base_max": 0.025, "vol_min": 8.0, "break_max": 0.06,
            "stop_min": 0.008, "stop_max": 0.12},

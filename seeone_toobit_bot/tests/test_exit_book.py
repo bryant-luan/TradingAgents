@@ -528,6 +528,14 @@ class Manage(unittest.TestCase):
         missed, why = S.anchor_stock_prices(9.861, 10.302, [], None, 9.90)
         self.assertIsNone(missed)
         self.assertIn("讀不到", why)
+        self.assertTrue(S.STOCK_PAPER)
+        slots = [
+            {"paper_probe": True, "path": "IGNITION 15m", "stock": True},
+            {"paper_probe": True, "path": "IGNITION 15m"},
+            {"paper_probe": True, "path": "DAILY TREND", "stock": True, "exit_reason": "done"},
+        ]
+        self.assertEqual(S.stock_open_slots(slots), 1)
+        self.assertEqual(S.ignition_open_slots(slots, "IGNITION 15m"), 1)
 
     def test_a_daily_trend_paper_keeps_its_volatility_stop(self):
         book = FakeBook()
