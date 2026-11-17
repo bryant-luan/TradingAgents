@@ -119,6 +119,14 @@ class FullLive(unittest.TestCase):
         self.assertIsNone(S.self_short_chased("LONG", 2.0))
         self.assertIsNone(S.self_short_chased("SHORT", None))
         self.assertIn("不再開", S.self_short_chased("SHORT", 1.5))
+        slots = [
+            {"paper_probe": True, "path": "IGNITION 1m"},
+            {"paper_probe": True, "path": "IGNITION 1m"},
+            {"paper_probe": True, "path": "IGNITION 15m"},
+            {"paper_probe": True, "path": "IGNITION 15m", "exit_reason": "done"},
+        ]
+        self.assertEqual(S.ignition_open_slots(slots, "IGNITION 15m"), 1)
+        self.assertEqual(S.ignition_open_slots(slots, "IGNITION 1m"), 2)
         self.assertIn("不再開", S.self_short_chased("SHORT", 1.72))
         self.assertIsNone(S.toobit_measured_loss("toobit", "SELF ANALYSIS", "SHORT", 0.65, True))
         self.assertIsNone(S.toobit_measured_loss("toobit", "SELF ANALYSIS", "SHORT", 0.40, True))
