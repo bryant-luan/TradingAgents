@@ -101,6 +101,23 @@ class Toobit:
         r = PUB.get(f"{BASE}/quote/v1/ticker/price", params={"symbol": symbol}, timeout=10).json()
         return float(r[0]["p"])
 
+    def index_price(self, symbol: str) -> float | None:
+        """Underlying index. For a stock contract this is the cash reference."""
+        now = time.time()
+        cache = getattr(self, "_index_px", None)
+        if not cache or now - cache[0] > 30:
+            data = PUB.get(f"{BASE}/quote/v1/index", timeout=15).json()
+            mapping = {}
+            for key, val in (data.get("index") or {}).items():
+                try:
+                    mapping[str(key)] = float(val)
+                except (TypeError, ValueError):
+                    continue
+            cache = (now, mapping)
+            self._index_px = cache
+        key = (self.specs().get(symbol) or {}).get("seeone") or ""
+        return cache[1].get(key)
+
     def book(self, symbol: str) -> tuple[float, float]:
         r = PUB.get(f"{BASE}/quote/v1/ticker/bookTicker", params={"symbol": symbol}, timeout=10).json()
         return float(r[0]["b"]), float(r[0]["a"])
