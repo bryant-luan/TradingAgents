@@ -787,6 +787,23 @@ class Bot:
     def _same_side(self, side: str) -> list:
         return [t for t in self._risk_trades() if t["side"] == side and not t.get("exit_reason")]
 
+    def _live_if_paper_clears(self, sig: dict, ev: dict, path: str, side: str | None = None) -> bool:
+        """A crypto paper book that clears the live bar sends the next order live.
+
+        Stocks stay on their own paper book. The bar is 20 closes, a win rate
+        over 60%, a mean R over +0.50, and both halves positive.
+        """
+        if sig.get("stock"):
+            return False
+        sample = S.path_sample(self.st.get("closed") or [], path, side)
+        if not S.clears_live_target(sample):
+            return False
+        sig["paper_only"] = False
+        ev["reasons"] = list(ev.get("reasons") or []) + [
+            f"模擬達標，送實盤。{path} {sample['n']} 筆、勝率 {sample['win']:.0%}、"
+            f"平均 {sample['mean_r']:+.2f}R，前後半都為正"]
+        return True
+
     def _release_paper(self, tsym: str):
         """A live entry on this symbol settles the paper probe at the current price."""
         if self.paper:
@@ -812,7 +829,7 @@ class Bot:
                 continue
         sample = S.quiet_long_sample(rows)
         log_event("QUIET_LONG_PAPER", **sample,
-                  reason=("模擬樣本已達標，仍不送真單" if sample["ready"]
+                  reason=("模擬達標，下一筆送實盤" if sample["ready"]
                           else f"模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、勝率超過 {S.LIVE_WIN:.0%}、"
                                f"平均 R 超過 {S.LIVE_R:+.2f}，前後半都要為正"))
 
@@ -827,10 +844,12 @@ class Bot:
                 self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
                 return
         else:
-            open_n = sum(1 for t in self.st["trades"].values()
-                         if t.get("paper_probe") and not t.get("exit_reason") and not t.get("stock")
-                         and t.get("path") == "QUIET LONG")
-        if not sig.get("stock") and open_n >= S.QUIET_LONG_PAPER_MAX:
+            live = self._live_if_paper_clears(sig, ev, "QUIET LONG", "LONG")
+            if not live:
+                open_n = sum(1 for t in self.st["trades"].values()
+                             if t.get("paper_probe") and not t.get("exit_reason") and not t.get("stock")
+                             and t.get("path") == "QUIET LONG")
+        if not sig.get("stock") and sig.get("paper_only") and open_n >= S.QUIET_LONG_PAPER_MAX:
             self.note_skip(sig, f"安靜多單模擬已有 {open_n} 筆，上限 {S.QUIET_LONG_PAPER_MAX}")
             return
         tsym = S.to_toobit(sig["symbol"])
@@ -889,12 +908,12 @@ class Bot:
                 continue
         sample = S.ignition_sample(rows, S.TREND_PATH)
         log_event("TREND_PAPER", path=S.TREND_PATH, **sample,
-                  reason=("日線趨勢模擬已達標，仍不送真單" if sample["ready"]
+                  reason=("日線趨勢模擬達標，下一筆送實盤" if sample["ready"]
                           else f"日線趨勢模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、"
                                f"勝率超過 {S.LIVE_WIN:.0%}、平均 R 超過 {S.LIVE_R:+.2f}，前後半都要為正"))
 
     def _open_trend_paper(self, sig, ev, src, reg, equity):
-        if not sig.get("trend") or not sig.get("paper_only"):
+        if not sig.get("trend"):
             return
         tsym = S.to_toobit(sig["symbol"])
         if S.STOCK_PAPER and S.is_stock_contract(tsym):
@@ -905,13 +924,15 @@ class Bot:
                 self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
                 return
         else:
-            open_n = S.ignition_open_slots(self.st["trades"].values(), S.TREND_PATH)
-        if not sig.get("stock") and open_n >= S.TREND_PAPER_MAX:
-            if time.time() - self._trend_full_log > 900:
-                self._trend_full_log = time.time()
-                log_event("TREND_FULL", open=open_n, max=S.TREND_PAPER_MAX, symbol=sig["symbol"],
-                          reason=f"日線趨勢模擬已有 {open_n} 筆，上限 {S.TREND_PAPER_MAX}")
-            return
+            live = self._live_if_paper_clears(sig, ev, S.TREND_PATH, sig.get("side"))
+            if not live:
+                open_n = S.ignition_open_slots(self.st["trades"].values(), S.TREND_PATH)
+                if open_n >= S.TREND_PAPER_MAX:
+                    if time.time() - self._trend_full_log > 900:
+                        self._trend_full_log = time.time()
+                        log_event("TREND_FULL", open=open_n, max=S.TREND_PAPER_MAX, symbol=sig["symbol"],
+                                  reason=f"日線趨勢模擬已有 {open_n} 筆，上限 {S.TREND_PAPER_MAX}")
+                    return
         tsym = S.to_toobit(sig["symbol"])
         if any(t["tsym"] == tsym and not t.get("exit_reason") for t in self.st["trades"].values()):
             self.note_skip(sig, "這個幣已有倉位，日線趨勢模擬不疊加")
@@ -2018,9 +2039,15 @@ class Bot:
                 self.note_skip(sig, "主流幣不靠自選單進場。今天 SOL、XRP 都在驗算轉弱時虧損出場，WLD、XMR 這種榜上的空單有打到 TP1")
                 continue
             if sig.get("recipe_spike"):
-                sig = {**sig, "paper_only": True}
-                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "訂單簿未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
+                sample = S.path_sample(self.st["closed"], sig.get("signal_path") or "ORDERBOOK", sig["side"])
+                if not (S.clears_live_target(sample) and not stock):
+                    sig = {**sig, "paper_only": True}
+                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                        "訂單簿未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
+                else:
+                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                        f"訂單簿達標，送實盤。{sample['n']} 筆、勝率 {sample['win']:.0%}、"
+                        f"平均 {sample['mean_r']:+.2f}R，前後半都為正"]}
                 try:
                     self.open_trade(sig, ev, src, reg, size_eq)
                 except ToobitError as e:
@@ -2033,9 +2060,15 @@ class Bot:
                 if blocked:
                     self.note_skip(sig, blocked)
                     continue
-                sig = {**sig, "paper_only": True}
-                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "突破單未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
+                sample = S.path_sample(self.st["closed"], sig.get("signal_path") or "BREAKOUT", sig["side"])
+                if S.clears_live_target(sample) and not stock:
+                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                        f"突破單達標，送實盤。{sample['n']} 筆、勝率 {sample['win']:.0%}、"
+                        f"平均 {sample['mean_r']:+.2f}R，前後半都為正"]}
+                else:
+                    sig = {**sig, "paper_only": True}
+                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                        "突破單未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
                 if not sig.get("after_red") and htf is not None and htf * sgn < htf_min:
                     self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                         f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")

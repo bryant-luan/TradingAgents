@@ -561,6 +561,48 @@ class Manage(unittest.TestCase):
         bars.append([8 * 900_000, 100.0, close, 99.4, close, 40.0])
         return bars
 
+    def test_a_cleared_paper_book_goes_live(self):
+        book = FakeBook()
+        book.px = 100.0
+        b = bot(book)
+        b.note_skip = lambda *a, **k: None
+        b.st["traded_ids"] = []
+        opened = []
+        b.open_trade = lambda sig, ev, src, reg, eq: opened.append(bool(sig.get("paper_only"))) or True
+        prev = S.stock_bases
+        S.stock_bases = lambda now=None: frozenset()
+
+        def closes(path, side, n):
+            return [{"path": path, "side": side, "r_result": 0.8,
+                     "closed_at": f"2026-10-{i:02d}T00:00:00+00:00"} for i in range(1, n + 1)]
+
+        try:
+            b.st["closed"] = closes("QUIET LONG", "LONG", 20)
+            sig = {"paper_only": True, "symbol": "BTCUSDT", "side": "LONG", "id": "q",
+                   "signal_path": "QUIET LONG"}
+            b._open_quiet_long_paper(sig, {"reasons": []}, "安靜期強勢多", (0.0, "NEUTRAL"), 100)
+            self.assertEqual(opened, [False])
+            opened.clear()
+            b.st["closed"] = closes("QUIET LONG", "LONG", 19)
+            thin = {"paper_only": True, "symbol": "ETHUSDT", "side": "LONG", "id": "q2",
+                    "signal_path": "QUIET LONG"}
+            b._open_quiet_long_paper(thin, {"reasons": []}, "安靜期強勢多", (0.0, "NEUTRAL"), 100)
+            self.assertEqual(opened, [True])
+            opened.clear()
+            b.st["closed"] = closes("QUIET LONG", "LONG", 20)
+            stock = {"paper_only": True, "stock": True, "symbol": "NVDAUSDT", "side": "LONG", "id": "qs",
+                     "signal_path": "QUIET LONG"}
+            b._open_quiet_long_paper(stock, {"reasons": []}, "安靜期強勢多", (0.0, "NEUTRAL"), 100)
+            self.assertEqual(opened, [True])
+            opened.clear()
+            b.st["closed"] = closes(S.TREND_PATH, "LONG", 20)
+            trend = {"trend": True, "paper_only": True, "symbol": "SOLUSDT", "side": "LONG", "id": "t",
+                     "signal_path": S.TREND_PATH, "entry_price": 100, "stop_price": 90}
+            b._open_trend_paper(trend, {"reasons": []}, S.TREND_PATH, (0.0, "NEUTRAL"), 100)
+            self.assertEqual(opened, [False])
+        finally:
+            S.stock_bases = prev
+
     def test_a_daily_trend_paper_keeps_its_volatility_stop(self):
         book = FakeBook()
         book.px = 1.009
