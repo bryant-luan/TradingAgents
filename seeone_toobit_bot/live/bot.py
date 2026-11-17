@@ -2043,7 +2043,7 @@ class Bot:
                 if not (S.clears_live_target(sample) and not stock):
                     sig = {**sig, "paper_only": True}
                     ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                        "訂單簿未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
+                        "訂單簿未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
                 else:
                     ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                         f"訂單簿達標，送實盤。{sample['n']} 筆、勝率 {sample['win']:.0%}、"
@@ -2068,7 +2068,7 @@ class Bot:
                 else:
                     sig = {**sig, "paper_only": True}
                     ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                        "突破單未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
+                        "突破單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
                 if not sig.get("after_red") and htf is not None and htf * sgn < htf_min:
                     self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                         f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
@@ -2270,7 +2270,7 @@ class Bot:
                     else:
                         sig = {**sig, "paper_only": True}
                         ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                            "洗盤多單未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
+                            "洗盤多單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
             if mid_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                     "Toobit 自選空單期望 +0.55R 到 +0.60R 送實盤。兩小時未走滿 +1R 的 11 筆"

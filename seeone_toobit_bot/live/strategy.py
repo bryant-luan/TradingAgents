@@ -652,12 +652,15 @@ QUIET_ENTRIES = True
 QUIET_LONGS = False
 QUIET_LONG_PAPER = True
 QUIET_LONG_PAPER_MAX = 2
-# A book returns to a live order only after its own closes clear this bar.
-# Win rate has to be over 60% and mean R over +0.50, on at least 20 closes,
-# with both halves above zero. Exactly 60% or exactly +0.50R stays paper.
-LIVE_WIN = 0.60
-LIVE_R = 0.50
-QUIET_LONG_READY_N = 20
+# A book returns to a live order after its own closes clear this bar.
+# The earlier bar was 20 closes, a win rate over 60%, and a mean R over +0.50.
+# That bar left the positive slices with no order. It is now 8 closes, a win
+# rate over 55%, and a mean R over +0.30, with both halves still above zero.
+# Exactly 55% or exactly +0.30R stays paper. A band whose closes are negative
+# in both halves stays closed even if a new signal is close to the line.
+LIVE_WIN = 0.55
+LIVE_R = 0.30
+QUIET_LONG_READY_N = 8
 QUIET_LONG_READY_WIN = LIVE_WIN
 QUIET_LONG_READY_R = LIVE_R
 # Ignition longs. A closed bar breaks the prior base on volume.
@@ -1389,7 +1392,7 @@ def path_sample(rows: list, path: str, side: str | None = None) -> dict:
 def clears_live_target(sample: dict) -> bool:
     """True when a book may send a live order.
 
-    The win rate has to be over 60% and the mean R over +0.50, on at least 20
+    The win rate has to be over 55% and the mean R over +0.30, on at least 8
     closes, with both chronological halves above zero.
     """
     return bool(
@@ -1481,7 +1484,7 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
                 "+0.50R 到 +0.55R 共 13 筆平均 -0.19R、-18 USDT："
                 "實盤 5 筆前後半都是負的、平均 -0.63R；"
                 "模擬 8 筆只有 +0.09R，後半仍是 -0.13R。"
-                "+0.55R 到 +0.60R 的模擬仍開")
+                "+0.55R 到 +0.60R 的仍送實盤")
     if (path == "SELF ANALYSIS" and side == "SHORT"
             and ev_r is not None and SELF_SHORT_FULL_RISK_EV <= ev_r < 0.70):
         return ("Toobit 自選空單期望 +0.60R 到 +0.70R 不再開。"
