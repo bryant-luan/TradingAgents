@@ -62,11 +62,16 @@ class FullLive(unittest.TestCase):
 
     def test_gate_book_is_larger_and_toobit_stays(self):
         gate, toobit = S.book_limits("gate"), S.book_limits("toobit")
-        self.assertEqual(gate["risk"], 0.08)
+        self.assertEqual(gate["risk"], 0.12)
         self.assertEqual(gate["short_risk"], 0.12)
+        self.assertGreaterEqual(gate["margin"], 0.48)
         self.assertGreater(gate["total_margin"], toobit["total_margin"])
         self.assertEqual(toobit["risk"], S.MIN_RISK_PCT)
         self.assertEqual(toobit["short_risk"], S.SELF_SHORT_RISK_PCT)
+        spec = {"multiplier": 1.0, "min_contracts": 1, "max_leverage": 25}
+        sized = S.size_position(1000, 100, 99, spec, gate["risk"], gate["margin"])
+        self.assertIsNotNone(sized)
+        self.assertGreaterEqual(sized["risk_usdt"], 1000 * 0.12 * 0.95)
 
     def test_open_paper_scales_once_without_changing_r(self):
         trades = {"a": {

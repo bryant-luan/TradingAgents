@@ -2381,6 +2381,16 @@ class Bot:
             log_event("GATE_SIZE", scale=S.GATE_PAPER_SCALE, positions=names,
                       risk=S.GATE_RISK_PCT, short_risk=S.GATE_SELF_SHORT_RISK_PCT,
                       note="Gate 模擬倉按 1.6 倍放大，之後新單一般 8%、合格空單 12%")
+        if getattr(self.tb, "name", "") == "gate" and self.st.get("paper_risk_mark") != S.GATE_RISK_PCT:
+            prev = self.st.get("paper_risk_mark")
+            base = float(prev) if prev else 0.08
+            scale = S.GATE_RISK_PCT / base if base else 1.0
+            names = S.scale_open_paper(self.st["trades"], scale) if abs(scale - 1) > 1e-9 else []
+            self.st["paper_risk_mark"] = S.GATE_RISK_PCT
+            save_state(self.st)
+            log_event("GATE_SIZE", scale=round(scale, 4), positions=names,
+                      risk=S.GATE_RISK_PCT, short_risk=S.GATE_SELF_SHORT_RISK_PCT,
+                      note="Gate 一般單改 12% 風險，已開模擬倉按 1.5 倍放大；合格空單維持 12%，實盤已開的倉不改")
         log_event("START", dry_run=self.dry, paper=self.paper, exchange=self.tb.name, tradable_contracts=tradable,
                   quiet_long_paper=S.QUIET_LONG_PAPER, quiet_longs_live=S.QUIET_LONGS,
                   ignition_paper=S.IGNITION_PAPER, ignition_1m=S.IGNITION_1M,
