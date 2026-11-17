@@ -115,6 +115,11 @@ QUOTE_VOL_MIN_DEFAULT = 1.14e8
 # over 35 hours and both sides; the rest stayed about +0.20R. Locked.
 PX15_DIR_MIN_DEFAULT = -0.484
 MAX_EXT_R = 2.5                 # no entry once the coin has run this many stop distances in the trade direction over 2h
+# Self-scan shorts are tighter. At or above +1.5R already traveled in 2 hours:
+# Toobit 7 closes, no wins, -0.95R, both halves negative, -53 USDT (MINA -1.18R);
+# Gate 5 closes, -0.69R, both halves negative, -33 USDT (IOST -1.20R, MINA -1.10R).
+# The +2.5R cap never saw these. Shorts under +1.5R stay on their own rules.
+SELF_SHORT_EXT_MAX = 1.5
 # Backup only. A 15m bar that closes through the prior 3h high or low, with a
 # range of at least 1%. XMR on 11-08 05:00 and WLD on 11-08 04:45 Taipei were
 # this shape. Every USDT-M contract is checked. One name per scan.
@@ -398,6 +403,21 @@ def self_short_full_live(side: str, btc24h: float | None, sl_pct: float, ev_r: f
     if ema_gap is not None and ema_gap > SELF_SHORT_WEAK_EMA_GAP:
         return False
     return True
+
+
+def self_short_chased(side: str | None, ext_r: float | None) -> str | None:
+    """A self-scan short that already ran +1.5R in two hours does not open.
+
+    Toobit had 7 closes, no wins, average -0.95R, both halves negative, -53 USDT.
+    Gate had 5 closes, average -0.69R, both halves negative, -33 USDT. One of
+    those was a win. The shared +2.5R cap did not catch them. A short that has
+    moved less than +1.5R is not this rule.
+    """
+    if side != "SHORT" or ext_r is None or ext_r < SELF_SHORT_EXT_MAX:
+        return None
+    return ("自選空單近 2 小時已順向走 +1.5R 以上不再開。"
+            "Toobit 7 筆全虧、平均 -0.95R，前後半都是負的，-53 USDT；"
+            "Gate 5 筆平均 -0.69R，前後半都是負的，-33 USDT")
 
 
 def self_short_sample_live(sl_pct: float) -> bool:
