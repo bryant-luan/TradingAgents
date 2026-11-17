@@ -1402,7 +1402,13 @@ class SelfScanner:
                 tradable = [sd for sd in eligible if sd in open_sides] if d / px < S.SELF_MAX_SL_PCT else []
                 if bounce and not at_front and "LONG" not in tradable:
                     tradable.append("LONG")
+                venue = getattr(self.tb, "name", "") or ""
+                if (S.toobit_long_live(venue, "LONG", d / px) and "LONG" not in tradable
+                        and m15_ok("LONG")):
+                    tradable.append("LONG")
                 can_open = set(open_sides) | ({"LONG"} if bounce and not at_front else set())
+                if S.toobit_long_live(venue, "LONG", d / px):
+                    can_open.add("LONG")
                 pick = tradable or eligible
                 if not pick:
                     skipped["pick"] += 1

@@ -581,9 +581,40 @@ def gate_flush_wide_stop(exchange: str, sl_pct: float) -> str | None:
     if exchange != "gate" or sl_pct < FLUSH_MAX_SL_PCT:
         return None
     return ("Gate 洗盤多單止損達到 2% 不再開。"
-            "止損小於 2% 的 9 筆勝率 56%、平均 +0.62R，前半 +0.22R、後半 +0.94R，"
-            "未滿 20 筆、勝率未過 60%，繼續模擬，達標才送實盤。"
+            "止損小於 2% 的 9 筆勝率 56%、平均 +0.62R，前半 +0.22R、後半 +0.94R，送實盤。"
             "止損 2% 以上有兩筆超過 4%，分別 -0.48R 和 -1.07R")
+
+
+def gate_flush_goes_live(exchange: str, sl_pct: float) -> bool:
+    """Gate wash longs with a stop under 2% are the live long.
+
+    Nine closes, 56% wins, +0.62R, halves +0.22R and +0.94R. Stops at 2% or
+    wider do not open.
+    """
+    return exchange == "gate" and sl_pct < FLUSH_MAX_SL_PCT
+
+
+def toobit_mid_short_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
+    """Toobit self shorts from +0.55R up to +0.60R are the live short.
+
+    With the two-hour run already under +1R, that band is 11 closes, 73% wins,
+    +0.65R, halves +1.04R and +0.33R. A short that already ran +1R does not
+    reach this check. Under +0.55R stays closed.
+    """
+    if exchange != "toobit" or side != "SHORT" or ev_r is None:
+        return False
+    return TOOBIT_SHORT_KEEP_PAPER_EV <= ev_r < SELF_SHORT_FULL_RISK_EV
+
+
+# Toobit self longs with a stop of at least 3% are 11 closes, 64% wins, +0.37R,
+# halves +0.18R and +0.52R. Under 3% is 12 closes, 25% wins, -0.41R, both
+# halves negative, so that tighter stop stays paper.
+TOOBIT_LONG_LIVE_MIN_SL = 0.03
+
+
+def toobit_long_live(exchange: str, side: str | None, sl_pct: float) -> bool:
+    """Toobit self longs with a stop of at least 3% are the live long."""
+    return exchange == "toobit" and side == "LONG" and sl_pct >= TOOBIT_LONG_LIVE_MIN_SL
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
