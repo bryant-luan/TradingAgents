@@ -1170,10 +1170,8 @@ class SelfScanner:
                "current_price": px, "entry_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                "levels": levels, "signal_path": path, "path_subtype": None, "broken": hit["broken"],
                "ignition": True, "paper_only": not live}
-        if live:
-            book_note = "Gate 15 分鐘起漲送實盤。模擬 11 筆、勝率 73%、平均 +0.38R，前後半都是正的"
-        else:
-            book_note = "只記模擬倉。1 分鐘兩邊都已停；Toobit 15 分鐘已停"
+        book_note = (f"只記模擬。回到實盤要 {S.QUIET_LONG_READY_N} 筆、勝率超過 {S.LIVE_WIN:.0%}、"
+                     f"平均 R 超過 {S.LIVE_R:+.2f}，前後半都為正")
         reasons = [
             f"{label}起漲：收盤 {px:.6g} 漲破前段高點 {hit['broken']:.6g}，這一段量是中位數的 {hit['vol_mult']:.1f} 倍",
             f"底座振幅 {hit['base_pct']:.1%}，突破 {hit['break_pct']:.1%}，止損放在底座 {hit['stop']:.6g}（{hit['stop_pct']:.1%}）",
@@ -1264,8 +1262,8 @@ class SelfScanner:
             f"日線趨勢{'多' if side == 'LONG' else '空'}：10 日 {hit['ret10']:+.1%}，20 日 {hit['ret20']:+.1%}。{gate}",
             f"止損 {hit['stop']:.6g}（{hit['stop_pct']:.1%}），兩個日內波動 {hit['vol']:.1%} 夾在 2% 和 15%。倉位按這段距離縮放",
             "只記模擬倉。10 日和 20 日不再同向，或碰到止損，才結算。資金費率不拿來開單",
-            f"模擬滿 {S.QUIET_LONG_READY_N} 筆、勝率至少 {S.QUIET_LONG_READY_WIN:.0%}、"
-            f"平均 R 至少 {S.QUIET_LONG_READY_R:+.2f} 且前後半都為正，才考慮實盤",
+            f"模擬滿 {S.QUIET_LONG_READY_N} 筆、勝率超過 {S.LIVE_WIN:.0%}、"
+            f"平均 R 超過 {S.LIVE_R:+.2f} 且前後半都為正，才回到實盤",
         ]
         ev = {"ok": True, "score": 90.0, "tier": "NORMAL", "reasons": reasons,
               "factors": {f"source:{path}": 0.0, f"side:{side}": 0.0},
@@ -1785,8 +1783,8 @@ class SelfScanner:
             "安靜期強勢多：只記模擬倉，不送真單",
             f"大週期順方向 {htf_dir:+.2f}，允許 {S.QUIET_HTF_MIN:g} 到 {S.QUIET_HTF_MAX:g}",
             "這一側 14 筆流動性夠的樣本約 -0.99R，前後半都是負的",
-            f"模擬滿 {S.QUIET_LONG_READY_N} 筆、勝率至少 {S.QUIET_LONG_READY_WIN:.0%}、"
-            f"平均 R 至少 {S.QUIET_LONG_READY_R:+.2f} 且前後半都為正，才考慮實盤",
+            f"模擬滿 {S.QUIET_LONG_READY_N} 筆、勝率超過 {S.LIVE_WIN:.0%}、"
+            f"平均 R 超過 {S.LIVE_R:+.2f} 且前後半都為正，才回到實盤",
             f"區間位置 {rpos:.2f}，須靠近低點（上限 {S.MAX_RANGE_POS}）",
             f"24h 成交額仍須達 {S.QUOTE_VOL_MIN_DEFAULT/1e6:.0f} 百萬",
             f"止損 {dist / px:.2%} (1.5×ATR15m)，大盤 {regime[1]} {regime[0]:+.2f}",

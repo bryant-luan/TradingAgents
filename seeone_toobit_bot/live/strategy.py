@@ -597,11 +597,14 @@ QUIET_ENTRIES = True
 QUIET_LONGS = False
 QUIET_LONG_PAPER = True
 QUIET_LONG_PAPER_MAX = 2
-# Promotion is recorded, not automatic. 20 closes, win rate at least 55%,
-# mean R at least +0.30, and both halves above zero. Until then no live order.
+# A book returns to a live order only after its own closes clear this bar.
+# Win rate has to be over 60% and mean R over +0.50, on at least 20 closes,
+# with both halves above zero. Exactly 60% or exactly +0.50R stays paper.
+LIVE_WIN = 0.60
+LIVE_R = 0.50
 QUIET_LONG_READY_N = 20
-QUIET_LONG_READY_WIN = 0.55
-QUIET_LONG_READY_R = 0.30
+QUIET_LONG_READY_WIN = LIVE_WIN
+QUIET_LONG_READY_R = LIVE_R
 # Ignition longs. A closed bar breaks the prior base on volume.
 # AKE on Nov 13, 13:22 Taipei: 1m base 1.8% wide, volume 17x the prior 20 minutes,
 # close 3.3% through that high, stop under the base about 5%.
@@ -613,9 +616,10 @@ QUIET_LONG_READY_R = 0.30
 # 15m (8-bar base <= 6%, volume >= 3x, close within 8%), ~15 days,
 # 1026 trades, 42%, -0.08R, both halves negative.
 # Wider and tighter cuts lost too. 1m stays off on both books. Toobit 15m
-# stays off. Gate 15m is a live order: 11 closes, 73% wins, +0.38R, both
-# halves positive, +42 USDT. The user sent it live short of the 20-close bar.
-# Open papers keep their stops. A new Gate 15m signal does not stack on one.
+# stays off. Gate 15m was live on 11 paper closes at 73% and +0.38R. The
+# later book is 19 closes near 0R, and the 4 live closes are 25% and -0.47R.
+# That is under a win rate over 60% and a mean R over +0.50, so it papers
+# until its own sample clears the live bar. Open papers keep their stops.
 IGNITION_PAPER = True
 IGNITION_1M = True
 IGNITION_15M_VENUES = ("gate", "toobit")
@@ -1265,26 +1269,67 @@ def quiet_long_sample(rows: list) -> dict:
         "n": len(xs), "wins": wins, "win": round(wins / len(xs), 3), "mean_r": mean(xs),
         "h1_r": mean(h1) if h1 else None, "h2_r": mean(h2) if h2 else None,
     }
-    out["ready"] = bool(
-        out["n"] >= QUIET_LONG_READY_N and out["win"] >= QUIET_LONG_READY_WIN
-        and out["mean_r"] is not None and out["mean_r"] >= QUIET_LONG_READY_R
-        and (out["h1_r"] or 0) > 0 and (out["h2_r"] or 0) > 0)
+    out["ready"] = clears_live_target(out)
     return out
 
 
+def path_sample(rows: list, path: str, side: str | None = None) -> dict:
+    """Closed trades of one path. A stock contract is a separate book."""
+    xs = [c for c in rows
+          if c.get("path") == path and c.get("r_result") is not None and not c.get("stock")
+          and (side is None or c.get("side") == side)]
+    xs.sort(key=lambda c: c.get("closed_at") or "")
+    if not xs:
+        return {"n": 0, "wins": 0, "win": None, "mean_r": None, "h1_r": None, "h2_r": None, "ready": False}
+
+    def mean(part: list) -> float:
+        return round(sum(float(x["r_result"]) for x in part) / len(part), 3)
+
+    mid = len(xs) // 2
+    wins = sum(1 for x in xs if float(x["r_result"]) > 0)
+    h1, h2 = (xs[:mid], xs[mid:]) if mid else (xs, [])
+    out = {
+        "n": len(xs), "wins": wins, "win": round(wins / len(xs), 3), "mean_r": mean(xs),
+        "h1_r": mean(h1) if h1 else None, "h2_r": mean(h2) if h2 else None,
+    }
+    out["ready"] = clears_live_target(out)
+    return out
+
+
+def clears_live_target(sample: dict) -> bool:
+    """True when a book may send a live order.
+
+    The win rate has to be over 60% and the mean R over +0.50, on at least 20
+    closes, with both chronological halves above zero.
+    """
+    return bool(
+        sample.get("n", 0) >= QUIET_LONG_READY_N
+        and sample.get("win") is not None and sample["win"] > LIVE_WIN
+        and sample.get("mean_r") is not None and sample["mean_r"] > LIVE_R
+        and (sample.get("h1_r") or 0) > 0 and (sample.get("h2_r") or 0) > 0)
+
+
 def ignition_15m_open(exchange: str) -> bool:
-    """15m ignition is scanned on both books. Only Gate sends the order live."""
+    """15m ignition is scanned on both books. A live order waits for the live bar."""
     return exchange in IGNITION_15M_VENUES
 
 
 def ignition_live(exchange: str, interval: str) -> bool:
-    """Gate 15-minute ignition is a live order. Toobit 15m and both 1m books are not."""
-    return exchange == "gate" and interval == "15m"
+    """No ignition book currently clears a win rate over 60% and a mean R over +0.50.
+
+    Gate 15m live closes are 4 trades, 25% wins, -0.47R. The paper book is 15
+    trades at 60% and +0.12R. The order stays paper until path_sample is ready.
+    """
+    return False
 
 
 def flush_live(exchange: str) -> bool:
-    """Gate flush longs averaged +0.37R. Toobit's four live closes averaged -0.47R."""
-    return exchange == "gate"
+    """Flush longs do not clear the live bar.
+
+    Gate is 12 live closes, 50% wins, +0.37R. Toobit is 4 live closes, 25%, -0.47R.
+    A later sample that clears the bar is promoted by the entry, not by this flag.
+    """
+    return False
 
 
 def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_live: bool) -> str | None:
@@ -1296,7 +1341,9 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
     live line still opens. Self-scan longs are 2 live losses and 6 paper closes
     at -0.36R. 1-minute ignition is 66 paper closes at 32% and -0.24R, both
     halves negative, -119 USDT, and the latest 15 are still -0.40R. 15-minute
-    ignition is a live order. Quiet shorts and flush longs are not this function.
+    ignition is paper until its own sample clears the live bar. Quiet shorts
+    stay live: six closes, every one a win, about +1.41R. Flush longs are not
+    this function.
     """
     if exchange != "gate":
         return None
@@ -1528,10 +1575,7 @@ def ignition_sample(rows: list, path: str) -> dict:
         "n": len(xs), "wins": wins, "win": round(wins / len(xs), 3), "mean_r": mean(xs),
         "h1_r": mean(h1) if h1 else None, "h2_r": mean(h2) if h2 else None,
     }
-    out["ready"] = bool(
-        out["n"] >= QUIET_LONG_READY_N and out["win"] >= QUIET_LONG_READY_WIN
-        and out["mean_r"] is not None and out["mean_r"] >= QUIET_LONG_READY_R
-        and (out["h1_r"] or 0) > 0 and (out["h2_r"] or 0) > 0)
+    out["ready"] = clears_live_target(out)
     return out
 
 
