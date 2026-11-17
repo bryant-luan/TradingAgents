@@ -227,6 +227,13 @@ GATE_HIGH_MARGIN_CAP_PCT = 0.55
 GATE_SELF_SHORT_MARGIN_CAP_PCT = 0.55
 GATE_MAX_TOTAL_MARGIN_PCT = 0.98
 GATE_PAPER_SCALE = 1.6
+# Spot categories that are a listed share or a share ETF. Metals, forex,
+# commodities, and indices are not this set. A stock contract is priced off
+# the cash print, and a perpetual more than this far from it is not that market.
+STOCK_CATS = frozenset({"stocks", "gstocks", "ondo-stocks", "xstocks"})
+STOCK_PX_GAP = 0.01
+_STOCK_BASES = {"at": 0.0, "names": frozenset()}
+_STOCK_LOCK = threading.Lock()
 # Closed live self-scan shorts, both books, joined to the entry expected value
 # (109 closes through 2026-11-16 11:50 Taipei):
 #   0.35–0.50R  35 closes, 23% win, -0.39R, halves -0.51 / -0.27, -210 USDT
@@ -1647,6 +1654,84 @@ def evaluate(sig: dict, source: str, regime_score: float, regime_label: str,
         skip = f"綜合分數 {score} < {min_score}"
     return {"ok": skip is None, "score": score, "reasons": reasons, "factors": factors,
             "skip": skip, "cur_r": round(cur_r, 3)}
+
+
+def _px(n: float) -> str:
+    return f"{n:.8f}".rstrip("0").rstrip(".")
+
+
+def stock_bases(now: float | None = None) -> frozenset[str]:
+    """Share and share-ETF bases, from the public currency list. Cached six hours."""
+    now = time.time() if now is None else now
+    with _STOCK_LOCK:
+        cached = _STOCK_BASES["names"]
+        if cached and now - _STOCK_BASES["at"] < 6 * 3600:
+            return cached
+    try:
+        rows = requests.get("https://api.gateio.ws/api/v4/spot/currencies", timeout=20).json()
+    except (requests.RequestException, ValueError):
+        return _STOCK_BASES["names"]
+    names = set()
+    for row in rows if isinstance(rows, list) else []:
+        cats = row.get("category") or []
+        if isinstance(cats, str):
+            cats = [cats]
+        if STOCK_CATS.intersection(cats) and row.get("currency"):
+            names.add(str(row["currency"]).upper())
+    found = frozenset(names)
+    if not found:
+        return _STOCK_BASES["names"]
+    with _STOCK_LOCK:
+        _STOCK_BASES["names"] = found
+        _STOCK_BASES["at"] = now
+    return found
+
+
+def contract_base(symbol: str) -> str:
+    text = str(symbol or "").upper()
+    if text.endswith("-SWAP-USDT"):
+        return text[: -len("-SWAP-USDT")]
+    if text.endswith("_USDT"):
+        return text[:-5]
+    if text.endswith("USDT"):
+        return text[:-4]
+    return text
+
+
+def is_stock_contract(symbol: str, bases: frozenset[str] | None = None) -> bool:
+    return contract_base(symbol) in (stock_bases() if bases is None else bases)
+
+
+def anchor_stock_prices(entry: float, stop: float, levels: list | None,
+                        stock: float | None, perp: float | None) -> tuple[dict | None, str | None]:
+    """Move a stock order onto the cash price and keep the same distances.
+
+    The perpetual is the instrument that fills. It is not the price. A last
+    print more than STOCK_PX_GAP from the cash price is a different market,
+    and that order does not open.
+    """
+    if not stock or not perp or stock <= 0 or perp <= 0 or entry <= 0:
+        return None, "股票價格讀不到，不開"
+    drift = abs(perp - stock) / stock
+    if drift > STOCK_PX_GAP:
+        return None, (f"合約價 {_px(perp)} 偏離股票價格 {_px(stock)} 達 {drift:.1%}，"
+                      f"超過 {STOCK_PX_GAP:.0%}，不開")
+    delta = stock - entry
+    moved = []
+    for level in levels or []:
+        if not isinstance(level, dict):
+            moved.append(level)
+            continue
+        level = dict(level)
+        if level.get("price") is not None:
+            level["price"] = float(level["price"]) + delta
+        moved.append(level)
+    return {
+        "entry": stock,
+        "stop": stop + delta,
+        "levels": moved,
+        "note": f"參考股票價格 {_px(stock)}，合約價 {_px(perp)}",
+    }, None
 
 
 def book_limits(exchange: str) -> dict:

@@ -1077,9 +1077,27 @@ class Bot:
             self.note_skip(sig, "只在 Gate 上市的幣先不開：11-09 COOL、FATCOIN、FLORK、ZZZ 4 筆全虧")
             return False
         spec = self.tb.specs()[sym]
+        # A stock contract is priced off the cash print. The perpetual last is
+        # only the fill, and only while it is still within 1% of that print.
+        if S.is_stock_contract(sym):
+            try:
+                stock_px = self.tb.index_price(sym)
+                perp_px = self.tb.price(sym)
+            except Exception:
+                stock_px, perp_px = None, None
+            anchored, why = S.anchor_stock_prices(
+                float(sig["entry_price"]), float(sig["stop_price"]), sig.get("levels"),
+                stock_px, perp_px)
+            if why:
+                self.note_skip(sig, why)
+                return False
+            sig = {**sig, "entry_price": anchored["entry"], "stop_price": anchored["stop"],
+                   "current_price": anchored["entry"], "levels": anchored["levels"]}
+            ev = {**ev, "reasons": list(ev.get("reasons") or []) + [anchored["note"]]}
         # The replay fills the signal close. A live mark a minute later is a different trade.
+        # A stock order already replaced that close with the cash price.
         price = (float(sig["entry_price"])
-                 if sig.get("paper_only") and (sig.get("ignition") or sig.get("trend"))
+                 if S.is_stock_contract(sym) or (sig.get("paper_only") and (sig.get("ignition") or sig.get("trend")))
                  else self.tb.price(sym))
         stop = float(sig["stop_price"])
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):

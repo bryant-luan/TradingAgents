@@ -510,6 +510,25 @@ class Manage(unittest.TestCase):
         filled, why = b._ignition_live_fill(sig)
         self.assertIn("穿越止損", why)
 
+    def test_a_stock_order_uses_the_cash_price(self):
+        names = frozenset({"NANYA", "NVDA", "TQQQX"})
+        self.assertTrue(S.is_stock_contract("NANYA-SWAP-USDT", names))
+        self.assertTrue(S.is_stock_contract("TQQQX_USDT", names))
+        self.assertFalse(S.is_stock_contract("BTC-SWAP-USDT", names))
+        anchored, why = S.anchor_stock_prices(
+            9.861, 10.302, [{"label": "TP1", "price": 9.42}], 9.971, 9.90)
+        self.assertIsNone(why)
+        self.assertAlmostEqual(anchored["entry"], 9.971)
+        self.assertAlmostEqual(anchored["stop"], 10.302 + (9.971 - 9.861))
+        self.assertAlmostEqual(anchored["levels"][0]["price"], 9.42 + (9.971 - 9.861))
+        self.assertIn("9.971", anchored["note"])
+        missed, why = S.anchor_stock_prices(9.861, 10.302, [], 9.971, 9.80)
+        self.assertIsNone(missed)
+        self.assertIn("偏離股票價格", why)
+        missed, why = S.anchor_stock_prices(9.861, 10.302, [], None, 9.90)
+        self.assertIsNone(missed)
+        self.assertIn("讀不到", why)
+
     def test_a_daily_trend_paper_keeps_its_volatility_stop(self):
         book = FakeBook()
         book.px = 1.009

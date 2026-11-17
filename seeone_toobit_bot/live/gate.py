@@ -332,6 +332,15 @@ class Gate:
                             params={"contract": to_gate(symbol)}, timeout=10).json()
         return float(rows[0]["last"])
 
+    def index_price(self, symbol: str) -> float | None:
+        """Underlying index. For a stock contract this is the cash reference."""
+        rows = PUB.get(f"{HOST}{PREFIX}/futures/usdt/tickers",
+                       params={"contract": to_gate(symbol)}, timeout=10).json()
+        raw = (rows[0] or {}).get("index_price") if rows else None
+        if raw in (None, ""):
+            return None
+        return float(raw)
+
     def book(self, symbol: str) -> tuple[float, float]:
         row = PUB.get(f"{HOST}{PREFIX}/futures/usdt/order_book",
                            params={"contract": to_gate(symbol), "limit": 1}, timeout=10).json()
