@@ -1255,16 +1255,19 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
     return None
 
 
-TOOBIT_SHORT_KEEP_PAPER_EV = 0.50
+TOOBIT_SHORT_KEEP_PAPER_EV = 0.55
 
 
 def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
                          ev_r: float | None, full_live: bool) -> str | None:
     """Toobit books that are already negative do not open again.
 
-    A short under +0.50R is finished: the 0.35–0.50R live band was -156 USDT,
-    and the paper closes under +0.50R were negative in both halves. The paper
-    band from +0.50R up to the live line is still the one that papers. A short
+    A short under +0.55R is finished. Under +0.50R the live and paper books were
+    already negative in both halves. From +0.50R to +0.55R, 13 closes averaged
+    -0.19R and -18 USDT: the 5 live closes were -0.63R in both halves, and the
+    8 paper closes were only +0.09R with the second half still -0.13R. The
+    paper band from +0.55R up to the live line is +0.32R on 10 closes, both
+    halves positive, so that band still papers. A short
     at or above the live line that misses the other live gates is finished too:
     15 paper closes, 20% wins, -0.55R, both halves negative, about -50 USDT.
     The live book at or above +0.60R is still positive in both halves, so a
@@ -1277,10 +1280,11 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
     if exchange != "toobit":
         return None
     if path == "SELF ANALYSIS" and side == "SHORT" and not full_live and (ev_r or 0) < TOOBIT_SHORT_KEEP_PAPER_EV:
-        return ("Toobit 自選空單期望值未達 +0.50R 不再開。"
-                "0.35–0.50R 實盤 18 筆平均 -0.39R、-156 USDT；"
-                "模擬未達 +0.50R 的 10 筆前後半都是負的，約 -44 USDT。"
-                "+0.50R 到實盤線的模擬仍開")
+        return ("Toobit 自選空單期望值未達 +0.55R 不再開。"
+                "+0.50R 到 +0.55R 共 13 筆平均 -0.19R、-18 USDT："
+                "實盤 5 筆前後半都是負的、平均 -0.63R；"
+                "模擬 8 筆只有 +0.09R，後半仍是 -0.13R。"
+                "+0.55R 到實盤線的模擬仍開")
     if (path == "SELF ANALYSIS" and side == "SHORT" and not full_live
             and (ev_r or 0) >= SELF_SHORT_FULL_RISK_EV):
         return ("Toobit 自選空單期望已過實盤線、但沒過其他實盤條件，不再開。"
