@@ -630,7 +630,9 @@ QUIET_LONG_READY_R = LIVE_R
 IGNITION_PAPER = True
 IGNITION_1M = True
 IGNITION_15M_VENUES = ("gate", "toobit")
-IGNITION_PAPER_MAX = 8
+# Gate's 15-minute paper book was full at 8, so a new signal in that path
+# could not open. The live bar is unchanged. The extra slots stay paper.
+IGNITION_PAPER_MAX = 12
 IGNITION_QUOTE_MIN = 5_000_000
 # Daily trend, paper only. The 10-day and 20-day returns have to agree.
 # The stop is two daily standard deviations, and the usual risk budget is
@@ -647,7 +649,9 @@ TREND_BARS = 30
 TREND_STOP_SIGMA = 2.0
 TREND_STOP_MIN = 0.02
 TREND_STOP_MAX = 0.15
-TREND_PAPER_MAX = 4
+# Both books were full at 4, so the hourly scan opened nothing new. These
+# stay paper until the same 20-close live bar. The extra slots are paper.
+TREND_PAPER_MAX = 8
 TREND_SCAN_S = 3600
 _DAY_MS = 86_400_000
 

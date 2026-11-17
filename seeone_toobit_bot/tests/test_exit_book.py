@@ -563,6 +563,11 @@ class Manage(unittest.TestCase):
         self.assertIn("同一方向", S.stock_slot_block(both, "LONG"))
         self.assertIn("同一方向", S.stock_slot_block(both, "SHORT"))
         self.assertIsNone(S.stock_slot_block([{**t, "exit_reason": "done"} for t in shorts], "SHORT"))
+        self.assertEqual(S.LIVE_WIN, 0.60)
+        self.assertEqual(S.LIVE_R, 0.50)
+        self.assertEqual(S.QUIET_LONG_READY_N, 20)
+        self.assertEqual(S.IGNITION_PAPER_MAX, 12)
+        self.assertEqual(S.TREND_PAPER_MAX, 8)
 
     @staticmethod
     def _ignition_bars(close: float, volume: float = 40.0):
