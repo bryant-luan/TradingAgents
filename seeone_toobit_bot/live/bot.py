@@ -837,6 +837,11 @@ class Bot:
     def _open_ignition_paper(self, sig, ev, src, reg, equity):
         if not sig.get("ignition") or not sig.get("paper_only"):
             return
+        blocked = S.toobit_measured_loss(
+            getattr(self.tb, "name", "") or "", sig.get("signal_path"), sig.get("side"), None, False)
+        if blocked:
+            self.note_skip(sig, blocked)
+            return
         open_n = sum(1 for t in self.st["trades"].values()
                      if t.get("paper_probe") and not t.get("exit_reason")
                      and str(t.get("path") or "").startswith("IGNITION"))
@@ -1800,6 +1805,11 @@ class Bot:
                     log_event("ERROR", where="open_trade", symbol=sig["symbol"], error=str(e))
                 continue
             if sig.get("breakout"):
+                blocked = S.toobit_measured_loss(
+                    getattr(self.tb, "name", "") or "", sig.get("signal_path"), sig["side"], None, False)
+                if blocked:
+                    self.note_skip(sig, blocked)
+                    continue
                 sig = {**sig, "paper_only": True}
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                     "突破單實盤期望不為正，暫停實盤，改模擬直到正期望"]}
@@ -1962,8 +1972,10 @@ class Bot:
                           and not full_live)
             if self_paper and S.self_short_sample_live(sl_pct):
                 self_paper = False
-            measured = S.gate_measured_loss(
-                getattr(self.tb, "name", "") or "", sig.get("signal_path"), sig["side"], full_live)
+            shown_ev = (ev.get("analysis") or {}).get("ev_r")
+            venue = getattr(self.tb, "name", "") or ""
+            measured = (S.gate_measured_loss(venue, sig.get("signal_path"), sig["side"], full_live)
+                        or S.toobit_measured_loss(venue, sig.get("signal_path"), sig["side"], shown_ev, full_live))
             if measured:
                 self.note_skip(sig, measured)
                 continue
