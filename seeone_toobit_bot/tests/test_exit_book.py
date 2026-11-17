@@ -545,6 +545,8 @@ class Manage(unittest.TestCase):
         hit = S.ignition_setup(self._ignition_bars(100.5), "15m", now_ms=10**15)
         self.assertIsNotNone(hit)
         self.assertLess(hit["break_pct"], 0.01)
+        self.assertLess(hit["vol_mult"], 4.5)
+        self.assertIsNone(S.ignition_setup(self._ignition_bars(100.5, volume=45.0), "15m", now_ms=10**15))
         self.assertTrue(S.STOCK_PAPER)
         slots = [
             {"paper_probe": True, "path": "IGNITION 15m", "stock": True},
@@ -555,11 +557,11 @@ class Manage(unittest.TestCase):
         self.assertEqual(S.ignition_open_slots(slots, "IGNITION 15m"), 1)
 
     @staticmethod
-    def _ignition_bars(close: float):
+    def _ignition_bars(close: float, volume: float = 40.0):
         bars = []
         for i in range(8):
             bars.append([i * 900_000, 99.5, 100.0, 99.0, 99.6, 10.0])
-        bars.append([8 * 900_000, 100.0, close, 99.4, close, 40.0])
+        bars.append([8 * 900_000, 100.0, close, 99.4, close, volume])
         return bars
 
     def test_a_cleared_paper_book_goes_live(self):

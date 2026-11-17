@@ -670,8 +670,12 @@ IGNITION_RULES = {
            "stop_min": 0.008, "stop_max": 0.12},
     # A close already 1% through the base was 6 trades, 33% wins, -0.16R,
     # and the later half was -0.82R. Under 1% was 13 trades, 62%, +0.07R.
-    "15m": {"base_bars": 8, "base_max": 0.06, "vol_min": 3.0, "break_max": 0.01,
-            "stop_min": 0.01, "stop_max": 0.12},
+    # Of those 13, volume at least 4.5x the base median was 8 trades, 50%
+    # wins, -0.16R, halves -0.08R and -0.24R. Under 4.5x was 5 trades, 80%,
+    # +0.45R, both halves positive. Toobit had the same shape before that
+    # book stopped: 6 closes, no wins, -1.04R.
+    "15m": {"base_bars": 8, "base_max": 0.06, "vol_min": 3.0, "vol_max": 4.5,
+            "break_max": 0.01, "stop_min": 0.01, "stop_max": 0.12},
 }
 # 15m breakouts scan again, as paper. Live shorts were +0.05R and the later
 # half was negative; live longs were 3 closes, all losses. They return to
@@ -1455,7 +1459,9 @@ def ignition_setup(rows: list, interval: str, now_ms: float | None = None) -> di
     vol_mult = vol / med
     break_pct = (close - hi) / hi
     stop_pct = (close - lo) / close
-    if base_pct > rule["base_max"] or vol_mult < rule["vol_min"] or break_pct > rule["break_max"]:
+    vol_max = rule.get("vol_max")
+    if (base_pct > rule["base_max"] or vol_mult < rule["vol_min"]
+            or (vol_max is not None and vol_mult >= vol_max) or break_pct > rule["break_max"]):
         return None
     if not (rule["stop_min"] <= stop_pct <= rule["stop_max"]):
         return None
