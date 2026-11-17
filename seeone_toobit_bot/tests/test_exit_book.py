@@ -482,6 +482,91 @@ class Manage(unittest.TestCase):
         self.assertTrue(tr.get("exchange_flat"))
         self.assertEqual(book.closed, [])
 
+    def test_a_daily_trend_paper_keeps_its_volatility_stop(self):
+        book = FakeBook()
+        book.px = 1.009
+        b = bot(book)
+        tr = trade()
+        tr["paper"] = True
+        tr["paper_probe"] = True
+        tr["path"] = S.TREND_PATH
+        tr["opened_ts"] = 1_700_000_000
+        tr["tps"] = []
+        b.protect(tr)
+        self.assertIsNone(tr.get("exit_reason"))
+        self.assertEqual(tr["stop"], 1.01)
+        book.px = 0.97
+        b.protect(tr)
+        self.assertIsNone(tr.get("exit_reason"))
+        self.assertEqual(tr["stop"], 1.01)
+        self.assertGreater(tr["mfe_r"], 2)
+
+
+class DailyTrend(unittest.TestCase):
+    now = 1_800_000_000_000
+
+    def bars(self, closes):
+        start = self.now - 86_400_000 * (len(closes) + 2)
+        return [[start + i * 86_400_000, c, c, c, c, 1] for i, c in enumerate(closes)]
+
+    def walk(self, steps):
+        px, out = 100.0, [100.0]
+        for step in steps:
+            px *= 1 + step
+            out.append(px)
+        return out
+
+    def test_both_horizons_up_is_a_long_and_the_stop_is_clamped(self):
+        quiet = self.walk([0.004 if i % 5 else 0.003 for i in range(21)])
+        hit = S.daily_trend_setup(self.bars(quiet), self.now, 0.1)
+        self.assertEqual(hit["side"], "LONG")
+        self.assertAlmostEqual(hit["stop_pct"], 0.02)
+        self.assertLess(hit["stop"], hit["entry"])
+        wild = self.walk([0.25 if i % 2 == 0 else -0.10 for i in range(21)])
+        hit = S.daily_trend_setup(self.bars(wild), self.now, 0.0)
+        self.assertEqual(hit["side"], "LONG")
+        self.assertAlmostEqual(hit["stop_pct"], 0.15)
+
+    def test_a_mild_short_waits_while_btc_is_up_or_unknown(self):
+        mild = self.walk([
+            0.05, -0.06, 0.04, -0.05, 0.03, -0.04, 0.05, -0.06, 0.04, -0.03,
+            0.02, -0.03, 0.04, -0.05, 0.03, -0.02, 0.04, -0.03, 0.02, -0.025,
+        ])
+        self.assertIsNone(S.daily_trend_setup(self.bars(mild), self.now, 0.1))
+        self.assertIsNone(S.daily_trend_setup(self.bars(mild), self.now, None))
+        hit = S.daily_trend_setup(self.bars(mild), self.now, -0.05)
+        self.assertEqual(hit["side"], "SHORT")
+        self.assertGreater(hit["stop"], hit["entry"])
+
+    def test_a_one_sigma_short_still_opens_while_btc_is_up(self):
+        down = self.walk([ -0.03 if i % 3 else -0.01 for i in range(21)])
+        hit = S.daily_trend_setup(self.bars(down), self.now, 0.2)
+        self.assertEqual(hit["side"], "SHORT")
+        self.assertTrue(hit["btc_up"])
+
+    def test_disagreement_flat_and_a_forming_bar_do_not_enter(self):
+        mix = self.walk([0.03 if i < 14 else -0.015 for i in range(21)])
+        self.assertIsNone(S.daily_trend_setup(self.bars(mix), self.now, -0.2))
+        self.assertIsNone(S.daily_trend_setup(self.bars([100.0] * 21), self.now, -0.1))
+        self.assertIsNone(S.daily_trend_setup(self.bars(self.walk([0.01] * 10)), self.now, 0.1))
+        up = self.walk([0.012 if i % 2 == 0 else 0.008 for i in range(21)])
+        rows = self.bars(up)
+        hit = S.daily_trend_setup(rows, self.now, 0.1)
+        rows.append([self.now - 1000, 1, 1, 1, 1, 1])
+        again = S.daily_trend_setup(rows, self.now, 0.1)
+        self.assertEqual(again["side"], "LONG")
+        self.assertEqual(again["entry"], hit["entry"])
+        self.assertEqual(again["bar_open"], hit["bar_open"])
+
+    def test_the_exit_is_the_sign_change_and_a_missing_candle_holds(self):
+        up = self.walk([0.012 if i % 2 == 0 else 0.008 for i in range(21)])
+        down = self.walk([ -0.03 if i % 3 else -0.01 for i in range(21)])
+        self.assertTrue(S.daily_trend_holds(self.bars(up), self.now, "LONG"))
+        self.assertFalse(S.daily_trend_holds(self.bars(down), self.now, "LONG"))
+        self.assertTrue(S.daily_trend_holds(self.bars(down), self.now, "SHORT"))
+        self.assertIsNone(S.daily_trend_holds([], self.now, "LONG"))
+        self.assertIsNone(S.daily_trend_holds(self.bars(up[:5]), self.now, "LONG"))
+
 
 if __name__ == "__main__":
     unittest.main()

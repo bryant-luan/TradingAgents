@@ -273,6 +273,7 @@ class Bot:
         self._ignition_out: list = []
         self._ign_at = 0.0
         self._ign_full_log = 0.0
+        self._trend_full_log = 0.0
         self.last_history = 0.0
         self.pre_moves: dict[str, float | None] = {}
         self._protect_lock = threading.Lock()
@@ -363,6 +364,8 @@ class Bot:
 
             if tr.get("paper"):
                 self._paper_mark(tr)
+                if tr.get("path") == S.TREND_PATH and not tr.get("exit_reason"):
+                    self._trend_flip(tr)
             elif not tr.get("tp_migrated") and not tr.get("exit_reason"):
                 self.migrate_tps(tr)
             open_ids = set()
@@ -500,10 +503,14 @@ class Bot:
         # An ignition long is a base break, often while 1h/4h is still down. The trend-gone
         # exit would flatten it on the next read. The base low is the stop until TP1.
         ignition = str(tr.get("path") or "").startswith("IGNITION")
+        # A daily trend is held until the 10-day and 20-day signs disagree or the
+        # volatility stop prints. The intraday flatten and the profit lock would
+        # turn it into a different trade.
+        trend = tr.get("path") == S.TREND_PATH
         # Bounce longs open only when 1h/4h is already below this line, so the check would close them at once
         # (BR on Nov 10 was closed one second after entry).
         htf_flat = (htf is not None and htf * sgn < htf_floor and tr.get("path") != S.BOUNCE_PATH
-                    and not ignition
+                    and not ignition and not trend
                     and not tr.get("after_red") and not tr.get("recipe_spike")
                     and (opened_against or worked or cur_r <= HTF_FLAT_AFTER_R))
         # Flush longs stay with the exchange stop until TP1. Cutting them at -0.85R on the
@@ -533,7 +540,7 @@ class Bot:
             log_event("SPIKE_HELD", trade_id=tr["id"], symbol=sym, side=side, price=px,
                       prev_r=prev_r, cur_r=round(cur_r, 3),
                       reason=f"一秒內逆向 {prev_r - cur_r:.2f}R（從 {prev_r:+.2f}R 到 {cur_r:+.2f}R），留在止損")
-        elif (not live_stop and not flush_hold and not ignition_hold
+        elif (not live_stop and not flush_hold and not ignition_hold and not trend
               and cur_r <= (AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R)):
             line = AFTER_TP_DEEP_R if tp_filled else DEEP_ADVERSE_R
             adverse = f"浮虧 {cur_r:+.2f}R 已深於 {line}R，先平倉，避免插針滑過止損"
@@ -546,6 +553,8 @@ class Bot:
             log_event("ADVERSE_EXIT", trade_id=tr["id"], symbol=sym, side=side, price=px, cur_r=round(cur_r, 3),
                       reason=tr["exit_reason"])
             self.maker_close(tr, urgent=urgent)
+            return
+        if trend:
             return
         lk = S.held_lock_r(tr.get("mfe_r", 0.0), tr.get("tier") == "HIGH", bool(self.st.get("day_lock_hit")))
         if lk is None or lk <= tr.get("lock_r", -1):
@@ -592,6 +601,27 @@ class Bot:
             tp["filled_at"] = now_iso()
             log_event("TP_HIT", trade_id=tr["id"], symbol=sym, side=side, label=tp["label"], price=tp["price"],
                       qty=tp["qty"], paper=True, reason=f"模擬盤觸及 {tp['label']}")
+
+    def _trend_flip(self, tr: dict):
+        """Close a daily-trend paper when the 10-day and 20-day signs no longer agree."""
+        if time.time() - float(tr.get("trend_check_at") or 0) < S.TREND_SCAN_S:
+            return
+        tr["trend_check_at"] = time.time()
+        try:
+            rows = klines(tr["tsym"], "1d", S.TREND_BARS)
+        except Exception as e:
+            log_event("ERROR", where="trend_flip", symbol=tr.get("tsym"), error=repr(e)[:200])
+            return
+        holds = S.daily_trend_holds(rows, time.time() * 1000, tr.get("side") or "")
+        if holds is None or holds:
+            return
+        try:
+            tr["paper_exit_px"] = self.tb.price(tr["tsym"])
+        except Exception:
+            tr["paper_exit_px"] = tr.get("paper_px") or tr["entry"]
+        tr["exit_reason"] = "10 日和 20 日不再同向，模擬平倉"
+        log_event("TREND_EXIT", trade_id=tr["id"], symbol=tr["tsym"], side=tr["side"], paper=True,
+                  price=tr["paper_exit_px"], reason=tr["exit_reason"])
 
     def _with_paper(self, positions: dict) -> dict:
         """Keep a paper probe in the management map without hiding a real position."""
@@ -647,6 +677,8 @@ class Bot:
             self._note_ignition(tr.get("path"))
         elif tr.get("paper_probe") and tr.get("path") == "SELF ANALYSIS":
             self._note_self_analysis()
+        elif tr.get("paper_probe") and tr.get("path") == S.TREND_PATH:
+            self._note_trend()
 
     def _end_paper(self):
         for tid, tr in list(self.st["trades"].items()):
@@ -834,6 +866,59 @@ class Bot:
                           else f"自選驗算模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、"
                                f"勝率 {S.QUIET_LONG_READY_WIN:.0%}、平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
 
+    def _note_trend(self):
+        rows = list(self.st["closed"])
+        for p in BOOK_STATES:
+            if p == STATE_FILE:
+                continue
+            try:
+                rows.extend(json.loads(p.read_text()).get("closed") or [])
+            except (OSError, ValueError):
+                continue
+        sample = S.ignition_sample(rows, S.TREND_PATH)
+        log_event("TREND_PAPER", path=S.TREND_PATH, **sample,
+                  reason=("日線趨勢模擬已達標，仍不送真單" if sample["ready"]
+                          else f"日線趨勢模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、"
+                               f"勝率 {S.QUIET_LONG_READY_WIN:.0%}、平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
+
+    def _open_trend_paper(self, sig, ev, src, reg, equity):
+        if not sig.get("trend") or not sig.get("paper_only"):
+            return
+        open_n = S.ignition_open_slots(self.st["trades"].values(), S.TREND_PATH)
+        if open_n >= S.TREND_PAPER_MAX:
+            if time.time() - self._trend_full_log > 900:
+                self._trend_full_log = time.time()
+                log_event("TREND_FULL", open=open_n, max=S.TREND_PAPER_MAX, symbol=sig["symbol"],
+                          reason=f"日線趨勢模擬已有 {open_n} 筆，上限 {S.TREND_PAPER_MAX}")
+            return
+        tsym = S.to_toobit(sig["symbol"])
+        if any(t["tsym"] == tsym and not t.get("exit_reason") for t in self.st["trades"].values()):
+            self.note_skip(sig, "這個幣已有倉位，日線趨勢模擬不疊加")
+            return
+        if sig["id"] in self.st["traded_ids"]:
+            return
+        try:
+            live = self.tb.price(tsym)
+            entry, stop = float(sig["entry_price"]), float(sig["stop_price"])
+            dist = abs(entry - stop)
+            sgn = 1 if sig["side"] == "LONG" else -1
+        except (ToobitError, TypeError, ValueError) as e:
+            log_event("ERROR", where="trend_price", symbol=sig["symbol"], error=str(e))
+            return
+        if (live - stop) * sgn <= 0:
+            self.st["traded_ids"].append(sig["id"])
+            self.note_skip(sig, f"日線收盤後的現價 {live} 已經穿越止損 {stop}")
+            return
+        if dist > 0 and abs(live - entry) > dist:
+            self.st["traded_ids"].append(sig["id"])
+            self.note_skip(sig, f"日線收盤 {entry} 到現價 {live} 已經走出一個止損，這筆不追")
+            return
+        try:
+            self.open_trade(sig, ev, src, reg, equity)
+        except ToobitError as e:
+            self.st["traded_ids"].append(sig["id"])
+            log_event("ERROR", where="trend_paper", symbol=sig["symbol"], error=str(e))
+
     def _open_ignition_paper(self, sig, ev, src, reg, equity):
         if not sig.get("ignition") or not sig.get("paper_only"):
             return
@@ -863,7 +948,7 @@ class Bot:
             log_event("ERROR", where="ignition_paper", symbol=sig["symbol"], error=str(e))
 
     def _start_ignition(self, positions: dict):
-        if not S.IGNITION_PAPER:
+        if not S.IGNITION_PAPER and not S.TREND_PAPER:
             return
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
             return
@@ -883,17 +968,21 @@ class Bot:
         self._ign_th.start()
 
     def _ignition_worker(self, held: set, specs: dict):
+        out = []
         try:
-            out = self.selfscan.fresh_ignitions(held, specs)
+            out.extend(self.selfscan.fresh_ignitions(held, specs) or [])
         except Exception as e:
             log_event("ERROR", where="ignition", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
-            return
+        try:
+            out.extend(self.selfscan.fresh_trends(held, specs) or [])
+        except Exception as e:
+            log_event("ERROR", where="trend", error=repr(e)[:300], tb=traceback.format_exc()[-600:])
         if out:
             with self._scan_lock:
                 self._ignition_out.extend(out)
 
     def _take_ignitions(self, equity: float):
-        if not S.IGNITION_PAPER:
+        if not S.IGNITION_PAPER and not S.TREND_PAPER:
             return
         if PAUSE_FILE.exists() or time.time() < self.learner.p.get("pause_until", 0):
             return
@@ -906,7 +995,11 @@ class Bot:
         market = self.st.get("market") or {}
         regime = tuple(market.get("regime") or (0.0, "NEUTRAL"))
         for item in found:
-            self._open_ignition_paper(item["sig"], item["ev"], item.get("source") or "IGNITION", regime, size_eq)
+            sig = item["sig"]
+            if sig.get("trend"):
+                self._open_trend_paper(sig, item["ev"], item.get("source") or S.TREND_PATH, regime, size_eq)
+            else:
+                self._open_ignition_paper(sig, item["ev"], item.get("source") or "IGNITION", regime, size_eq)
 
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
@@ -925,7 +1018,9 @@ class Bot:
             return False
         spec = self.tb.specs()[sym]
         # The replay fills the signal close. A live mark a minute later is a different trade.
-        price = float(sig["entry_price"]) if sig.get("ignition") and sig.get("paper_only") else self.tb.price(sym)
+        price = (float(sig["entry_price"])
+                 if sig.get("paper_only") and (sig.get("ignition") or sig.get("trend"))
+                 else self.tb.price(sym))
         stop = float(sig["stop_price"])
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):
             self.note_skip(sig, f"現價 {price} 已貼近/穿越止損 {stop}")
@@ -2229,7 +2324,8 @@ class Bot:
         log_event("START", dry_run=self.dry, paper=self.paper, exchange=self.tb.name, tradable_contracts=tradable,
                   quiet_long_paper=S.QUIET_LONG_PAPER, quiet_longs_live=S.QUIET_LONGS,
                   ignition_paper=S.IGNITION_PAPER, ignition_1m=S.IGNITION_1M,
-                  ignition_max=S.IGNITION_PAPER_MAX, self_analysis_paper=S.SELF_ANALYSIS_PAPER,
+                  ignition_max=S.IGNITION_PAPER_MAX, trend_paper=S.TREND_PAPER,
+                  trend_max=S.TREND_PAPER_MAX, self_analysis_paper=S.SELF_ANALYSIS_PAPER,
                   sim_until=os.environ.get("GATE_SIM_UNTIL"),
                   seeone_tier=me.get("tier") or me.get("user", {}).get("tier"),
                   max_positions=S.MAX_POSITIONS, max_leverage=S.MAX_LEVERAGE,

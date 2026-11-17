@@ -286,6 +286,7 @@ class SelfScanner:
         self.last_break = 0.0
         self.last_spike = 0.0
         self.last_ignition_15 = 0.0
+        self.last_trend = 0.0
         self._quote_at = 0.0
         self._quote: dict[str, float] = {}
         self.basis: dict[str, tuple[float, float]] = {}
@@ -1181,6 +1182,94 @@ class SelfScanner:
         self.log("IGNITION", symbol=sym, side="LONG", timeframe=interval, price=px, stop=hit["stop"],
                  vol_mult=round(hit["vol_mult"], 2), base_pct=round(hit["base_pct"] * 100, 2),
                  break_pct=round(hit["break_pct"] * 100, 2),
+                 note="模擬，不送真單")
+        return {"sig": sig, "ev": ev, "source": path}
+
+    def fresh_trends(self, held: set, specs: dict) -> list:
+        """Liquid names whose 10-day and 20-day returns agree. Paper signals only.
+
+        One pass an hour. The strongest 20-day moves come first so a full book
+        takes those, not whichever name the ticker listed first. Funding is not read.
+        """
+        if not S.TREND_PAPER:
+            return []
+        now = time.time()
+        if now - self.last_trend < S.TREND_SCAN_S:
+            return []
+        self.last_trend = now
+        if now - self._quote_at > 600 or not self._quote:
+            try:
+                self._quote = quote_volumes()
+            except Exception:
+                self._quote = {}
+            self._quote_at = now
+        names = [tsym for tsym, spec in (specs or {}).items()
+                 if tsym not in held and (spec or {}).get("seeone")
+                 and self._quote.get(tsym, 0) >= S.IGNITION_QUOTE_MIN]
+        now_ms = now * 1000
+        try:
+            btc_rows = klines("BTC-SWAP-USDT", "1d", S.TREND_BARS)
+        except Exception:
+            btc_rows = []
+        btc_ret = S.daily_lookback_return(btc_rows, now_ms, S.TREND_SLOW)
+
+        def one(tsym: str):
+            try:
+                rows = klines(tsym, "1d", S.TREND_BARS)
+            except Exception:
+                return None
+            hit = S.daily_trend_setup(rows, now_ms, btc_ret)
+            if not hit:
+                return None
+            return tsym, hit
+
+        found = []
+        with ThreadPoolExecutor(12) as pool:
+            for hit in pool.map(one, names):
+                if hit:
+                    found.append(hit)
+        found.sort(key=lambda item: -abs(item[1]["ret20"]))
+        out = []
+        for tsym, hit in found:
+            spec = specs.get(tsym) or {}
+            sym = spec.get("seeone") or tsym
+            out.append(self._trend_signal(sym, hit, btc_ret))
+        self.log("TREND_SCAN", checked=len(names), found=len(out),
+                 btc20=None if btc_ret is None else round(btc_ret, 4),
+                 top=[(specs.get(tsym, {}).get("seeone") or tsym, hit["side"], round(hit["ret20"], 3))
+                      for tsym, hit in found[:8]])
+        return out
+
+    def _trend_signal(self, sym: str, hit: dict, btc_ret: float | None) -> dict:
+        px, side = hit["entry"], hit["side"]
+        path = S.TREND_PATH
+        sig = {"id": f"trend:{sym}:{side}:{hit['bar_open']}", "symbol": sym, "side": side,
+               "status": "ACTIVE", "timeframe": "1d", "entry_price": px, "stop_price": hit["stop"],
+               "current_price": px, "entry_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "levels": [], "signal_path": path, "path_subtype": None,
+               "trend": True, "paper_only": True}
+        if side == "LONG":
+            gate = "10 日和 20 日都上漲"
+        elif hit["btc_up"]:
+            gate = "大盤 20 日在漲，這筆空單跌過了 20 日一個標準差"
+        elif btc_ret is None:
+            gate = "大盤 20 日讀不到，空單改用較嚴的標準差門檻"
+        else:
+            gate = "大盤 20 日沒有上漲，10 日和 20 日都下跌"
+        reasons = [
+            f"日線趨勢{'多' if side == 'LONG' else '空'}：10 日 {hit['ret10']:+.1%}，20 日 {hit['ret20']:+.1%}。{gate}",
+            f"止損 {hit['stop']:.6g}（{hit['stop_pct']:.1%}），兩個日內波動 {hit['vol']:.1%} 夾在 2% 和 15%。倉位按這段距離縮放",
+            "只記模擬倉。10 日和 20 日不再同向，或碰到止損，才結算。資金費率不拿來開單",
+            f"模擬滿 {S.QUIET_LONG_READY_N} 筆、勝率至少 {S.QUIET_LONG_READY_WIN:.0%}、"
+            f"平均 R 至少 {S.QUIET_LONG_READY_R:+.2f} 且前後半都為正，才考慮實盤",
+        ]
+        ev = {"ok": True, "score": 90.0, "tier": "NORMAL", "reasons": reasons,
+              "factors": {f"source:{path}": 0.0, f"side:{side}": 0.0},
+              "skip": None, "cur_r": 0.0,
+              "analysis": {"prob": None, "edge": None, "quality": None, "ev_r": None}}
+        self.log("TREND", symbol=sym, side=side, price=px, stop=hit["stop"],
+                 ret10=round(hit["ret10"], 4), ret20=round(hit["ret20"], 4),
+                 vol=round(hit["vol"], 4), stop_pct=round(hit["stop_pct"], 4),
                  note="模擬，不送真單")
         return {"sig": sig, "ev": ev, "source": path}
 
