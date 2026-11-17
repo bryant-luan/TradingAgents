@@ -2243,6 +2243,12 @@ class Bot:
                 self.note_skip(sig, measured)
                 continue
             if bounce:
+                px = float(sig["entry_price"] or 0)
+                sl_pct = abs(px - float(sig["stop_price"])) / px if px else 1.0
+                wide = S.gate_flush_wide_stop(venue, sl_pct)
+                if wide:
+                    self.note_skip(sig, wide)
+                    continue
                 sample = S.path_sample(self.st["closed"], S.BOUNCE_PATH, "LONG")
                 if S.clears_live_target(sample):
                     ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
