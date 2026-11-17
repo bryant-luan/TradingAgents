@@ -213,15 +213,16 @@ SELF_SHORT_BTC24H_TREND = -1.0
 # still ~0.4, so 8% is about a fifth of it; sequential max drawdown on that haircut replay was 27%.
 # 8% at a 1% stop and 25x needs a 32% margin slot.
 SELF_SHORT_RISK_PCT = 0.08
-# Gate only, from 2026-11-16. The user asked for a larger book. Toobit stays
-# at 5% / 8%. Gate steps the same two lines to 8% and 12%. A 1% stop at 25x
-# needs 32% and 48% of equity as margin; the caps sit just above that so the
-# size is not clipped back to 5%. Open paper positions sized at 5% are scaled
-# once by 8/5. Live exchange positions are left alone.
-GATE_RISK_PCT = 0.08
+# Gate only. Toobit stays at 5% / 8%. On 2026-11-16 Gate stepped to 8% / 12%.
+# On 2026-11-17 the user allowed the larger size on the whole Gate book, so
+# the ordinary line moves to 12%. Qualified shorts stay at 12%: the daily stop
+# is 12%, and a bigger short is cut back to that. A 1% stop at 25x needs 48%
+# of equity as margin; the normal cap matches the short cap so 12% is not
+# clipped. Open paper sized at 8% is scaled once by 12/8. Live positions stay.
+GATE_RISK_PCT = 0.12
 GATE_HIGH_RISK_PCT = 0.12
 GATE_SELF_SHORT_RISK_PCT = 0.12
-GATE_NORMAL_MARGIN_CAP_PCT = 0.42
+GATE_NORMAL_MARGIN_CAP_PCT = 0.55
 GATE_HIGH_MARGIN_CAP_PCT = 0.55
 GATE_SELF_SHORT_MARGIN_CAP_PCT = 0.55
 GATE_MAX_TOTAL_MARGIN_PCT = 0.98
