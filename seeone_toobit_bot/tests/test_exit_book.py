@@ -555,6 +555,14 @@ class Manage(unittest.TestCase):
         ]
         self.assertEqual(S.stock_open_slots(slots), 1)
         self.assertEqual(S.ignition_open_slots(slots, "IGNITION 15m"), 1)
+        shorts = [{"paper_probe": True, "stock": True, "side": "SHORT", "path": "DAILY TREND"} for _ in range(4)]
+        self.assertIn("同一方向", S.stock_slot_block(shorts, "SHORT"))
+        self.assertIsNone(S.stock_slot_block(shorts, "LONG"))
+        self.assertIsNone(S.stock_slot_block(shorts + [{"paper_probe": True, "side": "LONG"}], "LONG"))
+        both = shorts[:2] + [{"paper_probe": True, "stock": True, "side": "LONG"} for _ in range(2)]
+        self.assertIn("同一方向", S.stock_slot_block(both, "LONG"))
+        self.assertIn("同一方向", S.stock_slot_block(both, "SHORT"))
+        self.assertIsNone(S.stock_slot_block([{**t, "exit_reason": "done"} for t in shorts], "SHORT"))
 
     @staticmethod
     def _ignition_bars(close: float, volume: float = 40.0):

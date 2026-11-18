@@ -839,9 +839,9 @@ class Bot:
         tsym = S.to_toobit(sig["symbol"])
         if S.STOCK_PAPER and (sig.get("stock") or S.is_stock_contract(tsym)):
             sig = {**sig, "paper_only": True, "stock": True}
-            open_n = S.stock_open_slots(self.st["trades"].values())
-            if open_n >= S.STOCK_PAPER_MAX:
-                self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+            blocked = S.stock_slot_block(self.st["trades"].values(), sig.get("side"))
+            if blocked:
+                self.note_skip(sig, blocked)
                 return
         else:
             live = self._live_if_paper_clears(sig, ev, "QUIET LONG", "LONG")
@@ -919,9 +919,9 @@ class Bot:
         if S.STOCK_PAPER and S.is_stock_contract(tsym):
             sig = {**sig, "paper_only": True, "stock": True}
             ev = {**ev, "reasons": list(ev.get("reasons") or []) + [S.STOCK_PAPER_NOTE]}
-            open_n = S.stock_open_slots(self.st["trades"].values())
-            if open_n >= S.STOCK_PAPER_MAX:
-                self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+            blocked = S.stock_slot_block(self.st["trades"].values(), sig.get("side"))
+            if blocked:
+                self.note_skip(sig, blocked)
                 return
         else:
             live = self._live_if_paper_clears(sig, ev, S.TREND_PATH, sig.get("side"))
@@ -987,9 +987,9 @@ class Bot:
             self.note_skip(sig, blocked)
             return
         if stock:
-            open_n = S.stock_open_slots(self.st["trades"].values())
-            if open_n >= S.STOCK_PAPER_MAX:
-                self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+            blocked = S.stock_slot_block(self.st["trades"].values(), sig.get("side"))
+            if blocked:
+                self.note_skip(sig, blocked)
                 return
         elif not live:
             open_n = S.ignition_open_slots(self.st["trades"].values(), sig.get("signal_path"))
@@ -1126,9 +1126,9 @@ class Bot:
             if S.STOCK_PAPER_NOTE not in reasons:
                 reasons.append(S.STOCK_PAPER_NOTE)
             ev = {**ev, "reasons": reasons}
-            open_n = S.stock_open_slots(self.st["trades"].values())
-            if open_n >= S.STOCK_PAPER_MAX:
-                self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+            blocked = S.stock_slot_block(self.st["trades"].values(), side)
+            if blocked:
+                self.note_skip(sig, blocked)
                 return False
         paper = bool(self.paper or sig.get("paper_only"))
         if S.paper_for_stopped_live(self.learner.p.get("rule_streaks"), sig.get("signal_path"), side, paper):
@@ -2268,9 +2268,9 @@ class Bot:
                 # A stock contract uses its own paper cap and does not take a crypto slot.
                 sig = {**sig, "paper_only": True}
                 if sig.get("stock"):
-                    open_n = S.stock_open_slots(self.st["trades"].values())
-                    if open_n >= S.STOCK_PAPER_MAX:
-                        self.note_skip(sig, f"股票合約模擬已有 {open_n} 筆，上限 {S.STOCK_PAPER_MAX}")
+                    blocked = S.stock_slot_block(self.st["trades"].values(), sig.get("side"))
+                    if blocked:
+                        self.note_skip(sig, blocked)
                         continue
                 else:
                     open_n = sum(1 for t in self.st["trades"].values()

@@ -239,6 +239,11 @@ STOCK_PX_GAP = 0.01
 # sample. Clearing the usual 20-close bar does not send a live order by itself.
 STOCK_PAPER = True
 STOCK_PAPER_MAX = 4
+# Two papers per side. Four daily-trend shorts already open are one side, so
+# they stay and do not spend the other side's two slots. A new stock on the
+# crowded side does not open. After those extra shorts close, the book is two
+# per side again. This does not send a stock live.
+STOCK_PAPER_SAME_SIDE_MAX = 2
 STOCK_PAPER_NOTE = "股票合約先走模擬，和加密貨幣分開計，直到這本書自己的期望為正"
 _STOCK_BASES = {"at": 0.0, "names": frozenset()}
 _STOCK_LOCK = threading.Lock()
@@ -665,6 +670,31 @@ def stock_open_slots(trades) -> int:
     return sum(1 for t in trades
                if isinstance(t, dict) and t.get("paper_probe") and not t.get("exit_reason")
                and t.get("stock"))
+
+
+def stock_side_slots(trades, side: str | None) -> int:
+    """Open stock papers on one side. A closed paper does not keep its slot."""
+    return sum(1 for t in trades
+               if isinstance(t, dict) and t.get("paper_probe") and not t.get("exit_reason")
+               and t.get("stock") and t.get("side") == side)
+
+
+def stock_slot_block(trades, side: str | None) -> str | None:
+    """Why a new stock paper stays out, or None when its side still has a slot.
+
+    A side already at two does not get another. A side that is over two from
+    before this cap stays open and does not take the other side's slots. The
+    total of four applies once neither side is over its own two.
+    """
+    total = stock_open_slots(trades)
+    same = stock_side_slots(trades, side) if side else 0
+    if side and same >= STOCK_PAPER_SAME_SIDE_MAX:
+        return f"股票合約同一方向模擬已有 {same} 筆，上限 {STOCK_PAPER_SAME_SIDE_MAX}"
+    other = total - same
+    if not side or other <= STOCK_PAPER_SAME_SIDE_MAX:
+        if total >= STOCK_PAPER_MAX:
+            return f"股票合約模擬已有 {total} 筆，上限 {STOCK_PAPER_MAX}"
+    return None
 IGNITION_RULES = {
     "1m": {"base_bars": 20, "base_max": 0.025, "vol_min": 8.0, "break_max": 0.06,
            "stop_min": 0.008, "stop_max": 0.12},
