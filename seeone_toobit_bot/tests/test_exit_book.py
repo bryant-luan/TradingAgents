@@ -824,6 +824,32 @@ class EntryRulesBeforeOrder(unittest.TestCase):
         self.assertFalse(any("不再開" in f or "趨勢消失" in f for f in fails))
 
 
+class BtcUserOrder(unittest.TestCase):
+    def test_side_follows_the_higher_timeframe_they_traded(self):
+        self.assertEqual(S.btc_user_side(-2.75), "SHORT")
+        self.assertEqual(S.btc_user_side(2.75), "LONG")
+        self.assertIsNone(S.btc_user_side(-1.3))
+        self.assertIsNone(S.btc_user_side(None))
+
+    def test_size_is_eighty_times_with_most_of_the_margin(self):
+        spec = {"multiplier": 0.001, "min_contracts": 1, "max_leverage": 100,
+                "mmr_tiers": [(10 ** 12, 0.004, 100)]}
+        # 60,000 with an 0.80% stop. 80x still clears liquidation.
+        sz = S.btc_user_size(100, 60000, 60000 * (1 - 0.008), spec, 100)
+        self.assertIsNotNone(sz)
+        self.assertEqual(sz["leverage"], 80)
+        self.assertGreater(sz["margin"], 70)
+        self.assertLess(sz["margin"], 85)
+
+    def test_a_stop_past_liquidation_steps_the_leverage_down(self):
+        spec = {"multiplier": 0.001, "min_contracts": 1, "max_leverage": 100,
+                "mmr_tiers": [(10 ** 12, 0.005, 100)]}
+        sz = S.btc_user_size(100, 100, 94, spec, 100)
+        self.assertIsNotNone(sz)
+        self.assertLess(sz["leverage"], 80)
+        self.assertLess(0.06, (1 / sz["leverage"]) - 0.005)
+
+
 class TrendFlatBeforeEntry(unittest.TestCase):
     def test_a_long_already_under_the_exit_line_is_not_sent(self):
         # HEI was -0.90 and ENSO was -1.15. Both filled and closed within a second.

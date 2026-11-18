@@ -441,7 +441,8 @@ class Bot:
             # touching the stop. Gate CRWV the same night was cut at -0.48R and would have
             # finished about flat. Reviews under 50% were still +0.69R in both halves.
             if tr.get("source") in (SELF_SOURCE, ADOPT_SOURCE) and not tr.get("exit_reason"):
-                if tr.get("path") != S.BOUNCE_PATH:
+                # A BTC order is held to its stop, the way the position was opened.
+                if tr.get("path") != S.BOUNCE_PATH and not str(tr.get("tsym") or "").startswith("BTC"):
                     close, why = self.selfscan.recheck(tr)
                     if close:
                         with self._protect_lock:
@@ -1124,7 +1125,8 @@ class Bot:
         px = float(sig.get("entry_price") or 0)
         stop = float(sig.get("stop_price") or 0)
         sl_pct = abs(px - stop) / px if px else 1.0
-        exchange_slice = (
+        btc_user = bool(sig.get("btc_user"))
+        exchange_slice = btc_user or (
             S.toobit_exchange_entry(venue, sig.get("signal_path"), sig.get("side"), shown_ev, sl_pct)
             or S.gate_exchange_entry(venue, sig.get("signal_path"), sig.get("side"), shown_ev, sl_pct))
         if S.NEW_ENTRIES_PAPER and not sig.get("paper_only") and not exchange_slice:
@@ -1132,7 +1134,7 @@ class Bot:
             ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                 "實盤持續虧損，這段維持模擬。交易所裡已有的倉繼續照出場規則處理。"]}
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
-        failed = S.entry_rule_failures(
+        failed = None if btc_user else S.entry_rule_failures(
             sig.get("signal_path"), source, side, getattr(self, "htf", None),
             getattr(self, "m15", None),
             self.learner.p.get("m15_max", S.M15_MAX_DEFAULT),
@@ -1202,7 +1204,7 @@ class Bot:
         # The replay fills the signal close. A live mark a minute later is a different trade.
         # A stock order already replaced that close with the cash price.
         price = (float(sig["entry_price"])
-                 if S.is_stock_contract(sym) or (sig.get("paper_only") and (sig.get("ignition") or sig.get("trend")))
+                 if btc_user or S.is_stock_contract(sym) or (sig.get("paper_only") and (sig.get("ignition") or sig.get("trend")))
                  else self.tb.price(sym))
         stop = float(sig["stop_price"])
         if (side == "LONG" and price <= stop * 1.001) or (side == "SHORT" and price >= stop * 0.999):
@@ -1247,24 +1249,30 @@ class Bot:
                 f"大盤偏空，期望值 {ev_r:+.2f}R 未達實盤 +{ev_floor:.2f}R，以一般風險開倉，記入實盤樣本"
                 if bear else
                 f"期望值 {ev_r:+.2f}R 未達實盤 +{ev_floor:.2f}R，以一般風險開倉，記入實盤樣本"]
-        room_pct = getattr(self, "day_room", equity * risk_pct) / equity
-        if not probe and room_pct < limits["risk"]:
-            self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
-                                f"已計入持倉到止損的風險)，不足 {limits['risk']:.0%} 最低風險")
-            return False
-        if not probe and room_pct < risk_pct:
-            ev["reasons"] = ev["reasons"] + [f"風險 {risk_pct:.0%} 受每日止損剩餘額度限制為 {room_pct:.1%}"]
-            risk_pct = room_pct
-        sz = S.size_position(equity, price, stop, spec, risk_pct, margin_cap)
-        if not sz:
-            self.note_skip(sig, f"無法以至少 {S.MIN_RISK_PCT:.0%} 風險建立部位 (槓桿/保證金上限或最小下單量)，不開小倉")
-            return False
-        used = sum(t.get("margin") or 0 for t in self._risk_trades())
-        room = equity * limits["total_margin"] - used
-        if not probe and sz["margin"] > room:
-            self.note_skip(sig, f"這筆保證金 {sz['margin']:.0f}u、{sz['leverage']}x，"
-                                f"剩餘保證金額度 {max(0, room):.0f}u，總上限 {limits['total_margin']:.0%}，再開不下")
-            return False
+        if btc_user:
+            sz = sig.get("_size")
+            if not sz:
+                self.note_skip(sig, "BTC 這筆沒有照 80 倍算出張數")
+                return False
+        else:
+            room_pct = getattr(self, "day_room", equity * risk_pct) / equity
+            if not probe and room_pct < limits["risk"]:
+                self.note_skip(sig, f"今日剩餘虧損額度僅 {room_pct:.1%} 權益 (每日止損 {S.DAILY_STOP_PCT:.0%}，"
+                                    f"已計入持倉到止損的風險)，不足 {limits['risk']:.0%} 最低風險")
+                return False
+            if not probe and room_pct < risk_pct:
+                ev["reasons"] = ev["reasons"] + [f"風險 {risk_pct:.0%} 受每日止損剩餘額度限制為 {room_pct:.1%}"]
+                risk_pct = room_pct
+            sz = S.size_position(equity, price, stop, spec, risk_pct, margin_cap)
+            if not sz:
+                self.note_skip(sig, f"無法以至少 {S.MIN_RISK_PCT:.0%} 風險建立部位 (槓桿/保證金上限或最小下單量)，不開小倉")
+                return False
+            used = sum(t.get("margin") or 0 for t in self._risk_trades())
+            room = equity * limits["total_margin"] - used
+            if not probe and sz["margin"] > room:
+                self.note_skip(sig, f"這筆保證金 {sz['margin']:.0f}u、{sz['leverage']}x，"
+                                    f"剩餘保證金額度 {max(0, room):.0f}u，總上限 {limits['total_margin']:.0%}，再開不下")
+                return False
         plan = S.tp_plan(sig, sz["contracts"], spec["min_contracts"])
         entry_info = dict(signal_id=sig["id"], source=source, symbol=sym, side=side, price=price,
                           stop=stop, sizing=sz, tp_plan=plan, score=ev["score"], regime=regime,
@@ -1819,6 +1827,63 @@ class Bot:
             log_event("SKIP", signal_id=key, symbol=sig["symbol"], side=sig["side"], reason=why)
 
     # ------------------------------------------------------------------ cycle
+    def _try_btc_user(self, equity: float):
+        """One BTC order in the user's style: 80x, most of the free margin, stop at 1.5×ATR15m.
+
+        A venue that already has a live BTC position does not add another.
+        The day's two live slots still apply. The stop is the exit.
+        """
+        if self.paper or self.dry:
+            return
+        if S.live_opens_today(self.st.get("trades", {}).values(), self.st.get("closed")) >= S.LIVE_DAY_MAX:
+            return
+        sym = S.to_toobit(S.BTC_USER_SYMBOL)
+        if any(t.get("tsym") == sym and not t.get("paper") and not t.get("exit_reason")
+               for t in self.st["trades"].values()):
+            return
+        try:
+            if any(p.get("symbol") == sym for p in self.tb.positions()):
+                return
+            dirs = self.so.directions()
+            htf = S.htf_score(dirs)
+            side = S.btc_user_side(htf)
+            if side is None:
+                return
+            spec = self.tb.specs().get(sym)
+            if not spec:
+                return
+            pl = self.selfscan.plan(sym, side)
+            if not pl:
+                return
+            used = sum(t.get("margin") or 0 for t in self._risk_trades())
+            sz = S.btc_user_size(equity, pl["price"], pl["stop"], spec, equity - used)
+            if not sz:
+                log_event("SKIP", symbol=sym, side=side,
+                          reason="BTC 照 80 倍、約八成保證金排不下：權益或可用保證金不夠，或止損放不進強平價")
+                return
+            bucket = int(time.time() // 900)
+            sig = {
+                "id": f"btcuser:{S.BTC_USER_SYMBOL}:{side}:{bucket}",
+                "symbol": S.BTC_USER_SYMBOL, "side": side, "status": "ACTIVE",
+                "timeframe": "15m", "entry_price": pl["price"], "stop_price": pl["stop"],
+                "current_price": pl["price"], "signal_path": "BTC", "btc_user": True,
+                "_size": sz,
+                "levels": [{"label": f"TP{i + 1}", "kind": "TP", "sequence": i + 1,
+                            "r_multiple": mult, "price": px}
+                           for i, (mult, px) in enumerate(zip((1.0, 1.5, 2.0, 3.0, 4.0), pl["tps"]))],
+            }
+            if sig["id"] in self.st.get("traded_ids", []):
+                return
+            reason = (f"照你的 BTC 單：{sz['leverage']}x、保證金 {sz['margin']:.0f}u、"
+                      f"止損 {sz['sl_pct']:.2f}%（1.5×15 分鐘波動）。"
+                      f"1h/4h {htf:+.2f}，{'做空' if side == 'SHORT' else '做多'}，持有到止損")
+            ev = {"ok": True, "score": 0, "tier": "NORMAL", "reasons": [reason], "factors": {},
+                  "skip": None, "cur_r": 0.0, "analysis": None}
+            self.htf = htf
+            self.open_trade(sig, ev, "BTC", (htf, "BTC"), equity)
+        except Exception as e:
+            log_event("ERROR", where="btc_user", error=repr(e)[:200])
+
     def cycle(self):
         self.learner.absorb_peers()
         if not self.dry:
@@ -1868,6 +1933,7 @@ class Bot:
             self.reconcile(positions)
 
         equity, _ = self.equity()
+        self._try_btc_user(equity)
         self._start_ignition(positions)
         self._take_ignitions(equity)
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
