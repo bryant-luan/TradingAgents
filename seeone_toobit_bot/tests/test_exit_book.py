@@ -535,9 +535,9 @@ class Manage(unittest.TestCase):
                                for i in range(1, 21)], "QUIET SHORT", "SHORT")
         self.assertTrue(ready["ready"])
         self.assertTrue(S.clears_live_target(ready))
-        exact = dict(ready, win=0.60, mean_r=0.50)
+        exact = dict(ready, win=0.55, mean_r=0.30)
         self.assertFalse(S.clears_live_target(exact))
-        thin = dict(ready, n=19)
+        thin = dict(ready, n=7)
         self.assertFalse(S.clears_live_target(thin))
         stocked = S.path_sample([dict(short, stock=True)], "QUIET SHORT", "SHORT")
         self.assertEqual(stocked["n"], 0)
@@ -576,9 +576,9 @@ class Manage(unittest.TestCase):
         self.assertIn("同一方向", S.stock_slot_block(both, "LONG"))
         self.assertIn("同一方向", S.stock_slot_block(both, "SHORT"))
         self.assertIsNone(S.stock_slot_block([{**t, "exit_reason": "done"} for t in shorts], "SHORT"))
-        self.assertEqual(S.LIVE_WIN, 0.60)
-        self.assertEqual(S.LIVE_R, 0.50)
-        self.assertEqual(S.QUIET_LONG_READY_N, 20)
+        self.assertEqual(S.LIVE_WIN, 0.55)
+        self.assertEqual(S.LIVE_R, 0.30)
+        self.assertEqual(S.QUIET_LONG_READY_N, 8)
         self.assertEqual(S.IGNITION_PAPER_MAX, 12)
         self.assertEqual(S.TREND_PAPER_MAX, 8)
 
@@ -612,7 +612,7 @@ class Manage(unittest.TestCase):
             b._open_quiet_long_paper(sig, {"reasons": []}, "安靜期強勢多", (0.0, "NEUTRAL"), 100)
             self.assertEqual(opened, [False])
             opened.clear()
-            b.st["closed"] = closes("QUIET LONG", "LONG", 19)
+            b.st["closed"] = closes("QUIET LONG", "LONG", 7)
             thin = {"paper_only": True, "symbol": "ETHUSDT", "side": "LONG", "id": "q2",
                     "signal_path": "QUIET LONG"}
             b._open_quiet_long_paper(thin, {"reasons": []}, "安靜期強勢多", (0.0, "NEUTRAL"), 100)
