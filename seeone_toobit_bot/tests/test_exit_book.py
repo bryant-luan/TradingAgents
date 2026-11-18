@@ -150,6 +150,7 @@ class FullLive(unittest.TestCase):
         self.assertIn("不再開", S.gate_measured_loss("gate", "SELF ANALYSIS", "LONG", False))
         self.assertIn("不再開", S.gate_measured_loss("gate", "IGNITION 1m", "LONG", False))
         self.assertIsNone(S.gate_measured_loss("gate", "IGNITION 15m", "LONG", False))
+        self.assertTrue(S.NEW_ENTRIES_PAPER)
         self.assertFalse(S.toobit_open_now_live("toobit", "SHORT", 0.20))
         self.assertFalse(S.toobit_open_now_live("toobit", "SHORT", 0.20, 54))
         self.assertFalse(S.toobit_open_now_live("toobit", "SHORT", 0.20, 55))

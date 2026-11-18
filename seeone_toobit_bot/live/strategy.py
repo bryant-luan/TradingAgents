@@ -653,6 +653,10 @@ SELF_SHORT_MAX_SAME_SIDE = 5
 # on the exchange stop. Promotion is the quiet-long bar, recorded by the close
 # note, and it does not turn the path back on by itself.
 SELF_ANALYSIS_PAPER = True
+# Live entries kept losing. Every new order stays on paper until a book
+# clears a win rate above 60%, mean above +0.50R, and both halves positive.
+# Positions already on the exchange keep their stops and targets.
+NEW_ENTRIES_PAPER = True
 # The live book stays at 3. Open paper positions keep their stops.
 SELF_ANALYSIS_PAPER_MAX = 6
 # A self-scan short under the live line is paper, not a stopped rule.

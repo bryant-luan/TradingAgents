@@ -1119,6 +1119,10 @@ class Bot:
                 self._open_ignition_paper(sig, item["ev"], item.get("source") or "IGNITION", regime, size_eq)
 
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
+        if S.NEW_ENTRIES_PAPER and not sig.get("paper_only"):
+            sig = {**sig, "paper_only": True}
+            ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                "實盤持續虧損，新單全部改模擬。交易所裡已有的倉繼續照出場規則處理。"]}
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
         if S.STOCK_PAPER and S.is_stock_contract(sym):
             sig = {**sig, "paper_only": True, "stock": True}
