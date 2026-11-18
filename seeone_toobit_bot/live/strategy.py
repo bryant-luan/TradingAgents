@@ -598,9 +598,8 @@ def gate_flush_goes_live(exchange: str, sl_pct: float) -> bool:
 def toobit_mid_short_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
     """Toobit self shorts from +0.55R up to +0.60R are the live short.
 
-    With the two-hour run already under +1R, that band is 11 closes, 73% wins,
-    +0.65R, halves +1.04R and +0.33R. A short that already ran +1R does not
-    reach this check. Under +0.55R stays closed.
+    That band is 18 closes, 56% wins, +0.23R, halves +0.33R and +0.13R.
+    A short that already ran +1R does not reach this check. Under +0.55R stays closed.
     """
     if exchange != "toobit" or side != "SHORT" or ev_r is None:
         return False
@@ -620,8 +619,24 @@ LIVE_BAND_CONFIRM_MIN_PROB = 45.0
 
 
 def toobit_long_live(exchange: str, side: str | None, sl_pct: float) -> bool:
-    """Toobit self longs with a stop of at least 3% are the live long."""
+    """Toobit self longs with a stop of at least 3% are the live long.
+
+    25 closes, 60% wins, +0.38R, halves +0.36R and +0.39R. A tighter stop stays paper.
+    """
     return exchange == "toobit" and side == "LONG" and sl_pct >= TOOBIT_LONG_LIVE_MIN_SL
+
+
+def toobit_exchange_entry(exchange: str, path: str | None, side: str | None,
+                          ev_r: float | None, sl_pct: float) -> bool:
+    """These two Toobit self-scan books go to the exchange. Every other new order stays paper.
+
+    Shorts from +0.55R up to +0.60R, and longs with a stop of at least 3%.
+    """
+    if exchange != "toobit" or path != "SELF ANALYSIS":
+        return False
+    if toobit_mid_short_live(exchange, side, ev_r):
+        return True
+    return side == "LONG" and toobit_long_live(exchange, side, sl_pct)
 
 
 # The planner drops a stop wider than 6%. The top quarter of the 3h range is chasing.
@@ -653,9 +668,9 @@ SELF_SHORT_MAX_SAME_SIDE = 5
 # on the exchange stop. Promotion is the quiet-long bar, recorded by the close
 # note, and it does not turn the path back on by itself.
 SELF_ANALYSIS_PAPER = True
-# Live entries kept losing. Every new order stays on paper until a book
-# clears a win rate above 60%, mean above +0.50R, and both halves positive.
-# Positions already on the exchange keep their stops and targets.
+# Live entries kept losing. Every new order stays on paper except two Toobit
+# self-scan books: shorts from +0.55R up to +0.60R, and longs with a stop of
+# at least 3%. Positions already on the exchange keep their stops and targets.
 NEW_ENTRIES_PAPER = True
 # The live book stays at 3. Open paper positions keep their stops.
 SELF_ANALYSIS_PAPER_MAX = 6
