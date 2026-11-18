@@ -1132,6 +1132,13 @@ class Bot:
             ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                 "實盤持續虧損，這段維持模擬。交易所裡已有的倉繼續照出場規則處理。"]}
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
+        gone = S.immediate_trend_flat(
+            sig.get("signal_path"), source, side, getattr(self, "htf", None),
+            after_red=bool(sig.get("after_red")),
+            recipe_spike=bool(sig.get("recipe_spike")))
+        if gone:
+            self.note_skip(sig, gone)
+            return False
         if S.STOCK_PAPER and S.is_stock_contract(sym):
             sig = {**sig, "paper_only": True, "stock": True}
             reasons = list(ev.get("reasons") or [])

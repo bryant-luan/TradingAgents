@@ -795,5 +795,25 @@ class DailyTrend(unittest.TestCase):
         self.assertIsNone(S.daily_trend_holds(self.bars(up[:5]), self.now, "LONG"))
 
 
+class TrendFlatBeforeEntry(unittest.TestCase):
+    def test_a_long_already_under_the_exit_line_is_not_sent(self):
+        # HEI was -0.90 and ENSO was -1.15. Both filled and closed within a second.
+        for htf in (-0.90, -1.15):
+            why = S.immediate_trend_flat("SELF ANALYSIS", "自選驗算", "LONG", htf)
+            self.assertIn("不送", why)
+            self.assertIn("趨勢消失", why)
+        self.assertIsNone(S.immediate_trend_flat("SELF ANALYSIS", "自選驗算", "LONG", -0.40))
+
+    def test_a_self_short_uses_its_own_line_and_held_paths_stay_open(self):
+        # Aligned -2.0 is still above the self-short exit line of -2.5.
+        self.assertIsNone(S.immediate_trend_flat("SELF ANALYSIS", "自選驗算", "SHORT", 2.0))
+        self.assertIn("不送", S.immediate_trend_flat("SELF ANALYSIS", "自選驗算", "SHORT", 2.6))
+        self.assertIsNone(S.immediate_trend_flat("IGNITION 15m", "起漲", "LONG", -1.2))
+        self.assertIsNone(S.immediate_trend_flat(S.TREND_PATH, "日線", "LONG", -1.2))
+        self.assertIsNone(S.immediate_trend_flat(S.BOUNCE_PATH, "自選驗算", "LONG", -1.2))
+        self.assertIsNone(S.immediate_trend_flat(
+            "SELF ANALYSIS", "自選驗算", "LONG", -1.2, recipe_spike=True))
+
+
 if __name__ == "__main__":
     unittest.main()
