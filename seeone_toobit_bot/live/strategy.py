@@ -639,6 +639,28 @@ def toobit_exchange_entry(exchange: str, path: str | None, side: str | None,
     return side == "LONG" and toobit_long_live(exchange, side, sl_pct)
 
 
+def gate_mid_short_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
+    """Gate uses the same self-short band as Toobit: +0.55R up to +0.60R."""
+    if exchange != "gate" or side != "SHORT" or ev_r is None:
+        return False
+    return TOOBIT_SHORT_KEEP_PAPER_EV <= ev_r < SELF_SHORT_FULL_RISK_EV
+
+
+def gate_long_live(exchange: str, side: str | None, sl_pct: float) -> bool:
+    """Gate uses the same self-long stop as Toobit: at least 3%."""
+    return exchange == "gate" and side == "LONG" and sl_pct >= TOOBIT_LONG_LIVE_MIN_SL
+
+
+def gate_exchange_entry(exchange: str, path: str | None, side: str | None,
+                        ev_r: float | None, sl_pct: float) -> bool:
+    """The same two self-scan books go to Gate. Every other new Gate order stays paper."""
+    if exchange != "gate" or path != "SELF ANALYSIS":
+        return False
+    if gate_mid_short_live(exchange, side, ev_r):
+        return True
+    return side == "LONG" and gate_long_live(exchange, side, sl_pct)
+
+
 # The planner drops a stop wider than 6%. The top quarter of the 3h range is chasing.
 TOOBIT_LONG_LIVE_MAX_SL = 0.06
 TOOBIT_LONG_LIVE_MAX_RPOS = 0.75
@@ -653,6 +675,19 @@ def toobit_wide_long_review(exchange: str, sl_pct: float, rpos: float | None) ->
     if rpos is None or rpos > TOOBIT_LONG_LIVE_MAX_RPOS:
         return False
     return toobit_long_live(exchange, "LONG", sl_pct) and sl_pct <= TOOBIT_LONG_LIVE_MAX_SL
+
+
+def gate_wide_long_review(exchange: str, sl_pct: float, rpos: float | None) -> bool:
+    """A Gate long with a 3% to 6% stop, out of the top quarter of its range, gets a review."""
+    if rpos is None or rpos > TOOBIT_LONG_LIVE_MAX_RPOS:
+        return False
+    return gate_long_live(exchange, "LONG", sl_pct) and sl_pct <= TOOBIT_LONG_LIVE_MAX_SL
+
+
+def exchange_wide_long_review(exchange: str, sl_pct: float, rpos: float | None) -> bool:
+    """Toobit and Gate share the 3% to 6% long review."""
+    return (toobit_wide_long_review(exchange, sl_pct, rpos)
+            or gate_wide_long_review(exchange, sl_pct, rpos))
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
@@ -668,9 +703,10 @@ SELF_SHORT_MAX_SAME_SIDE = 5
 # on the exchange stop. Promotion is the quiet-long bar, recorded by the close
 # note, and it does not turn the path back on by itself.
 SELF_ANALYSIS_PAPER = True
-# Live entries kept losing. Every new order stays on paper except two Toobit
-# self-scan books: shorts from +0.55R up to +0.60R, and longs with a stop of
-# at least 3%. Positions already on the exchange keep their stops and targets.
+# Live entries kept losing. Every new order stays on paper except the same two
+# self-scan books on Toobit and Gate: shorts from +0.55R up to +0.60R, and
+# longs with a stop of at least 3%. Positions already on the exchange keep
+# their stops and targets.
 NEW_ENTRIES_PAPER = True
 # The live book stays at 3. Open paper positions keep their stops.
 SELF_ANALYSIS_PAPER_MAX = 6
@@ -1484,7 +1520,7 @@ def gate_soft_short_live(exchange: str, side: str | None, ev_r: float | None) ->
 
 
 def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_live: bool,
-                       ev_r: float | None = None) -> str | None:
+                       ev_r: float | None = None, sl_pct: float | None = None) -> str | None:
     """Gate books that are already negative in both halves do not open again.
 
     A self-scan short under +0.60R has 40 live closes, every band negative in
@@ -1500,12 +1536,15 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
     if exchange != "gate":
         return None
     if (path == "SELF ANALYSIS" and side == "SHORT" and not full_live
-            and not gate_soft_short_live(exchange, side, ev_r)):
-        return ("Gate 自選空單這段期望不再開。+0.25R 到 +0.60R 的實盤前後半都是負的。"
-                "+0.15R 到 +0.25R 的 15 筆勝率 60%、平均 +0.23R，前半 -0.19R、後半 +0.60R，仍送實盤。"
-                "期望至少 +0.60R 的原實盤條件也仍開")
+            and not gate_soft_short_live(exchange, side, ev_r)
+            and not gate_mid_short_live(exchange, side, ev_r)):
+        return ("Gate 自選空單這段期望不再開。+0.25R 到 +0.55R 仍不開。"
+                "+0.55R 到 +0.60R 與 Toobit 同一組參數，送實盤。"
+                "+0.15R 到 +0.25R 維持模擬。期望至少 +0.60R 的原條件仍可開，但新單維持模擬")
     if path == "SELF ANALYSIS" and side == "LONG":
-        return "Gate 自選多單不再開。實盤 2 筆全虧，模擬 6 筆勝率 17%、-0.36R，後半更差"
+        if sl_pct is not None and gate_long_live(exchange, side, sl_pct):
+            return None
+        return "Gate 自選多單止損小於 3% 不再開。止損 3% 以上與 Toobit 同一組參數，送實盤"
     if path == "IGNITION 1m":
         return ("Gate 1 分啟動不再開。模擬 66 筆勝率 32%、平均 -0.24R，"
                 "前後半都是負的，-119 USDT。最近 15 筆仍是 -0.40R")

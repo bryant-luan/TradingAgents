@@ -1124,8 +1124,9 @@ class Bot:
         px = float(sig.get("entry_price") or 0)
         stop = float(sig.get("stop_price") or 0)
         sl_pct = abs(px - stop) / px if px else 1.0
-        exchange_slice = S.toobit_exchange_entry(
-            venue, sig.get("signal_path"), sig.get("side"), shown_ev, sl_pct)
+        exchange_slice = (
+            S.toobit_exchange_entry(venue, sig.get("signal_path"), sig.get("side"), shown_ev, sl_pct)
+            or S.gate_exchange_entry(venue, sig.get("signal_path"), sig.get("side"), shown_ev, sl_pct))
         if S.NEW_ENTRIES_PAPER and not sig.get("paper_only") and not exchange_slice:
             sig = {**sig, "paper_only": True}
             ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
@@ -2133,13 +2134,17 @@ class Bot:
             elif src == SELF_SOURCE and sig["side"] not in self.selfscan.sides(htf, btc1h):
                 px = float(sig["entry_price"] or 0)
                 wide_sl = abs(px - float(sig["stop_price"])) / px if px else 0.0
-                if not S.toobit_long_live(getattr(self.tb, "name", "") or "", sig["side"], wide_sl):
+                venue_name = getattr(self.tb, "name", "") or ""
+                if not (S.toobit_long_live(venue_name, sig["side"], wide_sl)
+                        or S.gate_long_live(venue_name, sig["side"], wide_sl)):
                     self.note_skip(sig, "自選驗算做多未開放：" + self.selfscan.long_gate(htf, btc1h)[1])
                     continue
             if src == SELF_SOURCE and not bounce:
                 sl_pct = abs(float(sig["entry_price"]) - float(sig["stop_price"])) / float(sig["entry_price"])
-                if sl_pct >= S.SELF_MAX_SL_PCT and not S.toobit_long_live(
-                        getattr(self.tb, "name", "") or "", sig["side"], sl_pct):
+                venue_name = getattr(self.tb, "name", "") or ""
+                if sl_pct >= S.SELF_MAX_SL_PCT and not (
+                        S.toobit_long_live(venue_name, sig["side"], sl_pct)
+                        or S.gate_long_live(venue_name, sig["side"], sl_pct)):
                     self.note_skip(sig, f"自選驗算止損 {sl_pct:.2%} ≥ {S.SELF_MAX_SL_PCT:.0%}：止損 1-1.8% 的評估只有 40-56% "
                                         f"先到 TP1，實盤 9 筆只贏 1 筆；1% 以下的空單 73-75%")
                     continue
@@ -2244,13 +2249,15 @@ class Bot:
                     (ev.get("analysis") or {}).get("ev_r"), r24, gap, ev_floor)
             shown_ev = (ev.get("analysis") or {}).get("ev_r")
             venue = getattr(self.tb, "name", "") or ""
-            mid_live = S.toobit_mid_short_live(venue, sig["side"], shown_ev)
+            mid_live = (S.toobit_mid_short_live(venue, sig["side"], shown_ev)
+                        or S.gate_mid_short_live(venue, sig["side"], shown_ev))
             shown_prob = (ev.get("analysis") or {}).get("prob")
             open_now = S.toobit_open_now_live(venue, sig["side"], shown_ev, shown_prob)
             soft_live = S.gate_soft_short_live(venue, sig["side"], shown_ev)
             long_sl = abs(float(sig["entry_price"] or 0) - float(sig["stop_price"])) / float(sig["entry_price"] or 1)
             long_live = (src == SELF_SOURCE and not bounce
-                         and S.toobit_long_live(venue, sig["side"], long_sl))
+                         and (S.toobit_long_live(venue, sig["side"], long_sl)
+                              or S.gate_long_live(venue, sig["side"], long_sl)))
             self_paper = (S.SELF_ANALYSIS_PAPER and src == SELF_SOURCE and not bounce
                           and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long")
                           and not full_live and not mid_live and not long_live and not soft_live
@@ -2258,7 +2265,7 @@ class Bot:
             if self_paper and S.self_short_sample_live(sl_pct):
                 self_paper = False
             measured = None if sig.get("stock") else (
-                S.gate_measured_loss(venue, sig.get("signal_path"), sig["side"], full_live, shown_ev)
+                S.gate_measured_loss(venue, sig.get("signal_path"), sig["side"], full_live, shown_ev, long_sl)
                 or S.toobit_measured_loss(venue, sig.get("signal_path"), sig["side"], shown_ev, full_live,
                                            (ev.get("analysis") or {}).get("prob")))
             if measured:
@@ -2287,16 +2294,19 @@ class Bot:
                             "洗盤多單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
             if soft_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "Gate 自選空單期望 +0.15R 到 +0.25R 送實盤。15 筆勝率 60%、平均 +0.23R，"
-                    "前半 -0.19R、後半 +0.60R。+0.25R 到 +0.60R 仍不開"]}
+                    "Gate 自選空單期望 +0.15R 到 +0.25R 維持模擬。"
+                    "+0.25R 到 +0.55R 仍不開。+0.55R 到 +0.60R 送實盤"]}
             if mid_live:
+                book = "Gate" if venue == "gate" else "Toobit"
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "Toobit 自選空單期望 +0.55R 到 +0.60R 送實盤。18 筆勝率 56%、"
-                    "平均 +0.23R，前半 +0.33R、後半 +0.13R"]}
+                    f"{book} 自選空單期望 +0.55R 到 +0.60R 送實盤。"
+                    "Toobit 這段 18 筆勝率 56%、平均 +0.23R，前半 +0.33R、後半 +0.13R"]}
             if long_live:
+                book = "Gate" if venue == "gate" else "Toobit"
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "Toobit 自選多單止損 3% 以上送實盤。25 筆勝率 60%、平均 +0.38R，"
-                    "前半 +0.36R、後半 +0.39R。止損小於 3% 的繼續模擬"]}
+                    f"{book} 自選多單止損 3% 以上送實盤。"
+                    "Toobit 這段 25 筆勝率 60%、平均 +0.38R，前半 +0.36R、後半 +0.39R。"
+                    "止損小於 3% 的繼續停開"]}
             if (venue == "toobit" and full_live and src == SELF_SOURCE and sig["side"] == "SHORT"
                     and not bounce and not sig.get("quiet_strong_short")):
                 sample = S.path_sample(self.st["closed"], "SELF ANALYSIS", "SHORT")
