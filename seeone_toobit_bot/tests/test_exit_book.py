@@ -128,6 +128,7 @@ class FullLive(unittest.TestCase):
         self.assertTrue(S.toobit_wide_long_review("toobit", 0.04, 0.20))
         self.assertTrue(S.toobit_wide_long_review("toobit", 0.04, 0.70))
         self.assertFalse(S.toobit_wide_long_review("toobit", 0.04, 0.76))
+        self.assertEqual(S.GATE_SOFT_SHORT_MIN_PROB, 50.0)
         self.assertTrue(S.gate_soft_short_live("gate", "SHORT", 0.20))
         self.assertFalse(S.gate_soft_short_live("gate", "SHORT", 0.14))
         self.assertFalse(S.gate_soft_short_live("gate", "SHORT", 0.25))

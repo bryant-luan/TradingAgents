@@ -1545,8 +1545,11 @@ class SelfScanner:
             if side == "SHORT" and getattr(self.tb, "name", "") == "gate":
                 # The +0.15R to +0.25R closes were entered at 52.5% to 56%.
                 # A calibrated 60% floor was keeping that band from opening.
+                # Inside that band, 50% is enough: the 50–52.5% replay was +1.03R.
                 floor_prob = SHORT_MIN_PROB
                 floor_ev = min(floor_ev, S.GATE_SOFT_SHORT_MIN_EV)
+                if S.gate_soft_short_live("gate", "SHORT", ev):
+                    floor_prob = S.GATE_SOFT_SHORT_MIN_PROB
             # The market is still short. A review that already cleared quality 60
             # opens from +0.15R so the bear is traded, not watched. Quality under 60
             # stays out. The flush long is unchanged: it still needs the 15m turn.

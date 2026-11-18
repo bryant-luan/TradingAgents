@@ -1446,6 +1446,9 @@ def flush_live(exchange: str) -> bool:
 # +0.60R. The bands from +0.25R up to +0.60R stay closed: both halves lost.
 GATE_SOFT_SHORT_MIN_EV = 0.15
 GATE_SOFT_SHORT_MAX_EV = 0.25
+# 50–52.5% on the 5m exit replay was 62% wins and +1.03R. The closed
+# +0.15R to +0.25R book itself was entered at 52.5% and up.
+GATE_SOFT_SHORT_MIN_PROB = 50.0
 
 
 def gate_soft_short_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
