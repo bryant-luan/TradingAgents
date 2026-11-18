@@ -1119,10 +1119,17 @@ class Bot:
                 self._open_ignition_paper(sig, item["ev"], item.get("source") or "IGNITION", regime, size_eq)
 
     def open_trade(self, sig: dict, ev: dict, source: str, regime: tuple, equity: float) -> bool:
-        if S.NEW_ENTRIES_PAPER and not sig.get("paper_only"):
+        venue = getattr(self.tb, "name", "") or ""
+        shown_ev = (ev.get("analysis") or {}).get("ev_r")
+        px = float(sig.get("entry_price") or 0)
+        stop = float(sig.get("stop_price") or 0)
+        sl_pct = abs(px - stop) / px if px else 1.0
+        exchange_slice = S.toobit_exchange_entry(
+            venue, sig.get("signal_path"), sig.get("side"), shown_ev, sl_pct)
+        if S.NEW_ENTRIES_PAPER and not sig.get("paper_only") and not exchange_slice:
             sig = {**sig, "paper_only": True}
             ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                "實盤持續虧損，新單全部改模擬。交易所裡已有的倉繼續照出場規則處理。"]}
+                "實盤持續虧損，這段維持模擬。交易所裡已有的倉繼續照出場規則處理。"]}
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
         if S.STOCK_PAPER and S.is_stock_contract(sym):
             sig = {**sig, "paper_only": True, "stock": True}
@@ -2284,12 +2291,12 @@ class Bot:
                     "前半 -0.19R、後半 +0.60R。+0.25R 到 +0.60R 仍不開"]}
             if mid_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "Toobit 自選空單期望 +0.55R 到 +0.60R 送實盤。兩小時未走滿 +1R 的 11 筆"
-                    "勝率 73%、平均 +0.65R，前半 +1.04R、後半 +0.33R"]}
+                    "Toobit 自選空單期望 +0.55R 到 +0.60R 送實盤。18 筆勝率 56%、"
+                    "平均 +0.23R，前半 +0.33R、後半 +0.13R"]}
             if long_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "Toobit 自選多單止損 3% 以上送實盤。11 筆勝率 64%、平均 +0.37R，"
-                    "前半 +0.18R、後半 +0.52R。止損小於 3% 的繼續模擬"]}
+                    "Toobit 自選多單止損 3% 以上送實盤。25 筆勝率 60%、平均 +0.38R，"
+                    "前半 +0.36R、後半 +0.39R。止損小於 3% 的繼續模擬"]}
             if (venue == "toobit" and full_live and src == SELF_SOURCE and sig["side"] == "SHORT"
                     and not bounce and not sig.get("quiet_strong_short")):
                 sample = S.path_sample(self.st["closed"], "SELF ANALYSIS", "SHORT")
