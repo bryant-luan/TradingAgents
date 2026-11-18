@@ -1132,12 +1132,21 @@ class Bot:
             ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                 "實盤持續虧損，這段維持模擬。交易所裡已有的倉繼續照出場規則處理。"]}
         sym, side = S.to_toobit(sig["symbol"]), sig["side"]
-        gone = S.immediate_trend_flat(
+        failed = S.entry_rule_failures(
             sig.get("signal_path"), source, side, getattr(self, "htf", None),
+            getattr(self, "m15", None),
+            self.learner.p.get("m15_max", S.M15_MAX_DEFAULT),
+            self.learner.p.get("htf_max", S.HTF_MAX_DEFAULT),
+            getattr(self, "btc1h", None), getattr(self, "btc24h", None),
+            sig.get("_ext_r"), sig.get("_rpos"), sig.get("_rsi"),
+            self.learner.p.get("rsi_min", S.RSI_MIN_DEFAULT),
+            venue, shown_ev, sl_pct, (ev.get("analysis") or {}).get("prob"),
+            bool(sig.get("_full_live")),
             after_red=bool(sig.get("after_red")),
-            recipe_spike=bool(sig.get("recipe_spike")))
-        if gone:
-            self.note_skip(sig, gone)
+            recipe_spike=bool(sig.get("recipe_spike")),
+            quiet=bool(sig.get("quiet_strong_short") or sig.get("quiet_strong_long")))
+        if failed:
+            self.note_skip(sig, "下單前未過：" + "；".join(failed))
             return False
         if S.STOCK_PAPER and S.is_stock_contract(sym):
             sig = {**sig, "paper_only": True, "stock": True}
@@ -2036,6 +2045,7 @@ class Bot:
         except Exception:
             btc24h = None
         self.btc24h = btc24h
+        self.btc1h = btc1h
         moves = {}
         paper_later = []
         for score, sig, src, ev in sorted(scored, key=lambda x: -x[0]):
@@ -2098,9 +2108,10 @@ class Bot:
                     sig = {**sig, "paper_only": True}
                     ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                         "突破單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
-                if not sig.get("after_red") and htf is not None and htf * sgn < htf_min:
+                break_floor = max(htf_min, S.trend_flat_floor(src, sig["side"]))
+                if not sig.get("after_red") and htf is not None and htf * sgn < break_floor:
                     self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
-                                        f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
+                                        f"(順方向 {htf * sgn:+.1f} < 下限 {break_floor:+.1f})，不做逆大勢的單")
                     continue
                 brk_max = (max(htf_max, S.BREAK_SHORT_HTF_MAX_PAPER)
                            if self.paper and sig["side"] == "SHORT" else htf_max)
@@ -2185,6 +2196,8 @@ class Bot:
                                     f"{m15 * sgn:+.1f} (上限 {m15_cap:+.1f})，追在走勢中段/末端，等回檔或盤整")
                 continue
             floor = min(htf_min, S.SELF_SHORT_HTF_MIN) if src == SELF_SOURCE and sig["side"] == "SHORT" else htf_min
+            if not bounce:
+                floor = max(floor, S.trend_flat_floor(src, sig["side"]))
             if htf is not None and htf * sgn < floor and not bounce:
                 self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                     f"(順方向 {htf * sgn:+.1f} < 下限 {floor:+.1f})，不做逆大勢的單")
@@ -2246,6 +2259,9 @@ class Bot:
                                     f"(區間位置 {self.rpos:.2f} > {S.MAX_RANGE_POS:.2f})，追在突破延伸段，等回到區間內再進")
                 continue
             self.rsi = rsi = rsi_side(mv.get("rsi"), sig["side"]) if mv else None
+            sig["_ext_r"] = self.ext
+            sig["_rpos"] = self.rpos
+            sig["_rsi"] = rsi
             rsi_min = self.learner.p.get("rsi_min", S.RSI_MIN_DEFAULT)
             if rsi is not None and rsi < rsi_min:
                 self.note_skip(sig, f"{sig['symbol']} 15m RSI 在{'做多' if sgn > 0 else '做空'}方向只有 {rsi:.0f} "
@@ -2363,6 +2379,7 @@ class Bot:
                     self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
                     continue
             try:
+                sig["_full_live"] = full_live
                 self.open_trade(sig, ev, src, reg, size_eq)
             except ToobitError as e:
                 self.st["traded_ids"].append(sig["id"])
