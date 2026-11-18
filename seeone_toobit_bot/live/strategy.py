@@ -1373,12 +1373,16 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
     already negative in both halves. From +0.50R to +0.55R, 13 closes averaged
     -0.19R and -18 USDT: the 5 live closes were -0.63R in both halves, and the
     8 paper closes were only +0.09R with the second half still -0.13R. The
-    paper band from +0.55R up to the live line is +0.32R on 10 closes, both
-    halves positive, so that band still papers. A short
-    at or above the live line that misses the other live gates is finished too:
+    paper band from +0.55R up to +0.60R is +0.65R on 11 closes, 73% wins,
+    both halves positive, so that band still papers. From +0.60R to +0.70R,
+    the shorts that also had a stop under 1% and had not already run +1R were
+    12 closes, 25% wins, -0.31R, and the later half was -0.87R. That band
+    stops. At or above +0.70R the same gates are 5 closes, 60% wins, +0.69R,
+    both halves positive, so those still paper until the live bar. A short
+    at or above +0.60R that misses the other live gates is finished too:
     15 paper closes, 20% wins, -0.55R, both halves negative, about -50 USDT.
-    The live book at or above +0.60R is still positive in both halves, so a
-    short that clears every live gate still opens. 1-minute ignition was
+    A short at or above +0.70R that clears every other live gate still papers
+    until the live bar. 1-minute ignition was
     -0.42R on 57 closes, both halves negative, including the latest 15.
     15-minute ignition's later half was -0.65R. Flush longs were -0.47R on 4
     live closes, both halves negative. Breakout longs were 3 losses. Quiet
@@ -1391,7 +1395,12 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
                 "+0.50R 到 +0.55R 共 13 筆平均 -0.19R、-18 USDT："
                 "實盤 5 筆前後半都是負的、平均 -0.63R；"
                 "模擬 8 筆只有 +0.09R，後半仍是 -0.13R。"
-                "+0.55R 到實盤線的模擬仍開")
+                "+0.55R 到 +0.60R 的模擬仍開")
+    if (path == "SELF ANALYSIS" and side == "SHORT"
+            and ev_r is not None and SELF_SHORT_FULL_RISK_EV <= ev_r < 0.70):
+        return ("Toobit 自選空單期望 +0.60R 到 +0.70R 不再開。"
+                "止損小於 1%、兩小時還沒走滿 +1R 的 12 筆勝率 25%、平均 -0.31R，"
+                "前半 +0.25R、後半 -0.87R。+0.70R 以上仍模擬，達標才送實盤")
     if (path == "SELF ANALYSIS" and side == "SHORT" and not full_live
             and (ev_r or 0) >= SELF_SHORT_FULL_RISK_EV):
         return ("Toobit 自選空單期望已過實盤線、但沒過其他實盤條件，不再開。"
