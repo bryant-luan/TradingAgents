@@ -836,7 +836,7 @@ class SelfScanner:
             def on_board(c: dict) -> bool:
                 return any(str(t).startswith(("強勢榜", "潛力榜", "客製化", "主流幣")) for t in (c.get("tags") or []))
             ordered = sorted(ordered, key=lambda c: ("TradFi" in (c.get("tags") or []), on_board(c)))
-        if short_only and getattr(self.tb, "name", "") == "toobit":
+        if short_only and getattr(self.tb, "name", "") in ("toobit", "gate"):
             # Review the wide-stop long before the short book. Twelve names, the ones
             # closest to the bottom of their own 3h range. Done after the board
             # sort so that sort does not push them back.
@@ -855,7 +855,8 @@ class SelfScanner:
                     continue
                 if not pl or not pl.get("price") or pl.get("rpos") is None:
                     continue
-                if S.toobit_wide_long_review("toobit", pl["dist"] / pl["price"], pl["rpos"]):
+                if S.exchange_wide_long_review(getattr(self.tb, "name", "") or "",
+                                               pl["dist"] / pl["price"], pl["rpos"]):
                     c["_plan"] = pl
                     front.append((pl["rpos"], c))
             if front:
@@ -919,7 +920,7 @@ class SelfScanner:
                     if prob is not None and (short_prob is None or prob > short_prob):
                         short_prob = prob
                 tradable = tradable or (narrow and side in open_sides)
-            if (not tradable and wide_longs < 12 and S.toobit_wide_long_review(
+            if (not tradable and wide_longs < 12 and S.exchange_wide_long_review(
                     getattr(self.tb, "name", "") or "",
                     pl["dist"] / pl["price"], pl.get("rpos"))):
                 tradable = True
@@ -1435,11 +1436,12 @@ class SelfScanner:
                 if bounce and not at_front and "LONG" not in tradable:
                     tradable.append("LONG")
                 venue = getattr(self.tb, "name", "") or ""
-                if (S.toobit_long_live(venue, "LONG", d / px) and "LONG" not in tradable
-                        and m15_ok("LONG")):
+                wide_long = (S.toobit_long_live(venue, "LONG", d / px)
+                             or S.gate_long_live(venue, "LONG", d / px))
+                if wide_long and "LONG" not in tradable and m15_ok("LONG"):
                     tradable.append("LONG")
                 can_open = set(open_sides) | ({"LONG"} if bounce and not at_front else set())
-                if S.toobit_long_live(venue, "LONG", d / px):
+                if wide_long:
                     can_open.add("LONG")
                 pick = tradable or eligible
                 if not pick:
@@ -1543,7 +1545,7 @@ class SelfScanner:
             floor_prob, floor_ev = ((max(min_prob, SHORT_MIN_PROB), SHORT_MIN_EV_R) if side == "SHORT"
                                     else (min_prob, MIN_EV_R))
             venue_name = getattr(self.tb, "name", "") or ""
-            if (side == "LONG" and S.toobit_wide_long_review(venue_name, d / px, pl_long.get("rpos"))):
+            if (side == "LONG" and S.exchange_wide_long_review(venue_name, d / px, pl_long.get("rpos"))):
                 floor_ev = min(floor_ev, S.TOOBIT_LONG_LIVE_MIN_EV)
             if side == "SHORT" and venue_name == "toobit":
                 floor_ev = min(floor_ev, S.TOOBIT_OPEN_MIN_EV)
@@ -1576,7 +1578,8 @@ class SelfScanner:
                     p1h = 0.0
             confirm = CONFIRM_MIN_PROB
             if (S.gate_soft_short_live(venue_name, side, ev)
-                    or S.toobit_mid_short_live(venue_name, side, ev)):
+                    or S.toobit_mid_short_live(venue_name, side, ev)
+                    or S.gate_mid_short_live(venue_name, side, ev)):
                 confirm = S.LIVE_BAND_CONFIRM_MIN_PROB
             if not flush_long and p1h < confirm:
                 self.log("SELF_REJECT", symbol=sym, side=side, prob_15m=prob, prob_1h=round(p1h, 1),
