@@ -134,6 +134,7 @@ class FullLive(unittest.TestCase):
         self.assertEqual(S.SELF_SHORT_MAX_SAME_SIDE, 5)
         self.assertEqual(S.MAX_SAME_SIDE, 4)
         self.assertEqual(S.MAX_POSITIONS, 5)
+        self.assertEqual(S.BTC1H_CHASE_MAX, 0.40)
         self.assertTrue(S.gate_soft_short_live("gate", "SHORT", 0.20))
         self.assertFalse(S.gate_soft_short_live("gate", "SHORT", 0.14))
         self.assertFalse(S.gate_soft_short_live("gate", "SHORT", 0.25))

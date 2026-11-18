@@ -201,7 +201,8 @@ SELF_BTC1H_MIN = -0.3
 # Upper bound on the same aligned BTC 1h move. Short reviews (1h/4h -0.5..1.5) made after BTC had already
 # fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
 # Breakout entries take it too: 6 live breakouts past it won once, -1.88R (EVAA, HOT, ENA among them).
-BTC1H_CHASE_MAX = 0.3
+# 0.30 blocked a short at +0.33%. A move of 0.40% or more is still a chase.
+BTC1H_CHASE_MAX = 0.40
 # BTC's own 24h move, joined onto the stop<1% / probability>=52.5% short replay.
 # Flat-to-down, -1% to 0%, was 21.7% win and -0.58R (115; -0.33R / -0.83R by half). That band stays out.
 # Already down more than 1%, and the last hour not already extended +0.3% with the short, was 69.7%
