@@ -815,6 +815,13 @@ LIVE_DAY_MAX = 2
 # can still send two exchange orders before midnight. The next midnight
 # is later than this stamp, so 2026-11-19 and after count from midnight.
 LIVE_COUNT_FROM = 1795005360.0
+# The user's own BTC orders: 80x, about 80% of equity as margin, stop at
+# 1.5× the 15m ATR (about 0.8%). They shorted once 1h/4h was already past
+# +2.5 in the short direction, and they put on another after the stop.
+BTC_USER_LEVERAGE = 80
+BTC_USER_MARGIN_PCT = 0.80
+BTC_USER_HTF = 2.5
+BTC_USER_SYMBOL = "BTCUSDT"
 
 
 def taipei_midnight(now: float | None = None) -> float:
@@ -841,6 +848,68 @@ def trade_opened_at(tr: dict) -> float | None:
 def live_day_start(now: float | None = None) -> float:
     """Start of the current live-order window. Tonight ignores earlier fills."""
     return max(taipei_midnight(now), LIVE_COUNT_FROM)
+
+
+def btc_user_side(htf: float | None) -> str | None:
+    """Side of a BTC order in the user's style. None while 1h/4h is still inside the band.
+
+    They shorted BTC with 1h/4h already past +2.5 in the short direction.
+    The long is the same distance the other way.
+    """
+    if htf is None:
+        return None
+    if htf <= -BTC_USER_HTF:
+        return "SHORT"
+    if htf >= BTC_USER_HTF:
+        return "LONG"
+    return None
+
+
+def btc_user_size(equity: float, price: float, stop: float, spec: dict,
+                  free_margin: float | None = None) -> dict | None:
+    """80x and about 80% of equity as margin, the way the BTC orders were placed.
+
+    The stop has to sit inside the liquidation distance. If 80x cannot hold
+    that stop, leverage steps down until it can. A stop that still does not
+    fit is not this order.
+    """
+    mult = float(spec["multiplier"])
+    dist = abs(price - stop)
+    if equity <= 0 or price <= 0 or dist <= 0 or mult <= 0:
+        return None
+    sl_pct = dist / price
+    budget = equity * BTC_USER_MARGIN_PCT
+    if free_margin is not None:
+        budget = min(budget, max(0.0, free_margin) * 0.95)
+    if budget <= 0:
+        return None
+    lev_cap = min(BTC_USER_LEVERAGE, int(spec.get("max_leverage") or BTC_USER_LEVERAGE))
+    tiers = spec.get("mmr_tiers") or []
+    lev = max(1, lev_cap)
+    while lev >= 1:
+        notional = budget * lev
+        tier = next((t for t in tiers if notional <= t[0]), tiers[-1] if tiers else None)
+        mmr = tier[1] if tier else 0.005
+        if tier:
+            lev = min(lev, int(tier[2]))
+            notional = budget * lev
+        room = (1 / lev) - mmr
+        if sl_pct < room and lev >= 1:
+            contracts = math.floor(notional / (mult * price))
+            if contracts < int(spec.get("min_contracts") or 1):
+                return None
+            notional = contracts * mult * price
+            margin = notional / lev
+            return {
+                "contracts": contracts,
+                "leverage": lev,
+                "notional": round(notional, 2),
+                "margin": round(margin, 2),
+                "risk_usdt": round(contracts * mult * dist, 2),
+                "sl_pct": round(sl_pct * 100, 2),
+            }
+        lev -= 1
+    return None
 
 
 def live_opens_today(trades, closed, now: float | None = None) -> int:
