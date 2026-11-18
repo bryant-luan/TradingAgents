@@ -2278,12 +2278,6 @@ class Bot:
                         sig = {**sig, "paper_only": True}
                         ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                             "洗盤多單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
-            if (venue == "toobit" and sig["side"] == "SHORT" and shown_ev is not None
-                    and S.TOOBIT_OPEN_MIN_EV <= shown_ev < S.TOOBIT_OPEN_HOLE_LO
-                    and (shown_prob is None or shown_prob < S.TOOBIT_OPEN_MAX_PROB)):
-                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "Toobit 自選空單期望 +0.15R 到 +0.35R、機率低於 55% 改回模擬。"
-                    "17 筆勝率 47%、平均 -0.02R，後半 -0.28R。"]}
             if soft_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                     "Gate 自選空單期望 +0.15R 到 +0.25R 送實盤。15 筆勝率 60%、平均 +0.23R，"

@@ -1500,10 +1500,9 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
 TOOBIT_SHORT_KEEP_PAPER_EV = 0.55
 # +0.35R to +0.50R is 23 closes, 22% wins, -0.47R, both halves negative.
 # +0.50R to +0.55R is 15 closes, 47% wins, -0.25R, both halves negative.
-# +0.15R to +0.35R with probability under 55% is 17 closes, 47% wins,
-# -0.02R, and the later half is -0.28R. That no longer goes to the exchange.
-# Probability of 55% and up in the same band is 16 closes, 38% wins, -0.33R,
-# halves -0.00R and -0.66R, and stays closed.
+# +0.15R to +0.35R with probability under 55% is 27 closes, 37% wins,
+# -0.20R, halves -0.11R and -0.29R. That band no longer opens.
+# Probability of 55% and up in the same band stays closed.
 TOOBIT_OPEN_MIN_EV = 0.15
 TOOBIT_OPEN_HOLE_LO = 0.35
 TOOBIT_OPEN_HOLE_HI = 0.50
@@ -1513,10 +1512,10 @@ TOOBIT_OPEN_MAX_PROB = 55.0
 
 def toobit_open_now_live(exchange: str, side: str | None, ev_r: float | None,
                          prob: float | None = None) -> bool:
-    """Toobit +0.15R to +0.35R shorts stay off the exchange.
+    """Toobit +0.15R to +0.35R shorts do not open.
 
-    The band with probability under 55% is 17 closes and a negative later half,
-    so it papers. Probability of 55% and up does not open at all.
+    Probability under 55% is 27 closes, 37% wins, -0.20R, both halves negative.
+    Probability of 55% and up does not open either.
     """
     return False
 
@@ -1526,7 +1525,9 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
                          prob: float | None = None) -> str | None:
     """Toobit books that are already negative do not open again.
 
-    A short under +0.55R is finished. Under +0.50R the live and paper books were
+    A short under +0.55R is finished. From +0.15R to +0.35R with probability
+    under 55%, 27 closes are 37% wins and -0.20R, both halves negative, so that
+    paper band stops too. Under +0.50R the live and paper books were
     already negative in both halves. From +0.50R to +0.55R, 13 closes averaged
     -0.19R and -18 USDT: the 5 live closes were -0.63R in both halves, and the
     8 paper closes were only +0.09R with the second half still -0.13R. The
@@ -1548,12 +1549,9 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
     if exchange != "toobit":
         return None
     if path == "SELF ANALYSIS" and side == "SHORT" and not full_live and (ev_r or 0) < TOOBIT_SHORT_KEEP_PAPER_EV:
-        if (ev_r is not None and TOOBIT_OPEN_MIN_EV <= ev_r < TOOBIT_OPEN_HOLE_LO
-                and (prob is None or prob < TOOBIT_OPEN_MAX_PROB)):
-            return None
-        return ("Toobit 自選空單期望值未達 +0.55R 不再送實盤。"
-                "+0.15R 到 +0.35R、機率低於 55% 的 17 筆勝率 47%、平均 -0.02R，"
-                "前半 +0.27R、後半 -0.28R，改回模擬。"
+        return ("Toobit 自選空單期望值未達 +0.55R 不再開。"
+                "+0.15R 到 +0.35R、機率低於 55% 的 27 筆勝率 37%、平均 -0.20R，"
+                "前半 -0.11R、後半 -0.29R。"
                 "同段機率 55% 以上不再開。"
                 "+0.35R 到 +0.55R 不再開。")
     if (path == "SELF ANALYSIS" and side == "SHORT"
