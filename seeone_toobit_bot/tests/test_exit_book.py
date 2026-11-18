@@ -796,6 +796,34 @@ class DailyTrend(unittest.TestCase):
         self.assertIsNone(S.daily_trend_holds(self.bars(up[:5]), self.now, "LONG"))
 
 
+class EntryRulesBeforeOrder(unittest.TestCase):
+    def _fails(self, **kw):
+        base = dict(path="SELF ANALYSIS", source="自選驗算", side="LONG", htf=-0.2,
+                    m15=0.0, m15_max=2.5, htf_max=1.5, btc1h=0.0, btc24h=0.0,
+                    ext_r=0.0, rpos=0.2, rsi=50.0, rsi_min=0.0, venue="toobit",
+                    ev_r=0.4, sl_pct=0.04, prob=60.0, full_live=False)
+        base.update(kw)
+        return S.entry_rule_failures(**base)
+
+    def test_a_wide_long_still_has_to_clear_the_exit_line(self):
+        # Learned htf_min is -99. HEI was -0.90 and ENSO was -1.15.
+        for htf in (-0.90, -1.15):
+            fails = self._fails(htf=htf)
+            self.assertTrue(any("趨勢消失" in f for f in fails))
+        self.assertFalse(any("趨勢消失" in f for f in self._fails(htf=-0.2)))
+
+    def test_several_rules_are_reported_together(self):
+        fails = self._fails(htf=-1.15, m15=3.0, btc1h=-1.0)
+        text = "；".join(fails)
+        self.assertIn("趨勢消失", text)
+        self.assertIn("15m", text)
+        self.assertIn("BTC", text)
+
+    def test_the_live_short_band_is_not_blocked_by_a_passing_tape(self):
+        fails = self._fails(side="SHORT", htf=1.0, ev_r=0.57, sl_pct=0.008)
+        self.assertFalse(any("不再開" in f or "趨勢消失" in f for f in fails))
+
+
 class TrendFlatBeforeEntry(unittest.TestCase):
     def test_a_long_already_under_the_exit_line_is_not_sent(self):
         # HEI was -0.90 and ENSO was -1.15. Both filled and closed within a second.

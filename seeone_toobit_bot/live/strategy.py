@@ -111,6 +111,74 @@ def immediate_trend_flat(path: str | None, source: str | None, side: str | None,
         return (f"下單前大週期順方向 {aligned:+.2f} 已低於 {floor}，"
                 "進場後會被趨勢消失立刻平倉，不送")
     return None
+
+
+def entry_rule_failures(path: str | None, source: str | None, side: str | None,
+                        htf: float | None, m15: float | None, m15_max: float,
+                        htf_max: float, btc1h: float | None, btc24h: float | None,
+                        ext_r: float | None, rpos: float | None, rsi: float | None,
+                        rsi_min: float, venue: str, ev_r: float | None,
+                        sl_pct: float | None, prob: float | None, full_live: bool,
+                        after_red: bool = False, recipe_spike: bool = False,
+                        quiet: bool = False) -> list[str]:
+    """Every gate that must pass before an order is sent.
+
+    A learned 1h/4h floor of -99 does not waive the exit line. The 3% long
+    slice stays eligible for the exchange only after these rules pass.
+    Flush, ignition, and the daily trend keep the exemptions their exits use.
+    """
+    if path == TREND_PATH or str(path or "").startswith("IGNITION"):
+        return []
+    fails: list[str] = []
+    gone = immediate_trend_flat(path, source, side, htf, after_red, recipe_spike)
+    if gone:
+        fails.append(gone)
+    if path == BOUNCE_PATH:
+        if venue and sl_pct is not None:
+            wide = gate_flush_wide_stop(venue, sl_pct)
+            if wide:
+                fails.append(wide)
+        return fails
+    if quiet or side not in ("LONG", "SHORT"):
+        return fails
+    sgn = 1 if side == "LONG" else -1
+    self_short = source == "自選驗算" and side == "SHORT"
+    if htf is not None and not after_red:
+        cap = SELF_SHORT_HTF_MAX if self_short else htf_max
+        aligned = htf * sgn
+        if aligned >= cap:
+            fails.append(f"1h/4h 順方向 {aligned:+.2f} 已達上限 {cap:+.2f}，大週期走勢已走一段，不送")
+    if m15 is not None and not after_red:
+        cap = SELF_SHORT_M15_MAX if self_short else m15_max
+        if m15 * sgn >= cap:
+            fails.append(f"15m 順方向 {m15 * sgn:+.2f} 已達上限 {cap:+.2f}，追在走勢末端，不送")
+    aligned_btc = None if btc1h is None else btc1h * sgn
+    downtrend = (self_short and not quiet and btc24h is not None and btc24h < SELF_SHORT_BTC24H_TREND)
+    late = self_short and self_short_late_bounce(htf, btc1h)
+    btc_min = SELF_BTC1H_MIN if source == "自選驗算" else BTC1H_MIN_DEFAULT
+    if aligned_btc is not None and not after_red and (not downtrend or late):
+        if late and aligned_btc < btc_min:
+            fails.append(f"1h/4h 順方向已達 {SELF_SHORT_LATE_HTF:+.1f}，且 BTC 近 1 小時正在反彈，不送")
+        elif aligned_btc < btc_min:
+            fails.append(f"BTC 近 1 小時順方向 {aligned_btc:+.2f}% 低於 {btc_min:+.2f}%，不送")
+    if source == "自選驗算" and aligned_btc is not None and aligned_btc >= BTC1H_CHASE_MAX:
+        fails.append(f"BTC 近 1 小時已順向 {aligned_btc:+.2f}%，追在大盤急走之後，不送")
+    if self_short and ext_r is not None:
+        chased = self_short_chased(side, ext_r)
+        if chased:
+            fails.append(chased)
+    if ext_r is not None and ext_r >= MAX_EXT_R:
+        fails.append(f"近 2 小時已順向 {ext_r:+.1f}R，超過 {MAX_EXT_R}R，不送")
+    if rpos is not None and rpos > MAX_RANGE_POS:
+        fails.append(f"區間位置 {rpos:.2f} 超過 {MAX_RANGE_POS:.2f}，不送")
+    if rsi is not None and rsi < rsi_min:
+        fails.append(f"15m RSI 順方向 {rsi:.0f} 低於 {rsi_min:.0f}，不送")
+    if venue:
+        measured = (gate_measured_loss(venue, path, side, full_live, ev_r, sl_pct)
+                    or toobit_measured_loss(venue, path, side, ev_r, full_live, prob))
+        if measured:
+            fails.append(measured)
+    return fails
 # ELSA/AIO entries used this cap. Later bands (1.8, fade, liquid 2.0–2.5) are not entry gates.
 HTF_MAX_DEFAULT = 1.5
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
