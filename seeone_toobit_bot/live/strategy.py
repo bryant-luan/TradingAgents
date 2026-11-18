@@ -64,7 +64,7 @@ MIN_RISK_PCT = 0.05             # never open below this risk: a trade that can't
 MAX_MIN_SIZE_RISK_PCT = 0.07    # allow exchange-minimum size only up to this risk
 MAX_LEVERAGE = 25
 LIQ_STOP_MULT = 1.25    # liquidation must sit at least 1.25x the stop distance from entry
-MAX_POSITIONS = 3
+MAX_POSITIONS = 5
 MAX_TOTAL_MARGIN_PCT = 0.70
 MARGIN_PER_TRADE_PCT = 0.07
 # A 0.8% stop (the minimum) at 25x needs 25% of equity in margin to risk 5%.
@@ -606,10 +606,16 @@ def toobit_mid_short_live(exchange: str, side: str | None, ev_r: float | None) -
     return TOOBIT_SHORT_KEEP_PAPER_EV <= ev_r < SELF_SHORT_FULL_RISK_EV
 
 
-# Toobit self longs with a stop of at least 3% are 11 closes, 64% wins, +0.37R,
-# halves +0.18R and +0.52R. Under 3% is 12 closes, 25% wins, -0.41R, both
-# halves negative, so that tighter stop stays paper.
+# Toobit self longs with a stop of at least 3% are 14 closes, 57% wins, +0.30R,
+# halves +0.08R and +0.51R. Under 3% is 12 closes, 25% wins, -0.41R, both
+# halves negative, so that tighter stop stays paper. The scanner used to
+# demand +0.50R, which kept a +0.29R name off the exchange. From +0.25R the
+# 3% to 6% stop is sent so that slice can accumulate live closes.
 TOOBIT_LONG_LIVE_MIN_SL = 0.03
+TOOBIT_LONG_LIVE_MIN_EV = 0.25
+# A short that is already inside a live band can confirm on the 1H at 45%.
+# Names at 49% were dying on a 50% line after the 15m read had cleared.
+LIVE_BAND_CONFIRM_MIN_PROB = 45.0
 
 
 def toobit_long_live(exchange: str, side: str | None, sl_pct: float) -> bool:
@@ -636,11 +642,10 @@ REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
 REVERSAL_DRIFT_PCT = 0.003
 REVERSAL_BACK_PCT = 0.002
-MAX_SAME_SIDE = 2               # open positions on one side
-# A bear tape can hold three self-scan shorts. Each one still clears the same
-# 52.5% probability and +0.50R expected value, so the extra slot does not change
-# the win rate or the R of the trades that open. The book cap stays at 3.
-SELF_SHORT_MAX_SAME_SIDE = 3
+MAX_SAME_SIDE = 4               # open positions on one side
+# Five self-scan shorts can be open together so a live band can accumulate
+# more than one exchange fill. Each one still clears its own live band.
+SELF_SHORT_MAX_SAME_SIDE = 5
 # Self-scan entries other than the flush long, the quiet short, and the full-risk
 # short in self_short_full_live. The whole path was 116 live closes, 37% win,
 # -0.18R, -269 USDT. Those others paper at this cap. Existing live positions stay
