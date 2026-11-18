@@ -837,13 +837,13 @@ class SelfScanner:
                 return any(str(t).startswith(("強勢榜", "潛力榜", "客製化", "主流幣")) for t in (c.get("tags") or []))
             ordered = sorted(ordered, key=lambda c: ("TradFi" in (c.get("tags") or []), on_board(c)))
         if short_only and getattr(self.tb, "name", "") == "toobit":
-            # Review the wide-stop long before the short book. Six names, the ones
+            # Review the wide-stop long before the short book. Twelve names, the ones
             # closest to the bottom of their own 3h range. Done after the board
             # sort so that sort does not push them back.
             front = []
             checked = 0
             for c in ordered:
-                if len(front) >= 6 or checked >= 80:
+                if len(front) >= 12 or checked >= 80:
                     break
                 tsym = S.to_toobit(c["symbol"])
                 if tsym not in specs or tsym in held:
@@ -919,7 +919,7 @@ class SelfScanner:
                     if prob is not None and (short_prob is None or prob > short_prob):
                         short_prob = prob
                 tradable = tradable or (narrow and side in open_sides)
-            if (not tradable and wide_longs < 6 and S.toobit_wide_long_review(
+            if (not tradable and wide_longs < 12 and S.toobit_wide_long_review(
                     getattr(self.tb, "name", "") or "",
                     pl["dist"] / pl["price"], pl.get("rpos"))):
                 tradable = True
@@ -1542,7 +1542,10 @@ class SelfScanner:
             flush_long = side == "LONG" and bounce
             floor_prob, floor_ev = ((max(min_prob, SHORT_MIN_PROB), SHORT_MIN_EV_R) if side == "SHORT"
                                     else (min_prob, MIN_EV_R))
-            if side == "SHORT" and getattr(self.tb, "name", "") == "gate":
+            venue_name = getattr(self.tb, "name", "") or ""
+            if (side == "LONG" and S.toobit_wide_long_review(venue_name, d / px, pl_long.get("rpos"))):
+                floor_ev = min(floor_ev, S.TOOBIT_LONG_LIVE_MIN_EV)
+            if side == "SHORT" and venue_name == "gate":
                 # The +0.15R to +0.25R closes were entered at 52.5% to 56%.
                 # A calibrated 60% floor was keeping that band from opening.
                 # Inside that band, 50% is enough: the 50–52.5% replay was +1.03R.
@@ -1569,9 +1572,13 @@ class SelfScanner:
                     p1h = float(self.review(sym, side, pl["stop"], pl["tps"], "1H", share=True).get("probability") or 0) - bias
                 except Exception:
                     p1h = 0.0
-            if not flush_long and p1h < CONFIRM_MIN_PROB:
+            confirm = CONFIRM_MIN_PROB
+            if (S.gate_soft_short_live(venue_name, side, ev)
+                    or S.toobit_mid_short_live(venue_name, side, ev)):
+                confirm = S.LIVE_BAND_CONFIRM_MIN_PROB
+            if not flush_long and p1h < confirm:
                 self.log("SELF_REJECT", symbol=sym, side=side, prob_15m=prob, prob_1h=round(p1h, 1),
-                         reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {CONFIRM_MIN_PROB}%，週期不一致")
+                         reason=f"1H 驗算 (去偏後) {p1h:.1f}% < {confirm:.0f}%，週期不一致")
                 return False
             band = S.self_direc_window(htf if side == "LONG" else None if htf is None else -htf, side)
             found.append(self.to_signal({**c, "side": side, "bounce_long": side == "LONG" and bounce,
