@@ -1545,6 +1545,8 @@ class SelfScanner:
             venue_name = getattr(self.tb, "name", "") or ""
             if (side == "LONG" and S.toobit_wide_long_review(venue_name, d / px, pl_long.get("rpos"))):
                 floor_ev = min(floor_ev, S.TOOBIT_LONG_LIVE_MIN_EV)
+            if side == "SHORT" and venue_name == "toobit":
+                floor_ev = min(floor_ev, S.TOOBIT_OPEN_MIN_EV)
             if side == "SHORT" and venue_name == "gate":
                 # The +0.15R to +0.25R closes were entered at 52.5% to 56%.
                 # A calibrated 60% floor was keeping that band from opening.

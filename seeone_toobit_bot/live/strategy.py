@@ -201,7 +201,8 @@ SELF_BTC1H_MIN = -0.3
 # Upper bound on the same aligned BTC 1h move. Short reviews (1h/4h -0.5..1.5) made after BTC had already
 # fallen 0.3%+ hit TP1 48% (261) on Nov 7-10, against 72% (814) for the rest; the short is late.
 # Breakout entries take it too: 6 live breakouts past it won once, -1.88R (EVAA, HOT, ENA among them).
-BTC1H_CHASE_MAX = 0.3
+# 0.30 blocked a short at +0.33%. A move of 0.40% or more is still a chase.
+BTC1H_CHASE_MAX = 0.40
 # BTC's own 24h move, joined onto the stop<1% / probability>=52.5% short replay.
 # Flat-to-down, -1% to 0%, was 21.7% win and -0.58R (115; -0.33R / -0.83R by half). That band stays out.
 # Already down more than 1%, and the last hour not already extended +0.3% with the short, was 69.7%
@@ -1493,6 +1494,16 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
 
 
 TOOBIT_SHORT_KEEP_PAPER_EV = 0.55
+# The short that just cleared every other gate sits under +0.55R.
+TOOBIT_OPEN_MIN_EV = 0.15
+TOOBIT_OPEN_MAX_EV = 0.55
+
+
+def toobit_open_now_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
+    """Toobit self shorts from +0.15R up to +0.55R go to the exchange now."""
+    if exchange != "toobit" or side != "SHORT" or ev_r is None:
+        return False
+    return TOOBIT_OPEN_MIN_EV <= ev_r < TOOBIT_OPEN_MAX_EV
 
 
 def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
@@ -1521,10 +1532,10 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
     if exchange != "toobit":
         return None
     if path == "SELF ANALYSIS" and side == "SHORT" and not full_live and (ev_r or 0) < TOOBIT_SHORT_KEEP_PAPER_EV:
+        if toobit_open_now_live(exchange, side, ev_r):
+            return None
         return ("Toobit 自選空單期望值未達 +0.55R 不再開。"
-                "+0.50R 到 +0.55R 共 13 筆平均 -0.19R、-18 USDT："
-                "實盤 5 筆前後半都是負的、平均 -0.63R；"
-                "模擬 8 筆只有 +0.09R，後半仍是 -0.13R。"
+                "+0.15R 到 +0.55R 這輪送實盤。"
                 "+0.55R 到 +0.60R 的仍送實盤")
     if (path == "SELF ANALYSIS" and side == "SHORT"
             and ev_r is not None and SELF_SHORT_FULL_RISK_EV <= ev_r < 0.70):
