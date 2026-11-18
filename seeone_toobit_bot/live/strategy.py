@@ -80,6 +80,37 @@ MAX_HIGH_POSITIONS = 1
 TP_SPLIT = [0.10, 0.10, 0.20, 0.30, 0.30]
 M15_MAX_DEFAULT = 2.5           # cap on the 15m See One direction score in the trade's direction; recalibrated live
 HTF_MIN_DEFAULT = -0.5          # floor on the 1h/4h average direction in the trade's direction; recalibrated live
+
+
+def trend_flat_floor(source: str | None, side: str | None) -> float:
+    """The 1h/4h line the trend-gone exit uses on the next read."""
+    if source == "自選驗算" and side == "SHORT":
+        return SELF_SHORT_HTF_MIN
+    return HTF_MIN_DEFAULT
+
+
+def immediate_trend_flat(path: str | None, source: str | None, side: str | None,
+                         htf: float | None, after_red: bool = False,
+                         recipe_spike: bool = False) -> str | None:
+    """Do not send an order the trend-gone exit would flatten immediately.
+
+    HEI and ENSO longs on 2026-11-18 filled with 1h/4h already below -0.5
+    and were closed within a second. Self shorts keep their -2.5 line.
+    Flush, ignition, and the daily trend stay with their own stops.
+    """
+    if htf is None or side not in ("LONG", "SHORT"):
+        return None
+    if path == BOUNCE_PATH or str(path or "").startswith("IGNITION") or path == TREND_PATH:
+        return None
+    if after_red or recipe_spike:
+        return None
+    sgn = 1 if side == "LONG" else -1
+    floor = trend_flat_floor(source, side)
+    aligned = htf * sgn
+    if aligned < floor:
+        return (f"下單前大週期順方向 {aligned:+.2f} 已低於 {floor}，"
+                "進場後會被趨勢消失立刻平倉，不送")
+    return None
 # ELSA/AIO entries used this cap. Later bands (1.8, fade, liquid 2.0–2.5) are not entry gates.
 HTF_MAX_DEFAULT = 1.5
 FRESH_MAX_R = 0.5               # See One signals: max run-up in the signal's own R over the 2h before it fired
