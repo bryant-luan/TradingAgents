@@ -1272,7 +1272,7 @@ class SelfScanner:
         self.log("TREND", symbol=sym, side=side, price=px, stop=hit["stop"],
                  ret10=round(hit["ret10"], 4), ret20=round(hit["ret20"], 4),
                  vol=round(hit["vol"], 4), stop_pct=round(hit["stop_pct"], 4),
-                 note="模擬，不送真單")
+                 note="達標後送實盤，否則只記模擬")
         return {"sig": sig, "ev": ev, "source": path}
 
     def scan(self, regime: tuple, rhits: dict, held: set, specs: dict, m15: float | None = None,
@@ -1780,7 +1780,7 @@ class SelfScanner:
         learned = sum(self.learner.p.get("factor_adj", {}).get(t, 0.0) for t in factors)
         score = round(self.learner.p.get("effective_min_score", S.MIN_SCORE) + learned, 1)
         reasons = [
-            "安靜期強勢多：只記模擬倉，不送真單",
+            "安靜期強勢多：達標後送實盤，未達標只記模擬",
             f"大週期順方向 {htf_dir:+.2f}，允許 {S.QUIET_HTF_MIN:g} 到 {S.QUIET_HTF_MAX:g}",
             "這一側 14 筆流動性夠的樣本約 -0.99R，前後半都是負的",
             f"模擬滿 {S.QUIET_LONG_READY_N} 筆、勝率超過 {S.LIVE_WIN:.0%}、"

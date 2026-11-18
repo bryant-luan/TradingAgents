@@ -632,8 +632,8 @@ IGNITION_QUOTE_MIN = 5_000_000
 # divided by that distance, so a noisier coin is a smaller position. When
 # BTC's own 20-day return is positive, a short also has to be at least one
 # 20-day standard deviation below where it was. Funding is not an entry.
-# The same 20-close bar as the other paper books applies, and clearing it
-# does not send a live order by itself.
+# The same 20-close bar as the other paper books applies. Clearing it
+# sends the next crypto order live. A stock contract stays paper.
 TREND_PAPER = True
 TREND_PATH = "DAILY TREND"
 TREND_FAST = 10
