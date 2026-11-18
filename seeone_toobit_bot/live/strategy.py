@@ -1493,13 +1493,13 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
 
 
 TOOBIT_SHORT_KEEP_PAPER_EV = 0.55
-# The tape that is ready to send sits here. +0.35R to +0.55R stays closed.
+# The short that just cleared every other gate sits under +0.55R.
 TOOBIT_OPEN_MIN_EV = 0.15
-TOOBIT_OPEN_MAX_EV = 0.35
+TOOBIT_OPEN_MAX_EV = 0.55
 
 
 def toobit_open_now_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
-    """Toobit self shorts from +0.15R up to +0.35R go to the exchange now."""
+    """Toobit self shorts from +0.15R up to +0.55R go to the exchange now."""
     if exchange != "toobit" or side != "SHORT" or ev_r is None:
         return False
     return TOOBIT_OPEN_MIN_EV <= ev_r < TOOBIT_OPEN_MAX_EV
@@ -1534,8 +1534,7 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
         if toobit_open_now_live(exchange, side, ev_r):
             return None
         return ("Toobit 自選空單期望值未達 +0.55R 不再開。"
-                "+0.35R 到 +0.55R 仍不開。"
-                "+0.15R 到 +0.35R 這輪送實盤。"
+                "+0.15R 到 +0.55R 這輪送實盤。"
                 "+0.55R 到 +0.60R 的仍送實盤")
     if (path == "SELF ANALYSIS" and side == "SHORT"
             and ev_r is not None and SELF_SHORT_FULL_RISK_EV <= ev_r < 0.70):
