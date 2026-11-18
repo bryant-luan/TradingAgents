@@ -666,7 +666,9 @@ def stock_open_slots(trades) -> int:
 IGNITION_RULES = {
     "1m": {"base_bars": 20, "base_max": 0.025, "vol_min": 8.0, "break_max": 0.06,
            "stop_min": 0.008, "stop_max": 0.12},
-    "15m": {"base_bars": 8, "base_max": 0.06, "vol_min": 3.0, "break_max": 0.08,
+    # A close already 1% through the base was 6 trades, 33% wins, -0.16R,
+    # and the later half was -0.82R. Under 1% was 13 trades, 62%, +0.07R.
+    "15m": {"base_bars": 8, "base_max": 0.06, "vol_min": 3.0, "break_max": 0.01,
             "stop_min": 0.01, "stop_max": 0.12},
 }
 # 15m breakouts scan again, as paper. Live shorts were +0.05R and the later
