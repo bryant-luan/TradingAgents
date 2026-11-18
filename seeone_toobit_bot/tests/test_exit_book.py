@@ -151,6 +151,18 @@ class FullLive(unittest.TestCase):
         self.assertIn("不再開", S.gate_measured_loss("gate", "IGNITION 1m", "LONG", False))
         self.assertIsNone(S.gate_measured_loss("gate", "IGNITION 15m", "LONG", False))
         self.assertTrue(S.NEW_ENTRIES_PAPER)
+        self.assertEqual(S.LIVE_DAY_MAX, 2)
+        # 2026-11-18 01:00 Taipei.
+        now = 1794934800.0
+        self.assertEqual(S.taipei_midnight(now), 1794931200.0)
+        closed = [
+            {"id": "FET-SWAP-USDT:SHORT:1794977431", "paper": None},
+            {"id": "ZIL-SWAP-USDT:LONG:1794993007", "paper": True},
+            {"id": "OLD-SWAP-USDT:SHORT:1794800000"},
+        ]
+        self.assertEqual(S.live_opens_today([], closed, now), 1)
+        self.assertEqual(S.live_opens_today(
+            [{"id": "AAA:LONG:1794978000", "paper_probe": True}], closed, now), 1)
         self.assertTrue(S.toobit_exchange_entry("toobit", "SELF ANALYSIS", "SHORT", 0.57, 0.008))
         self.assertFalse(S.toobit_exchange_entry("toobit", "SELF ANALYSIS", "SHORT", 0.54, 0.008))
         self.assertFalse(S.toobit_exchange_entry("toobit", "SELF ANALYSIS", "SHORT", 0.60, 0.008))

@@ -708,6 +708,49 @@ SELF_ANALYSIS_PAPER = True
 # longs with a stop of at least 3%. Positions already on the exchange keep
 # their stops and targets.
 NEW_ENTRIES_PAPER = True
+# Each venue sends at most two new exchange orders per Taipei day.
+# Later signals on the same live slices stay paper so the book still records them.
+LIVE_DAY_MAX = 2
+
+
+def taipei_midnight(now: float | None = None) -> float:
+    """Unix time of 00:00 Asia/Taipei for the day that contains `now`."""
+    now = time.time() if now is None else float(now)
+    shifted = now + 8 * 3600
+    return shifted - (shifted % 86400) - 8 * 3600
+
+
+def trade_opened_at(tr: dict) -> float | None:
+    raw = tr.get("opened_ts")
+    if raw:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    tail = str(tr.get("id") or "").rsplit(":", 1)[-1]
+    try:
+        return float(tail)
+    except (TypeError, ValueError):
+        return None
+
+
+def live_opens_today(trades, closed, now: float | None = None) -> int:
+    """Exchange orders opened since Taipei midnight. Paper and stocks do not count."""
+    start = taipei_midnight(now)
+    seen = set()
+    n = 0
+    for tr in list(trades or []) + list(closed or []):
+        if tr.get("paper") or tr.get("paper_probe") or tr.get("stock"):
+            continue
+        ts = trade_opened_at(tr)
+        if ts is None or ts < start:
+            continue
+        key = tr.get("id") or id(tr)
+        if key in seen:
+            continue
+        seen.add(key)
+        n += 1
+    return n
 # The live book stays at 3. Open paper positions keep their stops.
 SELF_ANALYSIS_PAPER_MAX = 6
 # A self-scan short under the live line is paper, not a stopped rule.
