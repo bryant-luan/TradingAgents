@@ -160,7 +160,8 @@ class FullLive(unittest.TestCase):
             {"id": "ZIL-SWAP-USDT:LONG:1794993007", "paper": True},
             {"id": "OLD-SWAP-USDT:SHORT:1794800000"},
         ]
-        # Fills before 18:40 Taipei on 2026-11-18 do not use tonight's two slots.
+        # Fills before 20:36 Taipei on 2026-11-18, including HEI, do not use tonight's two slots.
+        closed.append({"id": "HEI-SWAP-USDT:LONG:1795003609"})
         self.assertEqual(S.live_opens_today([], closed, now), 0)
         tonight = S.LIVE_COUNT_FROM + 60
         self.assertEqual(S.live_opens_today(
