@@ -742,10 +742,11 @@ NEW_ENTRIES_PAPER = True
 # Each venue sends at most two new exchange orders per Taipei day.
 # Later signals on the same live slices stay paper so the book still records them.
 LIVE_DAY_MAX = 2
-# 2026-11-18 18:40 Asia/Taipei. Orders already sent earlier that day do not
-# use the two slots the user asked to try tonight. The next midnight is
-# later than this stamp, so 2026-11-19 and after count from midnight again.
-LIVE_COUNT_FROM = 1794998400.0
+# 2026-11-18 20:36 Asia/Taipei. HEI and ENSO already used the earlier
+# two slots and were flattened at once, so they do not count. Each venue
+# can still send two exchange orders before midnight. The next midnight
+# is later than this stamp, so 2026-11-19 and after count from midnight.
+LIVE_COUNT_FROM = 1795005360.0
 
 
 def taipei_midnight(now: float | None = None) -> float:
