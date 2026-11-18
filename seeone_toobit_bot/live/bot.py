@@ -813,8 +813,8 @@ class Bot:
         sample = S.quiet_long_sample(rows)
         log_event("QUIET_LONG_PAPER", **sample,
                   reason=("模擬樣本已達標，仍不送真單" if sample["ready"]
-                          else f"模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、勝率 {S.QUIET_LONG_READY_WIN:.0%}、"
-                               f"平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
+                          else f"模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、勝率超過 {S.LIVE_WIN:.0%}、"
+                               f"平均 R 超過 {S.LIVE_R:+.2f}，前後半都要為正"))
 
     def _open_quiet_long_paper(self, sig, ev, src, reg, equity):
         if not sig.get("paper_only"):
@@ -859,9 +859,9 @@ class Bot:
         sample = S.ignition_sample(rows, path)
         label = "1 分鐘" if path.endswith("1m") else "15 分鐘"
         log_event("IGNITION_PAPER", path=path, **sample,
-                  reason=(f"{label}起漲模擬已達標，仍不送真單" if sample["ready"]
+                  reason=(f"{label}起漲模擬已達標" if sample["ready"]
                           else f"{label}起漲模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、"
-                               f"勝率 {S.QUIET_LONG_READY_WIN:.0%}、平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
+                               f"勝率超過 {S.LIVE_WIN:.0%}、平均 R 超過 {S.LIVE_R:+.2f}，前後半都要為正"))
 
     def _note_self_analysis(self):
         rows = list(self.st["closed"])
@@ -874,9 +874,9 @@ class Bot:
                 continue
         sample = S.ignition_sample(rows, "SELF ANALYSIS")
         log_event("SELF_PAPER", path="SELF ANALYSIS", **sample,
-                  reason=("自選驗算模擬已達標，仍不送真單" if sample["ready"]
+                  reason=("自選驗算模擬已達標" if sample["ready"]
                           else f"自選驗算模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、"
-                               f"勝率 {S.QUIET_LONG_READY_WIN:.0%}、平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
+                               f"勝率超過 {S.LIVE_WIN:.0%}、平均 R 超過 {S.LIVE_R:+.2f}，前後半都要為正"))
 
     def _note_trend(self):
         rows = list(self.st["closed"])
@@ -891,7 +891,7 @@ class Bot:
         log_event("TREND_PAPER", path=S.TREND_PATH, **sample,
                   reason=("日線趨勢模擬已達標，仍不送真單" if sample["ready"]
                           else f"日線趨勢模擬未達標：要 {S.QUIET_LONG_READY_N} 筆、"
-                               f"勝率 {S.QUIET_LONG_READY_WIN:.0%}、平均 R {S.QUIET_LONG_READY_R:+.2f}，前後半都要為正"))
+                               f"勝率超過 {S.LIVE_WIN:.0%}、平均 R 超過 {S.LIVE_R:+.2f}，前後半都要為正"))
 
     def _open_trend_paper(self, sig, ev, src, reg, equity):
         if not sig.get("trend") or not sig.get("paper_only"):
@@ -950,9 +950,13 @@ class Bot:
             ev = {**ev, "reasons": list(ev.get("reasons") or []) + [S.STOCK_PAPER_NOTE]}
         venue = getattr(self.tb, "name", "") or ""
         interval = "15m" if sig.get("signal_path") == "IGNITION 15m" else "1m"
-        live = (not stock) and S.ignition_live(venue, interval)
+        sample = S.path_sample(self.st["closed"], sig.get("signal_path") or "")
+        live = (not stock) and interval == "15m" and S.clears_live_target(sample)
         if live:
             sig = {**sig, "paper_only": False}
+            ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                f"15 分鐘起漲送實盤。已平倉 {sample['n']} 筆、勝率 {sample['win']:.0%}、"
+                f"平均 {sample['mean_r']:+.2f}R，前後半都為正"]}
         elif not sig.get("paper_only"):
             return
         blocked = (not stock) and (
@@ -2014,15 +2018,9 @@ class Bot:
                 self.note_skip(sig, "主流幣不靠自選單進場。今天 SOL、XRP 都在驗算轉弱時虧損出場，WLD、XMR 這種榜上的空單有打到 TP1")
                 continue
             if sig.get("recipe_spike"):
-                if sig["side"] == "LONG" and not S.ORDERBOOK_LONGS:
-                    sig = {**sig, "paper_only": True}
-                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                        "訂單簿爆漲多單實盤 8 筆 -0.35R、-20 USDT，暫停實盤，改模擬直到正期望"]}
-                if not sig.get("paper_only"):
-                    same = self._same_side(sig["side"])
-                    if len(same) >= S.MAX_SAME_SIDE:
-                        self.note_skip(sig, f"同方向已有 {len(same)} 筆持倉，避免同一方向集中押注")
-                        continue
+                sig = {**sig, "paper_only": True}
+                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                    "訂單簿未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
                 try:
                     self.open_trade(sig, ev, src, reg, size_eq)
                 except ToobitError as e:
@@ -2037,7 +2035,7 @@ class Bot:
                     continue
                 sig = {**sig, "paper_only": True}
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "突破單實盤期望不為正，暫停實盤，改模擬直到正期望"]}
+                    "突破單未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
                 if not sig.get("after_red") and htf is not None and htf * sgn < htf_min:
                     self.note_skip(sig, f"1h/4h 大方向 {htf:+.1f} 與{'做多' if sgn > 0 else '做空'}相反 "
                                         f"(順方向 {htf * sgn:+.1f} < 下限 {htf_min:+.1f})，不做逆大勢的單")
@@ -2211,10 +2209,26 @@ class Bot:
             if measured:
                 self.note_skip(sig, measured)
                 continue
-            if bounce and not S.flush_live(getattr(self.tb, "name", "") or ""):
-                sig = {**sig, "paper_only": True}
-                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "洗盤多單這本書實盤期望不為正，暫停實盤，改模擬直到正期望"]}
+            if bounce:
+                sample = S.path_sample(self.st["closed"], S.BOUNCE_PATH, "LONG")
+                if S.clears_live_target(sample):
+                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                        f"洗盤多單送實盤。已平倉 {sample['n']} 筆、勝率 {sample['win']:.0%}、"
+                        f"平均 {sample['mean_r']:+.2f}R，前後半都為正"]}
+                else:
+                    sig = {**sig, "paper_only": True}
+                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                        "洗盤多單未達勝率 60% 與平均 R +0.5，暫停實盤，改模擬直到達標"]}
+            if (venue == "toobit" and full_live and src == SELF_SOURCE and sig["side"] == "SHORT"
+                    and not bounce and not sig.get("quiet_strong_short")):
+                sample = S.path_sample(self.st["closed"], "SELF ANALYSIS", "SHORT")
+                if not S.clears_live_target(sample):
+                    full_live = False
+                    self_paper = True
+                    sig = {**sig, "paper_only": True}
+                    ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                        "Toobit 自選空單改模擬。實盤期望過 +0.60R 的 16 筆勝率 37%、平均 +0.16R，"
+                        "未過勝率 60% 與平均 R +0.5"]}
             if self_paper or sig.get("paper_only"):
                 # Under the live line the short is paper. A stopped live flush is paper too.
                 # Quiet shorts and a short that clears the live line stay live.
