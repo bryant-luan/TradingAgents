@@ -615,6 +615,22 @@ TOOBIT_LONG_LIVE_MIN_SL = 0.03
 def toobit_long_live(exchange: str, side: str | None, sl_pct: float) -> bool:
     """Toobit self longs with a stop of at least 3% are the live long."""
     return exchange == "toobit" and side == "LONG" and sl_pct >= TOOBIT_LONG_LIVE_MIN_SL
+
+
+# The planner drops a stop wider than 6%. A long in the top half of its 3h range is chasing.
+TOOBIT_LONG_LIVE_MAX_SL = 0.06
+TOOBIT_LONG_LIVE_MAX_RPOS = 0.50
+
+
+def toobit_wide_long_review(exchange: str, sl_pct: float, rpos: float | None) -> bool:
+    """A Toobit long with a 3% to 6% stop, in the lower half of its range, gets a review.
+
+    The live long is this stop. The scanner only reviewed stops under 1%, so the
+    order never reached the exchange.
+    """
+    if rpos is None or rpos > TOOBIT_LONG_LIVE_MAX_RPOS:
+        return False
+    return toobit_long_live(exchange, "LONG", sl_pct) and sl_pct <= TOOBIT_LONG_LIVE_MAX_SL
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0

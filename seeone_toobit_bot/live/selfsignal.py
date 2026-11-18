@@ -836,6 +836,32 @@ class SelfScanner:
             def on_board(c: dict) -> bool:
                 return any(str(t).startswith(("強勢榜", "潛力榜", "客製化", "主流幣")) for t in (c.get("tags") or []))
             ordered = sorted(ordered, key=lambda c: ("TradFi" in (c.get("tags") or []), on_board(c)))
+        if short_only and getattr(self.tb, "name", "") == "toobit":
+            # Review the wide-stop long before the short book. Six names, the ones
+            # closest to the bottom of their own 3h range. Done after the board
+            # sort so that sort does not push them back.
+            front = []
+            checked = 0
+            for c in ordered:
+                if len(front) >= 6 or checked >= 80:
+                    break
+                tsym = S.to_toobit(c["symbol"])
+                if tsym not in specs or tsym in held:
+                    continue
+                checked += 1
+                try:
+                    pl = self.plan(tsym, "LONG")
+                except Exception:
+                    continue
+                if not pl or not pl.get("price") or pl.get("rpos") is None:
+                    continue
+                if S.toobit_wide_long_review("toobit", pl["dist"] / pl["price"], pl["rpos"]):
+                    c["_plan"] = pl
+                    front.append((pl["rpos"], c))
+            if front:
+                front.sort(key=lambda item: item[0])
+                seen = {c["symbol"] for _, c in front}
+                ordered = [c for _, c in front] + [c for c in ordered if c["symbol"] not in seen]
         sides = []
         for side in ("LONG", "SHORT"):
             direc = htf if side == "LONG" else -htf
@@ -850,6 +876,7 @@ class SelfScanner:
         ranked = []
         looked = 0
         n_flush = 0
+        wide_longs = 0
         for c in ordered:
             n_tradable = sum(1 for t, _, _ in ranked if t)
             # A flush long sits at the bottom of the 3h range, so its local long
@@ -892,6 +919,11 @@ class SelfScanner:
                     if prob is not None and (short_prob is None or prob > short_prob):
                         short_prob = prob
                 tradable = tradable or (narrow and side in open_sides)
+            if (not tradable and wide_longs < 6 and S.toobit_wide_long_review(
+                    getattr(self.tb, "name", "") or "",
+                    pl["dist"] / pl["price"], pl.get("rpos"))):
+                tradable = True
+                wide_longs += 1
             mood_side, mood_score, _why = S.mood_rank(htf, m15, pl.get("rpos"), flush_ready, short_prob)
             if mood_side is None and not tradable:
                 continue
