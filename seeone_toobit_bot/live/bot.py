@@ -2274,7 +2274,8 @@ class Bot:
                             "洗盤多單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
             if open_now:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "Toobit 自選空單期望 +0.15R 到 +0.55R 現在送實盤。"]}
+                    "Toobit 自選空單期望 +0.15R 到 +0.35R、以及 +0.50R 到 +0.55R 送實盤。"
+                    "+0.35R 到 +0.50R 不再開。"]}
             if soft_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                     "Gate 自選空單期望 +0.15R 到 +0.25R 送實盤。15 筆勝率 60%、平均 +0.23R，"
