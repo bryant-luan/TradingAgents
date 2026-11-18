@@ -2185,11 +2185,9 @@ class Bot:
                 self.note_skip(sig, f"BTC 近 1 小時已順{'做多' if sgn > 0 else '做空'}方向走 {aligned:+.2f}% "
                                     f"(≥ {S.BTC1H_CHASE_MAX:+.1f}%)，自選單追在大盤急走之後，驗算只有 48% 先到 TP1")
                 continue
-            if (src == SELF_SOURCE and not bounce and sig["side"] == "SHORT" and btc24h is not None
-                    and S.SELF_SHORT_BTC24H_TREND <= btc24h < S.SELF_SHORT_BTC24H_MIN):
-                self.note_skip(sig, f"BTC 近 24 小時 {btc24h:+.2f}% 落在 -1% 到 0%，自選空單不接這段盤整："
-                                    f"止損 < 1%、機率 ≥ 52.5% 的驗算 115 筆、21.7%、-0.58R，前後半都是負的")
-                continue
+            # BTC 24h between -1% and 0% used to block every self short. That
+            # sample is weak, and the open was ordered anyway. The 1h chase
+            # block above still stands.
             tsym = S.to_toobit(sig["symbol"])
             if tsym not in moves:
                 try:
@@ -2236,13 +2234,15 @@ class Bot:
             shown_ev = (ev.get("analysis") or {}).get("ev_r")
             venue = getattr(self.tb, "name", "") or ""
             mid_live = S.toobit_mid_short_live(venue, sig["side"], shown_ev)
+            open_now = S.toobit_open_now_live(venue, sig["side"], shown_ev)
             soft_live = S.gate_soft_short_live(venue, sig["side"], shown_ev)
             long_sl = abs(float(sig["entry_price"] or 0) - float(sig["stop_price"])) / float(sig["entry_price"] or 1)
             long_live = (src == SELF_SOURCE and not bounce
                          and S.toobit_long_live(venue, sig["side"], long_sl))
             self_paper = (S.SELF_ANALYSIS_PAPER and src == SELF_SOURCE and not bounce
                           and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long")
-                          and not full_live and not mid_live and not long_live and not soft_live)
+                          and not full_live and not mid_live and not long_live and not soft_live
+                          and not open_now)
             if self_paper and S.self_short_sample_live(sl_pct):
                 self_paper = False
             measured = None if sig.get("stock") else (
@@ -2272,6 +2272,10 @@ class Bot:
                         sig = {**sig, "paper_only": True}
                         ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                             "洗盤多單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
+            if open_now:
+                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                    "Toobit 自選空單期望 +0.15R 到 +0.35R 現在送實盤。"
+                    "+0.35R 到 +0.55R 仍不開"]}
             if soft_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                     "Gate 自選空單期望 +0.15R 到 +0.25R 送實盤。15 筆勝率 60%、平均 +0.23R，"
