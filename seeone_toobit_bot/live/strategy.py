@@ -1495,15 +1495,16 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
 
 TOOBIT_SHORT_KEEP_PAPER_EV = 0.55
 # +0.35R to +0.50R is 23 closes, 22% wins, -0.47R, both halves negative.
-# The bands on either side still go to the exchange.
+# +0.50R to +0.55R is 15 closes, 47% wins, -0.25R, both halves negative.
+# Only +0.15R to +0.35R still goes to the exchange from this rule.
 TOOBIT_OPEN_MIN_EV = 0.15
 TOOBIT_OPEN_HOLE_LO = 0.35
 TOOBIT_OPEN_HOLE_HI = 0.50
-TOOBIT_OPEN_MAX_EV = 0.55
+TOOBIT_OPEN_MAX_EV = 0.50
 
 
 def toobit_open_now_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
-    """Toobit self shorts from +0.15R up to +0.55R go live, except +0.35R to +0.50R."""
+    """Toobit self shorts from +0.15R up to +0.35R go live."""
     if exchange != "toobit" or side != "SHORT" or ev_r is None:
         return False
     if TOOBIT_OPEN_HOLE_LO <= ev_r < TOOBIT_OPEN_HOLE_HI:
@@ -1541,7 +1542,8 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
             return None
         return ("Toobit 自選空單期望值未達 +0.55R 不再開。"
                 "+0.35R 到 +0.50R 共 23 筆勝率 22%、平均 -0.47R，前後半都是負的，不再開。"
-                "+0.15R 到 +0.35R、以及 +0.50R 到 +0.55R 仍送實盤。")
+                "+0.50R 到 +0.55R 共 15 筆勝率 47%、平均 -0.25R，前半 -0.21R、後半 -0.28R，不再開。"
+                "+0.15R 到 +0.35R 仍送實盤。")
     if (path == "SELF ANALYSIS" and side == "SHORT"
             and ev_r is not None and SELF_SHORT_FULL_RISK_EV <= ev_r < 0.70):
         return ("Toobit 自選空單期望 +0.60R 到 +0.70R 不再開。"
