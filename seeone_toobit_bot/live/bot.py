@@ -2234,7 +2234,8 @@ class Bot:
             shown_ev = (ev.get("analysis") or {}).get("ev_r")
             venue = getattr(self.tb, "name", "") or ""
             mid_live = S.toobit_mid_short_live(venue, sig["side"], shown_ev)
-            open_now = S.toobit_open_now_live(venue, sig["side"], shown_ev)
+            shown_prob = (ev.get("analysis") or {}).get("prob")
+            open_now = S.toobit_open_now_live(venue, sig["side"], shown_ev, shown_prob)
             soft_live = S.gate_soft_short_live(venue, sig["side"], shown_ev)
             long_sl = abs(float(sig["entry_price"] or 0) - float(sig["stop_price"])) / float(sig["entry_price"] or 1)
             long_live = (src == SELF_SOURCE and not bounce
@@ -2247,7 +2248,8 @@ class Bot:
                 self_paper = False
             measured = None if sig.get("stock") else (
                 S.gate_measured_loss(venue, sig.get("signal_path"), sig["side"], full_live, shown_ev)
-                or S.toobit_measured_loss(venue, sig.get("signal_path"), sig["side"], shown_ev, full_live))
+                or S.toobit_measured_loss(venue, sig.get("signal_path"), sig["side"], shown_ev, full_live,
+                                           (ev.get("analysis") or {}).get("prob")))
             if measured:
                 self.note_skip(sig, measured)
                 continue
@@ -2274,8 +2276,8 @@ class Bot:
                             "洗盤多單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
             if open_now:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
-                    "Toobit 自選空單期望 +0.15R 到 +0.35R 送實盤。"
-                    "+0.35R 到 +0.55R 不再開。"]}
+                    "Toobit 自選空單期望 +0.15R 到 +0.35R、機率低於 55% 送實盤。"
+                    "同段機率 55% 以上不再開。"]}
             if soft_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                     "Gate 自選空單期望 +0.15R 到 +0.25R 送實盤。15 筆勝率 60%、平均 +0.23R，"

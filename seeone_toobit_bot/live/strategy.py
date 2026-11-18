@@ -1501,11 +1501,17 @@ TOOBIT_OPEN_MIN_EV = 0.15
 TOOBIT_OPEN_HOLE_LO = 0.35
 TOOBIT_OPEN_HOLE_HI = 0.50
 TOOBIT_OPEN_MAX_EV = 0.50
+# Inside +0.15R to +0.35R, probability of 55% and up is 16 closes,
+# 38% wins, -0.33R, halves -0.00R and -0.66R.
+TOOBIT_OPEN_MAX_PROB = 55.0
 
 
-def toobit_open_now_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
-    """Toobit self shorts from +0.15R up to +0.35R go live."""
+def toobit_open_now_live(exchange: str, side: str | None, ev_r: float | None,
+                         prob: float | None = None) -> bool:
+    """Toobit self shorts from +0.15R up to +0.35R go live when probability is under 55%."""
     if exchange != "toobit" or side != "SHORT" or ev_r is None:
+        return False
+    if prob is not None and prob >= TOOBIT_OPEN_MAX_PROB:
         return False
     if TOOBIT_OPEN_HOLE_LO <= ev_r < TOOBIT_OPEN_HOLE_HI:
         return False
@@ -1513,7 +1519,8 @@ def toobit_open_now_live(exchange: str, side: str | None, ev_r: float | None) ->
 
 
 def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
-                         ev_r: float | None, full_live: bool) -> str | None:
+                         ev_r: float | None, full_live: bool,
+                         prob: float | None = None) -> str | None:
     """Toobit books that are already negative do not open again.
 
     A short under +0.55R is finished. Under +0.50R the live and paper books were
@@ -1538,12 +1545,13 @@ def toobit_measured_loss(exchange: str, path: str | None, side: str | None,
     if exchange != "toobit":
         return None
     if path == "SELF ANALYSIS" and side == "SHORT" and not full_live and (ev_r or 0) < TOOBIT_SHORT_KEEP_PAPER_EV:
-        if toobit_open_now_live(exchange, side, ev_r):
+        if toobit_open_now_live(exchange, side, ev_r, prob):
             return None
         return ("Toobit 自選空單期望值未達 +0.55R 不再開。"
-                "+0.35R 到 +0.50R 共 23 筆勝率 22%、平均 -0.47R，前後半都是負的，不再開。"
-                "+0.50R 到 +0.55R 共 15 筆勝率 47%、平均 -0.25R，前半 -0.21R、後半 -0.28R，不再開。"
-                "+0.15R 到 +0.35R 仍送實盤。")
+                "+0.35R 到 +0.55R 不再開。"
+                "+0.15R 到 +0.35R 且機率 55% 以上的 16 筆勝率 38%、平均 -0.33R，"
+                "前半 -0.00R、後半 -0.66R，不再開。"
+                "同段機率低於 55% 的仍送實盤。")
     if (path == "SELF ANALYSIS" and side == "SHORT"
             and ev_r is not None and SELF_SHORT_FULL_RISK_EV <= ev_r < 0.70):
         return ("Toobit 自選空單期望 +0.60R 到 +0.70R 不再開。"
