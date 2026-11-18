@@ -711,6 +711,10 @@ NEW_ENTRIES_PAPER = True
 # Each venue sends at most two new exchange orders per Taipei day.
 # Later signals on the same live slices stay paper so the book still records them.
 LIVE_DAY_MAX = 2
+# 2026-11-18 18:40 Asia/Taipei. Orders already sent earlier that day do not
+# use the two slots the user asked to try tonight. The next midnight is
+# later than this stamp, so 2026-11-19 and after count from midnight again.
+LIVE_COUNT_FROM = 1794998400.0
 
 
 def taipei_midnight(now: float | None = None) -> float:
@@ -734,9 +738,14 @@ def trade_opened_at(tr: dict) -> float | None:
         return None
 
 
+def live_day_start(now: float | None = None) -> float:
+    """Start of the current live-order window. Tonight ignores earlier fills."""
+    return max(taipei_midnight(now), LIVE_COUNT_FROM)
+
+
 def live_opens_today(trades, closed, now: float | None = None) -> int:
-    """Exchange orders opened since Taipei midnight. Paper and stocks do not count."""
-    start = taipei_midnight(now)
+    """Exchange orders opened in the current Taipei window. Paper and stocks do not count."""
+    start = live_day_start(now)
     seen = set()
     n = 0
     for tr in list(trades or []) + list(closed or []):

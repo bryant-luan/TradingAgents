@@ -160,9 +160,17 @@ class FullLive(unittest.TestCase):
             {"id": "ZIL-SWAP-USDT:LONG:1794993007", "paper": True},
             {"id": "OLD-SWAP-USDT:SHORT:1794800000"},
         ]
-        self.assertEqual(S.live_opens_today([], closed, now), 1)
+        # Fills before 18:40 Taipei on 2026-11-18 do not use tonight's two slots.
+        self.assertEqual(S.live_opens_today([], closed, now), 0)
+        tonight = S.LIVE_COUNT_FROM + 60
         self.assertEqual(S.live_opens_today(
-            [{"id": "AAA:LONG:1794978000", "paper_probe": True}], closed, now), 1)
+            [{"id": "NEW:SHORT:%d" % int(tonight)}], closed, tonight), 1)
+        tomorrow = S.taipei_midnight(S.LIVE_COUNT_FROM) + 86400 + 3600
+        self.assertEqual(S.live_opens_today(
+            [{"id": "NEW:SHORT:%d" % int(tonight)}], [], tomorrow), 0)
+        self.assertEqual(S.live_opens_today(
+            [{"id": "AAA:LONG:1794978000", "paper_probe": True},
+             {"id": "NEW:SHORT:%d" % int(tonight)}], closed, tonight), 1)
         self.assertTrue(S.toobit_exchange_entry("toobit", "SELF ANALYSIS", "SHORT", 0.57, 0.008))
         self.assertFalse(S.toobit_exchange_entry("toobit", "SELF ANALYSIS", "SHORT", 0.54, 0.008))
         self.assertFalse(S.toobit_exchange_entry("toobit", "SELF ANALYSIS", "SHORT", 0.60, 0.008))
