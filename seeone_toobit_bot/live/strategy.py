@@ -567,6 +567,23 @@ def bounce_ok(flush: tuple[float, float, float, float] | None, sl_pct: float, pr
             and flush[0] <= FLUSH_EMA_GAP_MAX and flush[1] >= FLUSH_VOL_RATIO_MIN):
         return False
     return flush[2] >= FLUSH_RET2H_MIN or (price - flush[3]) / (price * sl_pct) >= FLUSH_BOUNCE_MIN_R
+
+
+# Gate wash longs are the long book. A stop under 2% is 9 closes, 56% wins,
+# +0.62R, halves +0.22R and +0.94R. That is not yet 20 closes or a win rate
+# over 60%, so it stays paper until the live bar. Stops at 2% or more are 3
+# closes, and the two stops over 4% were -0.48R and -1.07R. Those do not open.
+FLUSH_MAX_SL_PCT = 0.02
+
+
+def gate_flush_wide_stop(exchange: str, sl_pct: float) -> str | None:
+    """Gate wash longs at a 2% stop or wider do not open."""
+    if exchange != "gate" or sl_pct < FLUSH_MAX_SL_PCT:
+        return None
+    return ("Gate 洗盤多單止損達到 2% 不再開。"
+            "止損小於 2% 的 9 筆勝率 56%、平均 +0.62R，前半 +0.22R、後半 +0.94R，"
+            "未滿 20 筆、勝率未過 60%，繼續模擬，達標才送實盤。"
+            "止損 2% 以上有兩筆超過 4%，分別 -0.48R 和 -1.07R")
 REVERSAL_MIN_PCT = 0.01
 REVERSAL_BEYOND_PCT = 0.005
 REVERSAL_ROUNDTRIP_R = 1.0
