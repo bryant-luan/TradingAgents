@@ -617,13 +617,13 @@ def toobit_long_live(exchange: str, side: str | None, sl_pct: float) -> bool:
     return exchange == "toobit" and side == "LONG" and sl_pct >= TOOBIT_LONG_LIVE_MIN_SL
 
 
-# The planner drops a stop wider than 6%. A long in the top half of its 3h range is chasing.
+# The planner drops a stop wider than 6%. The top quarter of the 3h range is chasing.
 TOOBIT_LONG_LIVE_MAX_SL = 0.06
-TOOBIT_LONG_LIVE_MAX_RPOS = 0.50
+TOOBIT_LONG_LIVE_MAX_RPOS = 0.75
 
 
 def toobit_wide_long_review(exchange: str, sl_pct: float, rpos: float | None) -> bool:
-    """A Toobit long with a 3% to 6% stop, in the lower half of its range, gets a review.
+    """A Toobit long with a 3% to 6% stop, out of the top quarter of its range, gets a review.
 
     The live long is this stop. The scanner only reviewed stops under 1%, so the
     order never reached the exchange.
@@ -1441,7 +1441,22 @@ def flush_live(exchange: str) -> bool:
     return False
 
 
-def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_live: bool) -> str | None:
+# Gate self shorts from +0.15R up to +0.25R, entered at 52.5% to 56% probability.
+# 15 closes, 60% wins, +0.23R. The older half is -0.19R and the newer half is
+# +0.60R. The bands from +0.25R up to +0.60R stay closed: both halves lost.
+GATE_SOFT_SHORT_MIN_EV = 0.15
+GATE_SOFT_SHORT_MAX_EV = 0.25
+
+
+def gate_soft_short_live(exchange: str, side: str | None, ev_r: float | None) -> bool:
+    """Gate self shorts from +0.15R up to +0.25R are the extra live short."""
+    if exchange != "gate" or side != "SHORT" or ev_r is None:
+        return False
+    return GATE_SOFT_SHORT_MIN_EV <= ev_r < GATE_SOFT_SHORT_MAX_EV
+
+
+def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_live: bool,
+                       ev_r: float | None = None) -> str | None:
     """Gate books that are already negative in both halves do not open again.
 
     A self-scan short under +0.60R has 40 live closes, every band negative in
@@ -1456,9 +1471,11 @@ def gate_measured_loss(exchange: str, path: str | None, side: str | None, full_l
     """
     if exchange != "gate":
         return None
-    if path == "SELF ANALYSIS" and side == "SHORT" and not full_live:
-        return ("Gate 自選空單未達實盤 +0.60R 不再開。實盤 40 筆三段期望都是負的，"
-                "約 -90 USDT；模擬 16 筆勝率 19%、-0.43R，前後半都是負的，-36 USDT")
+    if (path == "SELF ANALYSIS" and side == "SHORT" and not full_live
+            and not gate_soft_short_live(exchange, side, ev_r)):
+        return ("Gate 自選空單這段期望不再開。+0.25R 到 +0.60R 的實盤前後半都是負的。"
+                "+0.15R 到 +0.25R 的 15 筆勝率 60%、平均 +0.23R，前半 -0.19R、後半 +0.60R，仍送實盤。"
+                "期望至少 +0.60R 的原實盤條件也仍開")
     if path == "SELF ANALYSIS" and side == "LONG":
         return "Gate 自選多單不再開。實盤 2 筆全虧，模擬 6 筆勝率 17%、-0.36R，後半更差"
     if path == "IGNITION 1m":

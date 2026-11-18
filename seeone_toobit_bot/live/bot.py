@@ -2236,16 +2236,17 @@ class Bot:
             shown_ev = (ev.get("analysis") or {}).get("ev_r")
             venue = getattr(self.tb, "name", "") or ""
             mid_live = S.toobit_mid_short_live(venue, sig["side"], shown_ev)
+            soft_live = S.gate_soft_short_live(venue, sig["side"], shown_ev)
             long_sl = abs(float(sig["entry_price"] or 0) - float(sig["stop_price"])) / float(sig["entry_price"] or 1)
             long_live = (src == SELF_SOURCE and not bounce
                          and S.toobit_long_live(venue, sig["side"], long_sl))
             self_paper = (S.SELF_ANALYSIS_PAPER and src == SELF_SOURCE and not bounce
                           and not sig.get("quiet_strong_short") and not sig.get("quiet_strong_long")
-                          and not full_live and not mid_live and not long_live)
+                          and not full_live and not mid_live and not long_live and not soft_live)
             if self_paper and S.self_short_sample_live(sl_pct):
                 self_paper = False
             measured = None if sig.get("stock") else (
-                S.gate_measured_loss(venue, sig.get("signal_path"), sig["side"], full_live)
+                S.gate_measured_loss(venue, sig.get("signal_path"), sig["side"], full_live, shown_ev)
                 or S.toobit_measured_loss(venue, sig.get("signal_path"), sig["side"], shown_ev, full_live))
             if measured:
                 self.note_skip(sig, measured)
@@ -2271,6 +2272,10 @@ class Bot:
                         sig = {**sig, "paper_only": True}
                         ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                             "洗盤多單未達勝率 55% 與平均 R +0.30，暫停實盤，改模擬直到達標"]}
+            if soft_live:
+                ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                    "Gate 自選空單期望 +0.15R 到 +0.25R 送實盤。15 筆勝率 60%、平均 +0.23R，"
+                    "前半 -0.19R、後半 +0.60R。+0.25R 到 +0.60R 仍不開"]}
             if mid_live:
                 ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                     "Toobit 自選空單期望 +0.55R 到 +0.60R 送實盤。兩小時未走滿 +1R 的 11 筆"
