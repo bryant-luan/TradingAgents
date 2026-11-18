@@ -1143,14 +1143,24 @@ class Bot:
                 self.note_skip(sig, blocked)
                 return False
         paper = bool(self.paper or sig.get("paper_only"))
-        if S.paper_for_stopped_live(self.learner.p.get("rule_streaks"), sig.get("signal_path"), side, paper):
+        # The two named slices stay eligible for the exchange. A loss streak
+        # does not put them back on paper; the daily cap does.
+        if not exchange_slice and S.paper_for_stopped_live(
+                self.learner.p.get("rule_streaks"), sig.get("signal_path"), side, paper):
             sig = {**sig, "paper_only": True}
             paper = True
             ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
                 f"{S.rule_key(sig.get('signal_path'), side, False)} 實盤已暫停，改模擬直到正期望"]}
-        if not paper and not S.rule_open(self.learner.p.get("rule_streaks"), S.rule_key(sig.get("signal_path"), side, False)):
+        if (not paper and not exchange_slice
+                and not S.rule_open(self.learner.p.get("rule_streaks"),
+                                    S.rule_key(sig.get("signal_path"), side, False))):
             self.note_skip(sig, f"{S.rule_key(sig.get('signal_path'), side, False)} 連續 {S.LOSS_REVIEW_N} 筆虧損後已停止新開倉")
             return False
+        if not paper and S.live_opens_today(self.st.get("trades", {}).values(), self.st.get("closed")) >= S.LIVE_DAY_MAX:
+            sig = {**sig, "paper_only": True}
+            paper = True
+            ev = {**ev, "reasons": list(ev.get("reasons") or []) + [
+                f"今天實盤已開 {S.LIVE_DAY_MAX} 筆，其餘改模擬。明天再送。"]}
         probe = bool(sig.get("paper_only")) and not self.paper
         if S.SKIP_GATE_ONLY and getattr(self.tb, "name", "") == "gate" and listing(sym) == "only":
             self.note_skip(sig, "只在 Gate 上市的幣先不開：11-09 COOL、FATCOIN、FLORK、ZZZ 4 筆全虧")

@@ -708,6 +708,58 @@ SELF_ANALYSIS_PAPER = True
 # longs with a stop of at least 3%. Positions already on the exchange keep
 # their stops and targets.
 NEW_ENTRIES_PAPER = True
+# Each venue sends at most two new exchange orders per Taipei day.
+# Later signals on the same live slices stay paper so the book still records them.
+LIVE_DAY_MAX = 2
+# 2026-11-18 18:40 Asia/Taipei. Orders already sent earlier that day do not
+# use the two slots the user asked to try tonight. The next midnight is
+# later than this stamp, so 2026-11-19 and after count from midnight again.
+LIVE_COUNT_FROM = 1794998400.0
+
+
+def taipei_midnight(now: float | None = None) -> float:
+    """Unix time of 00:00 Asia/Taipei for the day that contains `now`."""
+    now = time.time() if now is None else float(now)
+    shifted = now + 8 * 3600
+    return shifted - (shifted % 86400) - 8 * 3600
+
+
+def trade_opened_at(tr: dict) -> float | None:
+    raw = tr.get("opened_ts")
+    if raw:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    tail = str(tr.get("id") or "").rsplit(":", 1)[-1]
+    try:
+        return float(tail)
+    except (TypeError, ValueError):
+        return None
+
+
+def live_day_start(now: float | None = None) -> float:
+    """Start of the current live-order window. Tonight ignores earlier fills."""
+    return max(taipei_midnight(now), LIVE_COUNT_FROM)
+
+
+def live_opens_today(trades, closed, now: float | None = None) -> int:
+    """Exchange orders opened in the current Taipei window. Paper and stocks do not count."""
+    start = live_day_start(now)
+    seen = set()
+    n = 0
+    for tr in list(trades or []) + list(closed or []):
+        if tr.get("paper") or tr.get("paper_probe") or tr.get("stock"):
+            continue
+        ts = trade_opened_at(tr)
+        if ts is None or ts < start:
+            continue
+        key = tr.get("id") or id(tr)
+        if key in seen:
+            continue
+        seen.add(key)
+        n += 1
+    return n
 # The live book stays at 3. Open paper positions keep their stops.
 SELF_ANALYSIS_PAPER_MAX = 6
 # A self-scan short under the live line is paper, not a stopped rule.
